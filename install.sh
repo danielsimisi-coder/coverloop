@@ -33,4 +33,5 @@ SK="$HOME/.claude/skills"
 if [ -d "$(dirname "$0")/skills" ]; then mkdir -p "$SK"; cp -R "$(dirname "$0")/skills/." "$SK/"; echo "Installed skills to $SK"; fi
 HK="$HOME/.claude/hooks"
 if [ -d "$(dirname "$0")/hooks" ]; then mkdir -p "$HK"; cp "$(dirname "$0")/hooks/"*.sh "$HK/" 2>/dev/null; chmod +x "$HK/"*.sh 2>/dev/null; echo "Installed hooks to $HK (wire in settings.json — see hooks/README.md)"; fi
+echo "To enable the test-green completion gate in a repo: copy docs/loop.conf.example to that repo's .claude/loop.conf and set a CHEAP TEST_CMD (e.g. \"npx tsc --noEmit\"); gitignore .claude/.loop-stop-blocks. The hook is change-aware (no-op unless tracked files changed)."
 echo "Done. Inside Claude Code, always call helpers by ABSOLUTE path."

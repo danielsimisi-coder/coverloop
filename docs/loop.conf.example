@@ -1,3 +1,18 @@
 # Per-repo config for the v2.3 test-green Stop hook. Copy to .claude/loop.conf
-TEST_CMD="npm test --silent"
+#
+# The hook is CHANGE-AWARE: it only runs TEST_CMD when tracked files changed
+# (clean/chat stops are an instant no-op), so prefer a CHEAP command that can
+# run on every code-change stop without burning budget. A typecheck is ideal;
+# the full test suite is usually too slow to run on every stop (run it before
+# a PR/CI instead). Pick the line that fits your stack:
+
+# TypeScript (recommended — fast, catches "you broke compilation"):
+TEST_CMD="npx tsc --noEmit"
+
+# Other options (uncomment ONE, replacing the line above):
+# TEST_CMD="npm run typecheck"          # if you have a typecheck script
+# TEST_CMD="npm run lint"               # lint-only gate
+# TEST_CMD="npm test --silent"          # full suite — only if it's fast
+
 MAX_BLOCKS=3
+# Also: add `.loop-stop-blocks` to .claude/.gitignore (it's the livelock counter).

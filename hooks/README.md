@@ -11,7 +11,7 @@ These are flat shell hooks for Claude Code. Copy them to `~/.claude/hooks/` (ins
 }
 ```
 
-- **loop-stop-check.sh** — OPT-IN per repo: no-op unless the repo has `.claude/loop.conf` with e.g. `TEST_CMD="npm test"`. Blocks "stop" while tests are red; livelock-guarded (MAX_BLOCKS, default 3) so it can never trap you.
+- **loop-stop-check.sh** — OPT-IN per repo: no-op unless the repo has `.claude/loop.conf` with a `TEST_CMD`. Blocks "stop" while that check is red; livelock-guarded (MAX_BLOCKS, default 3) so it can never trap you. **Change-aware:** it short-circuits to an instant no-op when no tracked files changed (untracked ignored), so clean/chat stops cost nothing — the check only runs when you actually edited code. Pick a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, NOT a slow full suite) so it can run on every code-change stop without burning budget; the full suite still runs before a PR/CI. Gitignore `.claude/.loop-stop-blocks` (the livelock counter). See `docs/loop.conf.example`.
 - **capture-failure.sh** — appends failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
 
 > Verify the exact hook event names + schema against YOUR Claude Code version's docs before wiring — schemas change between versions. Wiring is per-machine/per-project and is a Daniel-gated config change.

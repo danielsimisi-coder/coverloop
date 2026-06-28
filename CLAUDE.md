@@ -273,7 +273,7 @@ Memory is injected at session start (a frozen snapshot); skills load as on-deman
 
 Research showed our gates were *principles* with nothing enforcing them. Make them mechanical (flat files + hooks, zero new egress):
 
-1. **Test-green completion gate.** A `Stop` hook blocks "done" while the project's tests are red or a phase is still `in_progress` (`hooks/loop-stop-check.sh` + a per-repo `.claude/loop.conf` `TEST_CMD`; livelock-guarded so it never traps you). "Execution = primary gate" must be enforced, not hoped for.
+1. **Test-green completion gate.** A `Stop` hook blocks "done" while the project's check is red (`hooks/loop-stop-check.sh` + a per-repo `.claude/loop.conf` `TEST_CMD`; **change-aware** — instant no-op when no tracked files changed, so clean/chat stops cost nothing; livelock-guarded so it never traps you). Make `TEST_CMD` **cheap** (a typecheck like `npx tsc --noEmit`, not a slow full suite) so the gate runs on every code-change stop without burning the token/compute budget — the full suite still runs before a PR/CI. "Execution = primary gate" must be enforced, not hoped for.
 2. **Fix-guided verification.** A finding may only BLOCK once reproduced as a *failing test*; otherwise it is advisory (counters LLM over-flagging of correct code).
 3. **Auto-capture failures.** `hooks/capture-failure.sh` (a `Stop`/`PostToolUseFailure` hook) appends "what failed + what fixed it" to `~/.claude/reflect-staging.md`; `reflect-and-save` curates it. Removes dependence on *remembering* to reflect — the loop's weakest link.
 4. **False-positive ledger.** Record every rejected Codex/GLM/M3 finding in `docs/REVIEW_LEDGER.md` (finding · verdict · one-line reason); inject it at session start so auditors stop re-raising known non-issues.
