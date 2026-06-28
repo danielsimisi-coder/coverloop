@@ -1,0 +1,295 @@
+# Daniel AI Dev Multi-Model Production Protocol — v2.1
+
+> **PROTOCOL_VERSION: v2.1** (evidence-backed refinement of v2.0).
+> **MODEL_ROSTER_LAST_VERIFIED: 2026-06-28** — "GLM full-ZDR / M3 `data_collection:deny` on the Arcade VPS" reflects endpoint availability on this date, not a permanent fact. Re-verify with `glm-review --zdr-selftest` and `m3-review --privacy-selftest` when reusing this protocol later.
+> **WHAT CHANGED FROM v2.0** (driven by a cited deep-research pass + a real GLM-vs-M3 bake-off on live code): **(1)** Execution/tests are the **PRIMARY correctness gate**; LLM auditors are secondary, used where execution can't verify (architecture, schema/deploy consistency, security, invariants). **(2)** The **second wide-context auditor (M3) is reserved for L2/L3** and must *prove its keep* by measurement — measured data shows ~93% of real findings come from a SINGLE auditor, so agreement is rare-but-strong and a single-tool finding is the norm (verify it, don't discard it). **(3)** Reviewers flag **correctness/requirement gaps ONLY** (standalone LLM reviewers over-report; ~6–16% precision). **(4)** **M3 is un-parked on the Arcade VPS** under `data_collection:deny` (provider does not train on/retain data — NOT full ZDR; GLM stays the full-ZDR path for the most sensitive packets). The Mac M3 stays parked.
+> **Canonical location:** project-root `CLAUDE.md` (auto-loaded by Claude Code each session). For Codex CLI and other agents, symlink `AGENTS.md -> CLAUDE.md` so all tools read one source of truth (a symlink, not a fork, to prevent drift). If symlinks are not supported or unsafe for the repo/tooling, `AGENTS.md` must contain ONLY a short pointer to `CLAUDE.md` (e.g. "See CLAUDE.md — single source of truth") and must never become a fork. Helper commands MUST be invoked by ABSOLUTE path inside Claude Code (it does not inherit the terminal `~/bin` PATH); record the resolved absolute paths for `glm-*`/`m3-*` in the project Risk Map on first run.
+
+Use this protocol for this project from now on. The goal is not to "vibe code until it works." The goal is to build, review, verify, and ship safely using a risk-based multi-model workflow. **No model is an authority.** All model findings are claims that must be verified against actual code, tests, docs, runtime state, and deployment constraints. **Execution beats opinion:** when a test can settle a question, run the test rather than stacking more LLM reviewers.
+
+---
+
+## DECISION CARD (read first)
+
+| Risk | Examples | Build | Tests (PRIMARY gate) | Codex | GLM red-team | GLM audit | M3 audit (2nd, optional) | Daniel Gate |
+|------|----------|-------|----------------------|-------|--------------|-----------|--------------------------|-------------|
+| **L0** Trivial | copy, comments, CSS polish | Claude | quick check | no | no | no | no | no |
+| **L1** Normal | isolated component, small bug fix, internal refactor | Claude | relevant tests + typecheck + lint + build | if behavior changed | no | no | no | no |
+| **L2** Product flow | onboarding, admin/advisor UX, a11y (no money/auth/migration) | Claude | + acceptance tests | **MANDATORY** | only if subtle or Codex flags | no | optional (VPS only) | if launch-critical |
+| **L3** Dangerous | money, auth/RLS, migrations, schema, worker/cron, concurrency, LiveKit, providers, env/secrets, deploy order | Claude (design-first) | full suite + right test type | **MANDATORY** | **MANDATORY** (before + after) | **MANDATORY** when deploy/runtime/schema consistency is a risk | optional 2nd opinion (VPS only) | **MANDATORY** before merge/apply/deploy |
+
+Default to the LIGHTEST safe row; when unsure between two rows pick the heavier one. "MANDATORY" items cannot be skipped to save tokens. **Execution/tests are the primary correctness gate; LLM auditors are secondary.** The primary consistency auditor is **GLM (`glm-audit`, full-ZDR)**. A **second auditor (M3, `data_collection:deny`) is OPTIONAL and only on L2/L3** (Arcade VPS) — its value is in *divergence* from GLM, and it must prove its keep (see Model Roster). On L0/L1: one reviewer (Codex) + green tests.
+
+---
+
+## Section 0 — Helper CLIs (absolute paths, mandatory inside Claude Code)
+
+Claude Code does NOT inherit the terminal `~/bin` PATH. Always invoke helpers by ABSOLUTE path.
+
+- **Mac:** `/Users/danielsimantov/bin/{glm-ask,glm-scout,glm-tests,glm-audit,glm-redteam,glm-code}` and the `-xhigh` variants (`glm-audit-xhigh`, `glm-redteam-xhigh`, `glm-code-xhigh`).
+- **Arcade VPS (as actdev):** `/home/actdev/bin/glm-*` AND `/home/actdev/bin/m3-{review,ask,audit,deploy-audit}`.
+
+**These paths are machine-specific — do NOT treat them as universal.** For any other project or server, do not assume the Mac or Arcade-VPS paths exist. Resolve the actual helper paths first (e.g. `command -v glm-audit` in an interactive shell, or check the install dir) and record them in the project Risk Map before first use. If no helper is installed for the environment, that is a STOP — do not improvise an unmediated model call.
+
+Pipe focused non-secret text only, e.g.: `git diff -- src | /Users/danielsimantov/bin/glm-redteam "..."`. If a helper exits non-zero or prints `REFUSED`/`ERROR`/`404`, that is a STOP condition (see Model-unreachable rule) — do not skip the step and do not fall back to an unmediated model; report to Daniel. **M3 status is machine-specific:** the **Mac** `m3-*` commands are PARKED (full-ZDR fail-closed) — do not use. The **Arcade VPS** `m3-*` commands are ENABLED under `data_collection:deny` (Daniel-approved) — see Model Roster.
+
+---
+
+## PRIVACY & EGRESS (hard rule)
+
+Send the most sensitive proprietary packets ONLY to a model with a VERIFIED live **full-ZDR** endpoint — today that is **GLM-5.2**. **MiniMax M3 has no full-ZDR endpoint**, but on the Arcade VPS it is Daniel-approved to run under `{data_collection:deny, allow_fallbacks:false}` — the provider does NOT train on / retain the data (a notch below full ZDR). Enforcement is TOOL-LEVEL, not prompt discipline (see Hard Boundaries).
+
+**Data Egress Sensitivity Tiers:**
+- **T0 Public** — OSS deps, public docs, generic algorithm questions: any compliant model.
+- **T1 Proprietary non-secret** — your repo code, migration SQL, architecture, runbook/STATE/DECISIONS excerpts, PR bodies, sanitized runtime/env facts: **GLM-5.2 (full-ZDR) preferred**; on the Arcade VPS, **M3 under `data_collection:deny`** is also permitted (Daniel-approved). Route the *most* sensitive T1 to GLM.
+- **T2 Sensitive identifiers** — internal hostnames, project refs, account ids, non-secret tokens, customer-shaped data: full-ZDR (GLM) only, AND only after redaction to placeholders.
+- **T3 Secrets/PII** — `.env`, API/service-role keys, Vercel/Fly tokens, DB dumps/`DATABASE_URL`, raw logs with PII, private user data: **NEVER sent to any external model**, no exceptions, no redaction shortcut.
+
+**Send rule:** a packet is sent only if (a) every line is T0–T2, (b) the destination model has the required privacy posture for the tier (full-ZDR for T2; full-ZDR or VPS-M3 `data_collection:deny` for T0/T1), AND (c) the CLI secret filter passes. If any line is T3, the packet is BLOCKED. The **Mac M3 is parked** (not a valid destination); the **Arcade-VPS M3** is valid for T0/T1 only, never T2/T3. `xhigh`/M3 reasoning REQUIRES a large token budget; a small budget burns it on reasoning and returns `content:null`/empty. If no compliant model is available for a needed audit, STOP and ask Daniel — never downgrade to an unmediated/non-compliant route.
+
+---
+
+## Roles
+
+- **Claude / Opus / ultracode** = primary design + build engine / coordinator.
+- **Codex CLI** = mandatory independent code/diff reviewer for meaningful PRs.
+- **GLM-5.2** (full-ZDR) = high-risk architecture + implementation red-team AND the consistency auditor.
+- **MiniMax M3** = OPTIONAL second-opinion consistency auditor on **L2/L3 only** (Arcade VPS, `data_collection:deny` — NOT full ZDR). Value is in divergence from GLM; must prove its keep. Mac M3 stays parked. See Model Roster.
+- **Daniel** = human gate for risky actions.
+- **ChatGPT / GPT** = external PM / strategy / protocol / gate-advisory reviewer. Advisory only — it does not execute repo actions and does not replace the Daniel Gate.
+
+---
+
+## 1. Core Rule
+
+Before every task, classify risk first. Do not run the full heavy loop for every small change. Use the lightest safe workflow for the risk level — but never below the floor rules in Section 2. **Prefer a real test/execution over an extra LLM reviewer whenever a test can settle the question.**
+
+---
+
+## 2. Risk Levels + Classification Floor Rules
+
+**L0 Trivial:** copy/docs/comments/CSS polish. Implement directly; relevant quick check only; no Codex unless it touches behavior; no GLM/M3.
+**L1 Normal:** isolated component change, simple form logic, small bug fix, low-blast-radius refactor. Map touched files; implement focused change; run relevant tests/typecheck/lint/build; Codex if behavior changed. One reviewer + green tests is the correctness-per-token optimum here — do NOT add a wide-context auditor.
+**L2 Important product flow:** onboarding, admin/advisor UX, a11y, user-facing flows without money/auth/migration risk. Define acceptance criteria; add/update tests; Codex mandatory; GLM only if subtle or Codex flags; M3 optional as a 2nd opinion only if the change is subtle and on the VPS.
+**L3 Dangerous/Production-Sensitive:** money, billing, wallet, payments, auth/admin/RLS, migrations, schema, worker/cron/queues, concurrency, LiveKit/call lifecycle, external providers, env/secrets, prod deploy order, P0/P1 blockers. Design-first; GLM-PRE architecture red-team; full tests; Codex mandatory; GLM-POST implementation red-team; `glm-audit` consistency audit when relevant; M3 optional 2nd-opinion auditor (VPS); reconcile all; STOP before merge/apply/deploy until Daniel gates.
+
+**Classification floor rules (non-negotiable):**
+1. When uncertain between two levels, pick the HIGHER.
+2. Any task that touches — even indirectly — money/billing/wallet, auth/admin/RLS, migrations/schema, workers/cron/queues, env/secrets, external providers, or production deploy order is **Level 3 regardless of perceived size**; a one-line change to an auth check is Level 3.
+3. Risk is set by blast radius and reversibility, NOT by diff size or token cost.
+4. State the level BEFORE estimating diff cost; never downgrade to save tokens.
+5. In the Section 4 declaration, list the specific trigger keywords considered and a one-line "why NOT one level lower" — if you cannot name a concrete blast-radius reason, drop a level.
+
+If a Level-3 trigger is present and the declared level is below 3, that is a protocol violation, not a judgment call.
+
+---
+
+## 3. Model Roster
+
+### Claude / Opus / ultracode — primary design + build engine
+Understand the goal, map the system, propose the design, build, write tests, run verification, reconcile reviewer findings, keep scope tight, produce clear handoff reports. Must NOT: assume reviewer findings are true; hide uncertainty; broaden scope silently; merge/apply/deploy without Daniel Gate; touch secrets/env/prod/migrations unless approved. Final synthesis, not final authority.
+
+### Codex CLI — mandatory diff reviewer
+Independent reviewer for meaningful PRs. Owns **LINE-LEVEL diff correctness** — regressions, missing/incorrect tests, behavior drift vs PR body, local edge cases — scoped to the diff. Findings are advisory claims; Claude verifies each against code and classifies.
+
+### GLM-5.2 — architecture/implementation red-team (PRE + POST)
+- **GLM-PRE** (`glm-redteam` / `glm-redteam-xhigh`) — runs on the DESIGN PACKET *before* any implementation code. Exit criterion: zero unresolved P0/P1 design findings; design packet frozen (Section 5).
+- **GLM-POST** (implementation red-team) — runs on the DIFF *after* implementation. Mandatory checks: implementation satisfies every stated invariant; no forbidden area touched; tests prove the behavior; no fallback/catch path reintroduces the original bug. Exit criterion: zero unresolved P0/P1 implementation findings.
+- Both passes are required at Level 3; **running one does not satisfy the other.**
+
+GLM owns **INVARIANT and CROSS-FILE safety** — money/auth/migration invariant preservation, race conditions, deploy-order, a fallback reintroducing the original bug, whole-subsystem consistency — scoped beyond the diff. Not an authority; each finding classified per Section 6.
+
+### GLM-5.2 — consistency auditor (full-ZDR)
+Invoked via `glm-audit` / `glm-audit-xhigh` (GLM-5.2, `z-ai/glm-5.2`) for cross-layer mismatch at Level 3: app/worker code depending on DB columns/RPCs not deployed everywhere; app auto-deploy vs gated migrations; staging/prod drift; unsafe blanket db push or migration ordering; runbook/STATE/DECISIONS contradictions; route/page assumptions failing on null/missing fields; rollback-order gaps; merged-but-not-live ambiguity. Same hardened text-only CLI, hard secret filter, and `{zdr:true, allow_fallbacks:false, data_collection:deny}` routing as the GLM red-team. Output the 7-column table: `Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required?`. Every finding is reconciled by Claude; the auditor authorizes nothing.
+
+### MiniMax M3 — optional second-opinion auditor (L2/L3 only)
+- **Arcade VPS: ENABLED** (Daniel-approved 2026-06-28). Invoked via `/home/actdev/bin/m3-audit` / `m3-ask` / `m3-deploy-audit` (`m3-review` core). Routes with `{data_collection:deny, allow_fallbacks:false}` — the provider does NOT train on/retain the data, verified via `m3-review --privacy-selftest`. This is **NOT full ZDR** — GLM stays the full-ZDR path for the most sensitive packets. Same hardened secret filter + egress log (logs `zdr:false, provider_policy:data_collection_deny`).
+- **Mac: PARKED / fail-closed** (full-ZDR-only tooling) — do not use.
+- **When to use:** a SECOND, perspective-diverse wide-context auditor run ALONGSIDE `glm-audit` on **L2/L3 packets only** — never as the sole auditor, never on L0/L1. Its value is **divergence**: in a real bake-off it surfaced security vectors GLM missed while GLM caught contract/robustness risks.
+- **Token budget (load-bearing):** M3 is a reasoning model — a low `M3_MAX_TOKENS` (the 4000 default) gets burned on reasoning and returns EMPTY (exit 5), which is **NOT** a no-findings result. Always set a generous budget (`M3_MAX_TOKENS=12000`+) for real audits.
+- **Prove its keep (mandatory):** for each L2/L3 task that runs both, log which auditor caught each *true* finding and the GLM/M3 overlap. Keep M3 only while it surfaces a non-trivial rate of true findings GLM misses; if it stops earning that, drop back to GLM-only. Every M3 finding is reconciled per Section 6; M3 authorizes nothing.
+
+### Reviewer division of labor (no overlap tax)
+Codex owns line-level diff correctness scoped to the diff. GLM owns invariant/cross-file safety scoped beyond the diff. M3 (when used) is a *diverse second* auditor, not a duplicate. **Do not ask multiple models the same question.** **Prompt every reviewer to flag ONLY correctness and requirement gaps — not style or speculative gap-seeking** (standalone LLM reviewers over-report at ~6–16% precision; "chasing every finding leads to over-engineering"). For a purely local L1/L2 change with no invariant surface, run Codex only. For Level-3 consistency audits, exploit GLM's 1M context: assemble a WHOLE-SUBSYSTEM packet in one call — every migration touching the changed tables, the app/worker code paths reading/writing those tables/RPCs, the deploy runbook, and STATE/DECISIONS excerpts. Do not truncate a genuine whole-subsystem packet below what is needed to see the mismatch; the secret filter, the 120k CLI cap, and routing apply regardless of size — if a genuine packet exceeds the cap, split along subsystem seams, do not raise the cap.
+**Execution:** post-implementation reviewers operate on a FROZEN diff and are INDEPENDENT — run Codex diff review, GLM-POST red-team, and `glm-audit` (+ optional `m3-audit`) CONCURRENTLY, then reconcile in one pass. Only GLM-PRE is serial (it gates the design). Do not re-freeze and re-fan-out unless a P0/P1 fix changes the diff.
+
+### Daniel — human gate
+Only approval gate for high-risk actions: merge to main for sensitive changes, production deploy, staging/prod migrations, Supabase changes, Vercel/Fly worker deploy, env/secrets, auth/admin/RLS, wallet/billing/payment, external providers, data migrations, rollback decisions, anything irreversible/business-critical. If ambiguous, STOP and ask for an explicit gate. Do not infer prod approval from vague language.
+
+---
+
+## 4. Required Task Start Declaration (machine-checkable)
+
+Emit this verbatim block before any code:
+
+```task-start
+risk_level: L0|L1|L2|L3
+why_this_level: <one line>
+why_not_one_lower: <one line blast-radius reason, or drop a level>
+task: <one line>
+touched_areas: [...]
+forbidden_areas: [...]
+tests_required: [...]            # PRIMARY gate — name the actual tests/checks that will settle correctness
+codex: yes|no            # yes for L2/L3 and meaningful L1
+glm_pre_redteam: yes|no  # yes for L3 high-risk (architecture)
+glm_post_redteam: yes|no # yes for L3 (implementation)
+glm_audit: yes|no        # yes when deploy/runtime/schema consistency is a risk (GLM, full-ZDR)
+m3_audit: yes|no         # OPTIONAL 2nd auditor, L2/L3 ONLY (Arcade VPS, data_collection:deny); set a high M3_MAX_TOKENS
+reviewer_commands: [exact absolute paths, e.g. /Users/danielsimantov/bin/glm-audit-xhigh]
+daniel_gate: yes|no
+stop_conditions: [...]
+```
+
+Checker rules: L3 requires `codex=yes` AND `daniel_gate=yes`; `glm_audit=yes` routes to GLM (full-ZDR). `m3_audit=yes` is allowed ONLY at L2/L3, ONLY on the Arcade VPS (`data_collection:deny`), and NEVER as the sole auditor. Budget rule: use a `-xhigh` variant whenever the task is subtle/broad/logic-heavy (it pairs xhigh with the 32768 budget); for M3 set `M3_MAX_TOKENS=12000`+; never request high-effort reasoning on a default-budget command (returns `content:null`/empty). After a run, record the `egress.log` line and `finish_reason`.
+
+---
+
+## 5. Required Design Packet for Level 3
+
+Before implementation produce: **A** Architecture summary · **B** Current behavior · **C** Proposed behavior · **D** Invariants · **E** Failure modes table · **F** Required tests · **G** Deployment order · **H** Rollback plan · **I** Daniel Gate checklist · **J** GLM architecture red-team findings + reconciliation · **K** GLM consistency audit (`glm-audit`, full-ZDR) if the change involves deployment/runtime/schema consistency (optionally a diverse M3 2nd pass on the VPS). Do not start implementation if there is an unresolved P0/P1 design issue.
+
+**Two tracks.** FULL packet (A–K) by default. **LITE packet** (D, E, F, G/H if applicable, I) is permitted ONLY when ALL hold and are stated explicitly: re-applies a previously red-teamed pattern; no new or altered invariant; no new schema object; no change to deploy/rollback order; no new auth/RLS/money surface — AND you cite the specific prior GLM finding-set reused by its packet/decision id. GLM-PRE may be skipped on the LITE track ONLY when every condition holds AND **Daniel confirms LITE eligibility** (not merely the gate); if any condition is uncertain, run FULL. **GLM-POST and the Daniel Gate remain mandatory on both tracks — never skipped.** If GLM-PRE returned clean AND the diff faithfully matches the approved design with no new invariant/interface, the post pass is right-sized to Codex diff review + `glm-audit` at HIGH effort; a second xhigh GLM-POST is required only if the diff introduced logic not in the approved design.
+
+---
+
+## 6. Evidence-Based Reconciliation
+
+For every finding from Codex/GLM/M3/any external model: do not say accepted or rejected without evidence. Every model finding is a **HYPOTHESIS**.
+
+**Classifications:** accepted · false positive · already covered · out of scope · **wrong evidence, valid risk** · requires Daniel decision.
+
+**The "wrong evidence, valid risk" rule:** before discarding, verify the cited evidence (file/caller/line/test).
+- (a) Citation wrong AND no real risk by any path → **false positive**, naming the alternate paths checked.
+- (b) Citation wrong BUT risk real via another path → **wrong evidence, valid risk**; re-anchor to the correct evidence, treat at its true severity.
+- (c) Citation partially right → **partially right**, keep the valid part.
+
+A finding may be closed as false positive ONLY after the alternate-path check is documented. Never expand scope on speculation: a re-anchored finding must point to concrete evidence, not a hypothesized one. If accepted, fix root cause not symptom. If "requires Daniel decision," STOP.
+
+**Settle with execution where possible.** When a finding is a plausible-but-unverified "must-fix," prefer running a test/repro that settles it over debating it across more LLM reviewers. A green, well-targeted test outranks an unverified LLM claim.
+
+**Evidence depth scales with severity.** P0/P1: full record with cited evidence (and the alternate-path check before any false-positive close). P2: one-line disposition (fix-now / backlog / wontfix) — no deep verification, and P2s never block convergence.
+
+**Reconciliation table (per finding):**
+
+| Finding | Source (Codex / GLM-redteam / GLM-audit / M3-audit) | Classification | Evidence checked | Decision | Follow-up | Gate? |
+
+"accepted" fixes root cause not symptom; "already covered" must name the file/test/doc; "requires-Daniel" STOPS.
+
+**Independent second-signal verification.** Any P0/P1 finding that informs a Daniel Gate decision must be independently confirmed by Claude via a SECOND signal that is not the model's word — a test actually run, the cited code read and quoted, or a runtime/migration-state check. The Daniel Gate checklist labels each item `[VERIFIED: <how>]` or `[UNVERIFIED CLAIM]`. Daniel is never asked to gate on an `[UNVERIFIED CLAIM]`; an unverifiable item is itself a stop condition stated to Daniel.
+
+---
+
+## 6.1 Cross-model agreement signal
+
+**Measured reality:** when two diverse auditors are genuinely orthogonal, **most real findings are caught by exactly one of them** (~93% single-tool in measured practitioner data). So a single-auditor finding is the NORM, not a weak signal — verify it against the code; do NOT discard it just because only one model raised it.
+
+- **(a) CONVERGENCE (rare but strong)** — a finding both reviewers (e.g. Codex + GLM, or GLM + M3) flag independently is auto-promoted to must-fix before merge; Claude may NOT classify a doubly-flagged finding as false-positive without cited evidence shown to Daniel.
+- **(b) DIVERGENCE is where the 2nd model earns its keep** — on a Level-3 safety point (money/auth/migration/worker/concurrency), if one model rates it P0/P1 and the other is silent, Claude does NOT discard it and does NOT unilaterally resolve it: verify it against the code; if real, fix it; if unresolved, escalate to the Daniel Gate with both positions.
+
+Never average two positions or pick the lighter one. A single-tool or divergent finding on a dangerous path is a signal to verify, not noise to drop.
+
+---
+
+## 7. Deployment & Migration Safety
+
+**WHEN:** app code depends on a DB schema change (or any built asset / runtime artifact), before merge to main.
+**MUST answer:** does main auto-deploy? does the app read/write the new column/table/RPC/asset? is the additive migration/asset applied to ALL target envs? is the app backward-compatible if it is missing? feature flag / safe fallback? what breaks under app-before-migration / migration-before-app / worker-before-migration? rollback order?
+**STOP:** if the app is NOT backward-compatible with the missing migration/asset, do NOT merge to an auto-deployed branch until it is applied or the code is made backward-compatible. Never use a broad `db push` when the runbook requires per-migration apply.
+**Vocabulary (always distinguish):** `merged != deployed != migration-applied != worker-live != feature-active != smoke-verified`.
+
+---
+
+## 8. Testing Rules (the PRIMARY gate)
+
+**Execution is the highest-confidence correctness signal — run it first, and treat its result as outranking any unverified LLM claim.** LLM auditors (GLM/M3) are SECONDARY: invoke them for what execution can't verify — architecture, schema/deploy consistency, security, cross-file invariants. Do not let LLM critics override a green, well-targeted test on a plausible-but-unverified "must-fix"; settle it with a test.
+
+Tests prove invariants, not just implementation details. Use the right type: unit for pure logic, integration for flows, pgTAP/SQL for DB functions, worker tests for cron/queue/loop, browser/manual smoke for real user flows, runtime checks for deploy/migration state. Do not weaken tests just to pass. If old tests break because behavior intentionally changed, update fixtures explicitly and document why.
+
+---
+
+## 9. Token & Model Discipline
+
+Claude alone for L0; Claude + tests + Codex for L1/L2; Claude + tests + Codex + GLM (+ optional M3) + Daniel Gate for L3 when relevant. **Add a wide-context auditor only when execution + Codex leave a real gap (architecture/consistency/security) — not by default.** Keep packets focused; do not dump the whole repo; do not send secrets.
+
+**Reasoning effort: default to HIGH.** Use GLM `xhigh` (the `-xhigh` wrappers only) for money/worker/auth/migrations/concurrency/production cutover and genuine multi-step architectural depth — not merely because an area is high-risk. **HARD RULE: xhigh MUST use the `-xhigh` wrappers (32768 budget); for M3 set `M3_MAX_TOKENS=12000`+; never request high reasoning on a default-budget command — it returns `content:null`/empty and wastes the whole call.** If a high-effort pass already produced a clean, well-evidenced result, do NOT re-run at xhigh. Always invoke helpers by ABSOLUTE path.
+
+---
+
+## 9a. Convergence Gate (hard stop)
+
+A task is CONVERGED and review STOPS when ALL hold: (1) tests/typecheck/lint/build green; (2) zero unresolved P0/P1; (3) every open finding classified per Section 6; (4) the latest reviewer pass produced no NEW P0/P1. Once converged, remaining P2s are logged as follow-ups, NOT fixed-and-re-reviewed in this task. Re-review after a fix is RE-SCOPED to the changed lines only — reviewers may not raise net-new findings OUTSIDE the fix diff (those go to backlog), but a P0/P1 introduced BY the fix itself must be fixed before convergence. Round budget: max 2 GLM rounds and 2 Codex rounds per task; a 3rd round requires Daniel to explicitly authorize the spend. **The round cap NEVER converts an unresolved P0/P1 into a pass — if the cap is reached with any open P0/P1, that is a STOP escalated to Daniel.** `glm-audit`/`m3-audit` are consistency checks, not part of this nitpick loop.
+
+---
+
+## 10. Final Report Format
+
+For risky work, emit:
+
+```status
+changed: ...
+not_changed: ...
+tests_run: ...                 # the PRIMARY evidence — list pass/fail
+reviewers: codex=<result> glm_redteam=<result> glm_audit=<result> m3_audit=<result|n/a>
+merged: yes|no  deployed: yes|no  migration_applied: yes|no  worker_live: yes|no  prod_touched: yes|no
+billing/auth/data_behavior_changed: yes|no
+risks_remaining: ...
+gates_still_required: ...
+next_action: ...
+safe_to_pause: yes|no
+```
+
+Never leave the reader thinking something is live when it is only merged.
+
+---
+
+## 11. Hard Boundaries
+
+**Scope of these rules.** Claude Code and Codex CLI are approved PRIMARY development/review tools operating under their own account/tool policies — they are NOT required to route through the GLM/M3 wrappers, and building/reviewing this repo is their sanctioned function. The hardened rules below govern *additional advisory model calls* (GLM/M3/OpenRouter and any future advisory provider). **T3 secrets/PII remain forbidden for ALL tools, including Claude Code and Codex.**
+
+**Privacy is enforced at the TOOL layer, not by model discipline.** Every *advisory* external-model call MUST go through a CLI that enforces, BEFORE the network call: (1) provider routing — GLM uses `{zdr:true, allow_fallbacks:false, data_collection:deny}`; the VPS M3 uses `{data_collection:deny, allow_fallbacks:false}` (no-training, Daniel-approved); (2) a hard secret-pattern filter that aborts transmission on any match (a deny mechanism, not a prompt instruction — it holds even if the operator or a model believes the content is safe; a scan error blocks the send); (3) a verified live endpoint with the required posture for the target tier. `allow_fallbacks` must never be true for any call carrying T1+ content. The privacy provider flags must not be disableable by environment override on a T1+ send. **Do NOT hand-craft curl / raw-API calls to model providers** — they bypass all three guarantees. A wrapper lacking any of the three is forbidden and is itself a P0 incident.
+
+**Secret-filter parity (load-bearing).** All advisory CLIs share ONE canonical `SECRET_PATTERNS` set (15 patterns), version-stamped via `FILTER_VERSION`. Required minimum set: `OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, SUPABASE_SERVICE_ROLE, service_role, DATABASE_URL, VERCEL_TOKEN, PRIVATE KEY, BEGIN RSA PRIVATE KEY, BEGIN OPENSSH PRIVATE KEY, sk-or-, sk-ant-, sk-proj-, sk-, eyJhbGciOi`. The Mac and VPS (`/home/actdev/bin`) copies of `glm-review` (and the VPS `m3-review`) must report the same `FILTER_VERSION`. Any divergence is a P0 to fix before the next Level-3 send.
+
+**Model-unreachable rule (FAIL CLOSED):** a required reviewer that does not return a usable result is a STOP, never a pass.
+- (a) Non-zero exit, network/timeout, or HTTP 404 (privacy-denied) from a required CLI = mandated step NOT satisfied; stop and tell Daniel.
+- (b) `content:null` / empty / `finish_reason:length` = the model burned its budget on reasoning; re-run with the `-xhigh` wrapper (32768) or `M3_MAX_TOKENS=12000`+ or a tighter packet — NEVER treat empty as no-findings.
+- (c) A REFUSED secret-match = redact to placeholders, never bypass the filter, never switch to a non-filtered path.
+- (d) On privacy-denied/404, fail closed — do NOT fall back to a non-compliant provider.
+- (e) NEVER silently substitute a different/unmediated model or skip the step to make progress.
+
+**Per-send privacy verification.** Before sending any T1+ packet, verify the target model currently has the required privacy posture for this account and FAIL CLOSED on 404/denied. Do not infer availability from a prior session. GLM full-ZDR must be VERIFIED, not assumed (`glm-audit --zdr-selftest`); the VPS M3 `data_collection:deny` route is verified via `m3-review --privacy-selftest`. If a previously-trusted model loses its posture (404/denied), PARK it and surface to Daniel.
+
+**Do NOT:** touch prod / apply migrations / deploy workers without explicit Daniel Gate; change env/secrets; expose keys; send T1+ content to any model lacking the required privacy posture; send T2/T3 to M3; use the Mac M3 (parked); bypass the secret filter; set `allow_fallbacks:true` for any T1+ call; merge sensitive PRs without Daniel Gate; use model output as authority; skip Codex on meaningful PRs; skip GLM on Level-3 architecture if risk is high; continue after a P0/P1 remains unresolved.
+
+**Privacy-incident response.** If any T1+ content was sent without the required posture (detected via `egress.log` showing a denied/missing-filter line), STOP all model calls, record timestamp + payload SHA-256 + model, notify Daniel immediately as a P0 incident, and do not resume external calls until the wrapper is fixed and re-verified.
+
+### Egress Audit Log (tool-level, mandatory)
+Every advisory external-model CLI invocation appends one JSON line to `~/.config/openrouter/egress.log` (chmod 600): `{ts, model, mode, zdr_requested|provider_policy, zdr_verified, served_by, http_status, secret_scan (clean|REFUSED), char_count, sha256_of_payload}` (with `zdr_denied:true` on 404/denied). For the VPS M3, the line records `zdr:false, provider_policy:data_collection_deny`. Log the payload HASH, never the body. Refusals, blocks, and 404/denied are logged too. The log is append-only and never sent to any model. Before any Level-3 sign-off, Claude greps `egress.log` for the session and confirms no entry shows a non-compliant send of T1+ content; if it does, STOP and declare a privacy incident. No egress line = treat the step as if it did not run.
+
+---
+
+## 12. Project Initialization
+
+When added to a new project: read repo structure; identify deploy platform; database/migration system; whether main auto-deploys; worker/cron/queue systems; auth/RLS/payment/external providers; test commands; production/staging environments; existing docs/runbooks; then create a project-specific **Risk Map** before risky work, recording the resolved absolute paths for `glm-*`/`m3-*`. Do not assume this project works like another — map the actual system.
+
+**Install checklist (run before treating CLAUDE.md as active):**
+1. Verify helper paths resolve (`command -v glm-audit`, or the absolute path) and record them in the Risk Map.
+2. `glm-review --version` — confirms install + FILTER_VERSION (Mac/VPS must match).
+3. `glm-audit --zdr-selftest` — confirms live full-ZDR routing (fail-closed if not).
+4. (VPS, if M3 used) `m3-review --version` + `m3-review --privacy-selftest` — confirms `data_collection:deny` routing.
+5. Confirm the egress log writes hash-only (no payload body) — `tail ~/.config/openrouter/egress.log`.
+6. Confirm the Mac M3 is fail-closed/parked.
+7. Create/update the project Risk Map.
+8. Only then treat CLAUDE.md as the active protocol for the project.
+
+---
+
+## 13. Versioning & Sync
+
+This protocol carries `PROTOCOL_VERSION` (v2.1 — the evidence-backed refinement). Each CLI prints `FILTER_VERSION` and `CLI_VERSION` on `--version`. Single source of truth lives in the repo/dotfiles; Mac (`/Users/danielsimantov/bin`) and VPS (`/home/actdev/bin`) copies are installed FROM it, never edited in place. A `--version` mismatch between Mac and VPS is a STOP for cross-machine work until reconciled. When this protocol changes, bump `PROTOCOL_VERSION` and re-sync both machines in the same change.
+
+---
+
+## 14. One-Line Summary
+
+**Execution/tests are the primary gate.** Claude builds and coordinates. Codex reviews diffs (line-level correctness). GLM (full-ZDR) red-teams architecture/implementation AND audits deployment/runtime/schema consistency. M3 (Arcade VPS, `data_collection:deny`) is an OPTIONAL second auditor on L2/L3 — value in divergence, must prove its keep, raise its token budget. Daniel gates risky actions.
