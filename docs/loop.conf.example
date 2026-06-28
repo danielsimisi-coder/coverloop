@@ -1,0 +1,3 @@
+# Per-repo config for the v2.3 test-green Stop hook. Copy to .claude/loop.conf
+TEST_CMD="npm test --silent"
+MAX_BLOCKS=3
