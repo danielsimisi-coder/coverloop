@@ -29,4 +29,6 @@ else
 fi
 
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "NOTE: add $BIN_DIR to PATH for interactive use (Claude Code uses absolute paths regardless).";; esac
+SK="$HOME/.claude/skills"
+if [ -d "$(dirname "$0")/skills" ]; then mkdir -p "$SK"; cp -R "$(dirname "$0")/skills/." "$SK/"; echo "Installed skills to $SK"; fi
 echo "Done. Inside Claude Code, always call helpers by ABSOLUTE path."
