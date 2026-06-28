@@ -219,6 +219,16 @@ Claude alone for L0; Claude + tests + Codex for L1/L2; Claude + tests + Codex + 
 
 ---
 
+
+**Cost concentration (v2.3 — watch these).** Tokens are QA budget; spend them where they buy correctness. The largest spend by far is Claude/Opus (the builder) and any **multi-agent workflow fan-out** (a single 8-12-subagent research/review run can cost 300k+ tokens); xhigh and Codex next; GLM/M3/`dep-check`/hooks/memory are pennies. Rules:
+1. **Cheap models do the heavy reading.** GLM/M3 (OpenRouter, ~pennies) carry the bulk audit; reserve Opus for building + final synthesis and Codex for the gate.
+2. **Reserve xhigh AND multi-agent workflows for genuinely hard/strategic work.** Never fan out subagents to answer a routine question; a workflow is for big, decomposable, high-stakes problems.
+3. **Output discipline.** Never pipe whole-repo or large logs into a model — write a script that prints only the answer (the single biggest context-cost cut). Honor the 120k packet cap.
+4. **Prompt-cache friendliness.** Keep system prompts stable so OpenRouter/Anthropic caching applies (GLM cached input is ~5x cheaper than fresh).
+5. **Subtract standing components.** A 2nd auditor that fires on <~10% of work, or a cron, is recurring token cost — cut it (§10c).
+
+Tiering (§2) + execution-first (§8) remain the biggest levers — they decide *whether* an expensive model runs at all.
+
 ## 9a. Convergence Gate (hard stop)
 
 A task is CONVERGED and review STOPS when ALL hold: (1) tests/typecheck/lint/build green; (2) zero unresolved P0/P1; (3) every open finding classified per Section 6; (4) the latest reviewer pass produced no NEW P0/P1. Once converged, remaining P2s are logged as follow-ups, NOT fixed-and-re-reviewed in this task. Re-review after a fix is RE-SCOPED to the changed lines only — reviewers may not raise net-new findings OUTSIDE the fix diff (those go to backlog), but a P0/P1 introduced BY the fix itself must be fixed before convergence. Round budget: max 2 GLM rounds and 2 Codex rounds per task; a 3rd round requires Daniel to explicitly authorize the spend. **The round cap NEVER converts an unresolved P0/P1 into a pass — if the cap is reached with any open P0/P1, that is a STOP escalated to Daniel.** `glm-audit`/`m3-audit` are consistency checks, not part of this nitpick loop.
