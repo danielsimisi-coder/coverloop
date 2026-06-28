@@ -22,3 +22,10 @@ Reusable recipe for the cross-model review step. Use on a FOCUSED diff/snippet o
 - Execution/tests are the PRIMARY gate; these auditors are secondary.
 - Codex stays the mandatory independent diff reviewer; Daniel is the final gate.
 - `<glm-bin>` = resolved helper dir (Arcade VPS: `/home/actdev/bin`; Mac: `/Users/danielsimantov/bin`). Resolve actual paths on other machines.
+
+## v2.3 signal handling
+- Agreement is a TRIAGE HINT, not a correctness oracle (models co-hallucinate). Verify any finding against the code / a failing test before it blocks.
+- Every finding must cite file:line; bare agreement with no evidence = no signal.
+- Check `docs/REVIEW_LEDGER.md` first; do NOT re-raise findings already marked rejected/won't-fix.
+- Run `dep-check <pkg>` before suggesting/installing any new dependency.
+- M3 is L3-only; on L0/L1 run Codex + tests only.

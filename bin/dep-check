@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""dep-check — slopsquatting gate. Before installing an AI-suggested npm package,
+verify it actually exists and isn't a brand-new near-zero-download lookalike.
+Usage: dep-check <pkg> [<pkg> ...]   (exit 0 = all OK, non-zero = block/verify)
+"""
+import sys, json, urllib.request, urllib.error
+from datetime import datetime, timezone
+
+def get(url, timeout=15):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.getcode(), json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except Exception:
+        return None, None
+
+def check(pkg):
+    code, meta = get("https://registry.npmjs.org/" + urllib.parse.quote(pkg, safe="@/"))
+    if code == 404:
+        return "BLOCK", "does NOT exist on npm — likely hallucinated/slopsquat"
+    if code != 200 or not meta:
+        return "VERIFY", f"registry lookup failed (code={code}) — verify manually"
+    created = (meta.get("time", {}) or {}).get("created")
+    age_days = None
+    if created:
+        try:
+            age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(created.replace("Z", "+00:00"))).days
+        except Exception:
+            pass
+    dcode, ddata = get("https://api.npmjs.org/downloads/point/last-month/" + urllib.parse.quote(pkg, safe="@/"))
+    dl = (ddata or {}).get("downloads", 0) if dcode == 200 else None
+    if age_days is not None and age_days < 30 and (dl is not None and dl < 1000):
+        return "VERIFY", f"very new ({age_days}d) + low downloads ({dl}/mo) — verify it's the real package"
+    return "OK", f"exists, age={age_days}d, downloads={dl}/mo"
+
+import urllib.parse
+def main():
+    pkgs = sys.argv[1:]
+    if not pkgs:
+        print("usage: dep-check <pkg> [<pkg> ...]", file=sys.stderr); sys.exit(2)
+    bad = 0
+    for p in pkgs:
+        verdict, why = check(p)
+        mark = {"OK": "OK  ", "VERIFY": "WARN", "BLOCK": "BLOCK"}[verdict]
+        print(f"[{mark}] {p}: {why}")
+        if verdict != "OK": bad += 1
+    sys.exit(1 if bad else 0)
+
+if __name__ == "__main__":
+    main()

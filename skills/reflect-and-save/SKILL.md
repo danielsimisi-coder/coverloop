@@ -21,3 +21,8 @@ After a meaningful task, reflect and persist what's durable. The model isn't ret
 
 ## When to skip
 Trivial edits, pure conversation, or anything already captured.
+
+## v2.3 additions
+- First check `~/.claude/reflect-staging.md` (auto-captured failures) and curate anything durable from it.
+- PROVENANCE GUARD: never paste GLM/M3/Codex text verbatim into memory — rewrite the lesson in your own words, human-confirmed.
+- Prefer rewriting an existing memory/lesson over appending a near-duplicate (avoid bloat).

@@ -4,3 +4,6 @@ egress.log
 *.bak-*
 __pycache__/
 *.pyc
+.loop-stop-blocks
+.claude/.loop-stop-blocks
+reflect-staging.md
