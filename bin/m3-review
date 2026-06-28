@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# Arcade M3 — Daniel explicitly approved 2026-06-26 (NON-full-ZDR).
+# Privacy posture: provider {data_collection:deny, allow_fallbacks:false} => routes only to a
+# provider that does NOT train on / retain the data. Verified 200 from Minimax. This is NOT full
+# ZDR (zero transient retention). Secret filter + egress log are mandatory protections.
+import os, sys, json, hashlib, urllib.request, urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+
+CLI_VERSION = "m3-1.0.2"
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODEL = os.getenv("M3_MODEL", "minimax/minimax-m3")
+MAX_CHARS = int(os.getenv("M3_MAX_CHARS", "120000"))
+MAX_TOKENS = int(os.getenv("M3_MAX_TOKENS", "4000"))
+EGRESS_LOG = Path.home() / ".config" / "openrouter" / "egress.log"
+# No-training/no-retention routing, no fallback to a non-compliant provider.
+PROVIDER = {"data_collection": "deny", "allow_fallbacks": False}
+
+
+SYSTEMS = {
+    "ask": "You are MiniMax M3 as a low-authority advisory software engineering specialist in Daniel's Arcade workflow. Analyze only the text provided. You cannot access shell, files, repo, secrets, or commands. You are advisory only; Codex/Daniel remain the gates. Be concise and evidence-based.",
+    "audit": "You are MiniMax M3 acting as a LOW-AUTHORITY System/Runtime Consistency Auditor in Daniel's Arcade workflow. You are not a builder. You cannot run commands or access files unless pasted. You cannot approve merge, deploy, migrations, prod, env, secrets, or payments. Findings are advisory only. Catch cross-layer deployment/runtime mismatches: app/worker code depending on assets not built everywhere; state/flow inconsistencies; build/deploy ordering; docs/STATE contradictions; assumptions that fail on missing/null data; rollback-order gaps. Return a markdown table with exactly: Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required? Never output only None. If evidence is missing, write needs verification. Do not invent runtime facts.",
+}
+
+def read_key():
+    k = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if k:
+        return k
+    p = Path.home() / ".config" / "openrouter" / "api_key"
+    if p.exists():
+        return p.read_text(encoding="utf-8").strip()
+    print("ERROR: Missing OpenRouter API key.", file=sys.stderr); sys.exit(1)
+
+def sha(t):
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()
+
+def log_egress(mode, http_status, secret_scan, char_count, payload_sha, extra=None):
+    rec = {"ts": datetime.now(timezone.utc).isoformat(), "cli_version": CLI_VERSION,
+           "filter_version": FILTER_VERSION, "model": MODEL, "mode": mode,
+           "zdr": False, "provider_policy": "data_collection_deny",
+           "http_status": http_status, "secret_scan": secret_scan,
+           "char_count": char_count, "sha256_of_payload": payload_sha}
+    if extra: rec.update(extra)
+    try:
+        os.makedirs(os.path.dirname(str(EGRESS_LOG)), exist_ok=True)
+        fd = os.open(str(EGRESS_LOG), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"ERROR: egress log write failed ({e}); failing closed (no unaudited send).", file=sys.stderr)
+        sys.exit(7)
+
+def do_request(payload, timeout):
+    req = urllib.request.Request(API_URL, data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {read_key()}", "Content-Type": "application/json",
+                 "X-Title": "Daniel Arcade M3 (data_collection:deny)"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def privacy_selftest():
+    payload = {"model": MODEL, "messages": [{"role": "user", "content": "ping"}],
+               "max_tokens": 8, "temperature": 0, "provider": PROVIDER}
+    try:
+        d = do_request(payload, 30); served = d.get("provider")
+        print(f"M3 PRIVACY SELF-TEST OK: served_by={served} under {{data_collection:deny, allow_fallbacks:false}} "
+              f"(provider does not train/retain). NOTE: this is NOT full ZDR.")
+        log_egress("privacy-selftest", 200, "n/a", 0, "", {"served_by": served}); return 0
+    except urllib.error.HTTPError as e:
+        b = e.read().decode("utf-8", "replace")
+        print(f"M3 PRIVACY SELF-TEST FAIL ({e.code}): {b[:160]}", file=sys.stderr)
+        log_egress("privacy-selftest", e.code, "n/a", 0, "", {"error": True}); return 4
+    except Exception as e:
+        print(f"M3 PRIVACY SELF-TEST ERROR: {e}", file=sys.stderr); return 1
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args:
+        print(json.dumps({"cli": "m3-review", "cli_version": CLI_VERSION, "filter_version": FILTER_VERSION,
+                          "model": MODEL, "provider_policy": "data_collection_deny (NOT full ZDR)",
+                          "secret_patterns": len(SECRET_PATTERNS)}, indent=2)); sys.exit(0)
+    if not (os.path.exists(os.path.expanduser("~/.config/openrouter/m3_enabled")) or os.getenv("M3_ENABLED") == "1"):
+        print("M3 is PARKED in this environment (default). Approved only where Daniel opted in. "
+              "To enable: create ~/.config/openrouter/m3_enabled (Daniel-approved environments only).", file=sys.stderr)
+        sys.exit(4)
+    if "--privacy-selftest" in args:
+        sys.exit(privacy_selftest())
+    mode = "audit"
+    if "--mode" in args:
+        i = args.index("--mode")
+        if i + 1 >= len(args): print("ERROR: --mode needs ask/audit", file=sys.stderr); sys.exit(2)
+        mode = args[i+1]; del args[i:i+2]
+    if "--no-git" in args: args.remove("--no-git")
+    if mode not in SYSTEMS: print(f"ERROR: invalid mode {mode}", file=sys.stderr); sys.exit(2)
+    task = " ".join(args).strip()
+    stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
+    if not task and not stdin_text.strip():
+        print("ERROR: provide a prompt and/or pipe text.", file=sys.stderr); sys.exit(1)
+    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    psha = sha(content); cc = len(content)
+    if cc > MAX_CHARS:
+        log_egress(mode, None, "not-sent-too-large", cc, psha)
+        print(f"ERROR: input too large ({cc} > {MAX_CHARS}).", file=sys.stderr); sys.exit(1)
+    hits = scan(content)
+    if hits:
+        log_egress(mode, None, "REFUSED", cc, psha, {"matched": hits})
+        print("ERROR: Refusing to send possible secret-bearing content. Matched: " + ", ".join(hits), file=sys.stderr)
+        sys.exit(3)
+    payload = {"model": MODEL, "messages": [{"role": "system", "content": SYSTEMS[mode]},
+               {"role": "user", "content": content}], "temperature": 0.1,
+               "max_tokens": MAX_TOKENS, "provider": PROVIDER}
+    try:
+        log_egress(mode, None, "clean", cc, psha, {"phase": "attempt"})
+        d = do_request(payload, 120); served = d.get("provider")
+        log_egress(mode, 200, "clean", cc, psha, {"served_by": served, "phase": "result"})
+        choice = d["choices"][0]; out = choice["message"].get("content")
+        if out and choice.get("finish_reason") != "length": print(out)
+        else:
+            print("ERROR: M3 returned incomplete output (empty or finish_reason:length). Raise M3_MAX_TOKENS (12000+) and re-run. NOT a no-findings result.", file=sys.stderr); sys.exit(5)
+    except urllib.error.HTTPError as e:
+        b = e.read().decode("utf-8", "replace")
+        log_egress(mode, e.code, "clean", cc, psha, {"error": True})
+        print(f"HTTP ERROR {e.code}:\n{b}", file=sys.stderr); sys.exit(1)
+    except Exception as e:
+        log_egress(mode, None, "clean", cc, psha, {"error": str(e)})
+        print(f"ERROR: {e}", file=sys.stderr); sys.exit(1)
+
+if __name__ == "__main__":
+    main()

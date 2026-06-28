@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import hashlib
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+
+CLI_VERSION = "2.0.2"
+
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MODEL = os.getenv("GLM_MODEL", "z-ai/glm-5.2")
+MAX_CHARS = int(os.getenv("GLM_MAX_CHARS", "120000"))
+MAX_COMPLETION_TOKENS = int(os.getenv("GLM_MAX_COMPLETION_TOKENS", "4096"))
+REASONING_EFFORT = os.getenv("GLM_REASONING_EFFORT", "high")
+USE_ZDR = True  # ZDR mandatory, NOT env-disableable (Codex P1; protocol Hard Boundaries)
+EGRESS_LOG = Path.home() / ".config" / "openrouter" / "egress.log"
+
+SYSTEMS = {
+    "ask": "You are GLM-5.2 as a read-only advisory software engineering specialist. You can only analyze the text provided. You cannot access shell, files, repo, secrets, or commands. Be concise and evidence-based.",
+    "scout": "You are GLM-5.2 as a read-only pre-implementation scout. Identify risks, affected areas, unclear requirements, missing tests, and what Codex should verify. Use only provided text.",
+    "tests": "You are GLM-5.2 as a read-only test strategist. Suggest the smallest useful tests that catch real regressions. Use only provided text.",
+    "audit": "You are GLM-5.2 acting as a LOW-AUTHORITY System/Runtime Consistency Auditor in the AI development workflow. You are not a builder. You cannot run commands or access files unless pasted. You cannot approve merge, deploy, migrations, prod, env, secrets, billing, worker changes, or payments. Findings are advisory only. Catch cross-layer deployment/runtime mismatches: app code depending on DB columns/RPCs not deployed everywhere; app auto-deploy vs gated migrations; staging/prod drift; worker code depending on missing columns/RPCs; unsafe blanket db push or migration ordering; docs/runbook contradictions; route/page assumptions failing when fields are null/missing; rollback-order gaps. Return a markdown table with exactly: Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required? Never output only None. If evidence is missing, write needs verification. Do not invent runtime facts.",
+    "redteam": """You are GLM-5.2 as an adversarial read-only reviewer.
+You are NOT the builder. You are NOT the final gate. Codex/GPT-5.5 xhigh remains final reviewer.
+Review only evidence provided.
+Output:
+1. Verdict: PASS / PASS WITH RISKS / REQUEST CHANGES / BLOCK
+2. P0 blockers, if any
+3. P1 serious issues, if any
+4. P2 improvements, if any
+5. Missing tests / verification
+6. Likely false positives / what to ignore
+7. Suggested next action
+Severity:
+- P0 = definite production blocker with direct evidence.
+- P1 = likely serious issue.
+- P2 = improvement, edge case, docs, naming, or ambiguous requirement.
+If ambiguous, do not mark P0.""",
+    "code": """You are GLM-5.2 as an optional implementation specialist.
+You may propose code or a unified diff patch.
+You cannot edit files, execute commands, access shell, access repo, access files, or access secrets.
+Claude Code remains executor. Codex/GPT-5.5 xhigh remains final reviewer.
+Output:
+1. Implementation summary
+2. Assumptions
+3. Proposed patch or code blocks
+4. Tests to add/update
+5. Verification commands Claude should run
+6. Risks / what Codex should review
+Keep patches minimal. Mark uncertain requirements explicitly."""
+}
+
+
+def provider_block():
+    return {"zdr": True, "allow_fallbacks": False, "data_collection": "deny"}
+
+def read_key():
+    env_key = os.getenv("OPENROUTER_API_KEY")
+    if env_key:
+        return env_key.strip()
+    key_path = Path.home() / ".config" / "openrouter" / "api_key"
+    if key_path.exists():
+        return key_path.read_text(encoding="utf-8").strip()
+    print("ERROR: Missing OpenRouter API key at ~/.config/openrouter/api_key", file=sys.stderr)
+    sys.exit(1)
+
+def log_egress(model, mode, zdr_requested, http_status, secret_scan, char_count, payload_sha, extra=None):
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "cli_version": CLI_VERSION,
+        "filter_version": FILTER_VERSION,
+        "model": model,
+        "mode": mode,
+        "zdr_requested": bool(zdr_requested),
+        "http_status": http_status,
+        "secret_scan": secret_scan,
+        "char_count": char_count,
+        "sha256_of_payload": payload_sha,
+        "zdr_verified": bool(zdr_requested) and http_status == 200,
+        "served_by": None,
+    }
+    if extra:
+        rec.update(extra)
+    try:
+        os.makedirs(os.path.dirname(str(EGRESS_LOG)), exist_ok=True)
+        fd = os.open(str(EGRESS_LOG), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"ERROR: egress log write failed ({e}); failing closed (no unaudited send).", file=sys.stderr)
+        sys.exit(7)
+
+def sha(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+def do_request(payload, timeout):
+    req = urllib.request.Request(
+        API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {read_key()}",
+            "Content-Type": "application/json",
+            "X-Title": "Daniel GLM Least Privilege CLI v" + CLI_VERSION,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def zdr_selftest():
+    if not USE_ZDR:
+        print("ZDR SELF-TEST: GLM_ZDR is disabled by env — refusing to self-test without ZDR.", file=sys.stderr)
+        log_egress(MODEL, "zdr-selftest", False, None, "n/a", 0, "", {"zdr_disabled_by_env": True})
+        return 4
+    payload = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_completion_tokens": 8,
+        "temperature": 0,
+        "provider": provider_block(),
+    }
+    try:
+        data = do_request(payload, 30)
+        served = data.get("provider")
+        print(f"ZDR SELF-TEST OK: model={MODEL} served_by={served} — a ZDR endpoint accepted the request "
+              f"(zdr:true, allow_fallbacks:false). Routing-level proof; OpenRouter returns no per-response ZDR attestation.")
+        log_egress(MODEL, "zdr-selftest", True, 200, "n/a", 0, "", {"served_by": served})
+        return 0
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        if e.code == 404 and "zero data retention" in body.lower():
+            print(f"ZDR SELF-TEST FAIL CLOSED: no ZDR endpoint for {MODEL}. "
+                  f"Do NOT send proprietary content to this model. Use a ZDR-backed model.", file=sys.stderr)
+            log_egress(MODEL, "zdr-selftest", True, 404, "n/a", 0, "", {"zdr_denied": True})
+            return 4
+        print(f"ZDR SELF-TEST HTTP ERROR {e.code}:\n{body}", file=sys.stderr)
+        log_egress(MODEL, "zdr-selftest", True, e.code, "n/a", 0, "", {"error": True})
+        return 1
+    except Exception as e:
+        print(f"ZDR SELF-TEST ERROR: {e}", file=sys.stderr)
+        log_egress(MODEL, "zdr-selftest", True, None, "n/a", 0, "", {"error": str(e)})
+        return 1
+
+def read_stdin_safely():
+    if sys.stdin.isatty():
+        return ""
+    return sys.stdin.read()
+
+def main():
+    args = sys.argv[1:]
+
+    if "--version" in args:
+        print(json.dumps({
+            "cli": "glm-review",
+            "cli_version": CLI_VERSION,
+            "filter_version": FILTER_VERSION,
+            "model": MODEL,
+            "zdr_enforced": USE_ZDR,
+            "secret_patterns": len(SECRET_PATTERNS),
+        }, indent=2))
+        sys.exit(0)
+
+    if "--zdr-selftest" in args:
+        sys.exit(zdr_selftest())
+
+    mode = "ask"
+    if "--mode" in args:
+        i = args.index("--mode")
+        if i + 1 >= len(args):
+            print("ERROR: --mode requires ask/scout/tests/audit/redteam/code", file=sys.stderr)
+            sys.exit(2)
+        mode = args[i + 1]
+        del args[i:i+2]
+    if "--no-git" in args:
+        args.remove("--no-git")
+    if mode not in SYSTEMS:
+        print(f"ERROR: invalid mode {mode}", file=sys.stderr)
+        sys.exit(2)
+
+    task = " ".join(args).strip()
+    stdin_text = read_stdin_safely()
+    if not task and not stdin_text.strip():
+        print("ERROR: Provide a prompt and/or pipe explicit text.", file=sys.stderr)
+        sys.exit(1)
+    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    payload_sha = sha(content)
+    char_count = len(content)
+
+    if char_count > MAX_CHARS:
+        log_egress(MODEL, mode, USE_ZDR, None, "not-sent-too-large", char_count, payload_sha)
+        print(f"ERROR: Input too large ({char_count} chars). Limit is {MAX_CHARS}.", file=sys.stderr)
+        sys.exit(1)
+
+    hits = scan(content)
+    if hits:
+        log_egress(MODEL, mode, USE_ZDR, None, "REFUSED", char_count, payload_sha, {"matched": hits})
+        print("ERROR: Refusing to send possible secret-bearing content to GLM.", file=sys.stderr)
+        print("Matched patterns: " + ", ".join(hits), file=sys.stderr)
+        sys.exit(3)
+
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEMS[mode]},
+            {"role": "user", "content": content}
+        ],
+        "temperature": 0.1,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
+        "reasoning": {"effort": REASONING_EFFORT, "exclude": True}
+    }
+    if USE_ZDR:
+        payload["provider"] = provider_block()
+
+    try:
+        # preflight: an audit record MUST be writable BEFORE any content leaves (fail closed)
+        log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count, payload_sha, {"phase": "attempt"})
+        data = do_request(payload, 120)
+        served = data.get("provider")
+        log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha, {"served_by": served, "phase": "result"})
+        choice = data["choices"][0]
+        out = choice["message"].get("content")
+        if out and choice.get("finish_reason") != "length":
+            print(out)
+        else:
+            # empty OR finish_reason:length => incomplete (budget burned on reasoning). NOT an all-clear.
+            print("ERROR: incomplete reviewer output (empty or finish_reason:length). "
+                  "Re-run with a -xhigh wrapper (32768 budget) or a tighter packet. This is NOT a no-findings result.",
+                  file=sys.stderr)
+            sys.exit(5)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        zdr_denied = (e.code == 404 and "zero data retention" in body.lower())
+        log_egress(MODEL, mode, USE_ZDR, e.code, "clean", char_count, payload_sha, {"zdr_denied": zdr_denied})
+        if zdr_denied:
+            print(f"FAIL CLOSED: {MODEL} has no ZDR endpoint. Nothing was retained-at-risk. Use a ZDR-backed model.", file=sys.stderr)
+            sys.exit(4)
+        print(f"HTTP ERROR {e.code}:\n{body}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count, payload_sha, {"error": str(e)})
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

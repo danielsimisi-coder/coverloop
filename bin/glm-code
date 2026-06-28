@@ -1,0 +1,5 @@
+#!/bin/sh
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+GLM_REASONING_EFFORT="${GLM_REASONING_EFFORT:-high}" \
+GLM_MAX_COMPLETION_TOKENS="${GLM_MAX_COMPLETION_TOKENS:-4096}" \
+exec "$DIR/glm-review" --mode code "$@"

@@ -1,0 +1,6 @@
+egress.log
+**/egress.log
+*.bak
+*.bak-*
+__pycache__/
+*.pyc
