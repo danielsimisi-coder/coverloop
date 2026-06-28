@@ -1,6 +1,6 @@
 # v2.3 hooks — wiring
 
-These are flat shell hooks for Claude Code. Copy them to `~/.claude/hooks/` (install.sh does this) and wire them in `settings.json` (user-level `~/.claude/settings.json` or project `.claude/settings.json`):
+These are flat shell hooks for Claude Code. **`install.sh` installs them to `~/.claude/hooks/` AND auto-wires them** in `~/.claude/settings.json` (idempotent, keeps a backup; opt out with `INSTALL_WIRE_HOOKS=0`). The schema below is the reference / manual fallback (user-level `~/.claude/settings.json` or project `.claude/settings.json`):
 
 ```jsonc
 {

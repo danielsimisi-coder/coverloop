@@ -32,6 +32,44 @@ case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "NOTE: add $BIN_DIR to PATH for int
 SK="$HOME/.claude/skills"
 if [ -d "$(dirname "$0")/skills" ]; then mkdir -p "$SK"; cp -R "$(dirname "$0")/skills/." "$SK/"; echo "Installed skills to $SK"; fi
 HK="$HOME/.claude/hooks"
-if [ -d "$(dirname "$0")/hooks" ]; then mkdir -p "$HK"; cp "$(dirname "$0")/hooks/"*.sh "$HK/" 2>/dev/null; chmod +x "$HK/"*.sh 2>/dev/null; echo "Installed hooks to $HK (wire in settings.json — see hooks/README.md)"; fi
-echo "To enable the test-green completion gate in a repo: copy docs/loop.conf.example to that repo's .claude/loop.conf and set a CHEAP TEST_CMD (e.g. \"npx tsc --noEmit\"); gitignore .claude/.loop-stop-blocks. The hook is change-aware (no-op unless tracked files changed)."
+if [ -d "$(dirname "$0")/hooks" ]; then mkdir -p "$HK"; cp "$(dirname "$0")/hooks/"*.sh "$HK/" 2>/dev/null; chmod +x "$HK/"*.sh 2>/dev/null; echo "Installed hooks to $HK"; fi
+
+# Auto-wire the hooks into ~/.claude/settings.json (idempotent, keeps a backup).
+# Opt out with INSTALL_WIRE_HOOKS=0. Never clobbers existing config; on any doubt it no-ops.
+if [ "${INSTALL_WIRE_HOOKS:-1}" = "1" ] && command -v python3 >/dev/null; then
+  python3 - "$HK" <<'PY'
+import json, os, sys, shutil, time
+hk = sys.argv[1]
+p  = os.path.expanduser("~/.claude/settings.json")
+want = {"Stop": os.path.join(hk, "loop-stop-check.sh"),
+        "PostToolUseFailure": os.path.join(hk, "capture-failure.sh")}
+d = {}
+if os.path.exists(p):
+    try:
+        with open(p) as f: d = json.load(f)
+    except Exception as e:
+        print("  settings.json present but unreadable (%s) — NOT modifying; wire manually per hooks/README.md" % e)
+        sys.exit(0)
+hooks = d.setdefault("hooks", {})
+changed = False
+for ev, cmd in want.items():
+    arr = hooks.setdefault(ev, [])
+    if not any(cmd in json.dumps(x) for x in arr):
+        arr.append({"hooks": [{"type": "command", "command": cmd}]})
+        changed = True
+if changed:
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    if os.path.exists(p): shutil.copy(p, p + ".bak.%d" % int(time.time()))
+    with open(p, "w") as f: json.dump(d, f, indent=2)
+    print("  wired Stop + PostToolUseFailure hooks in %s (backup kept)" % p)
+else:
+    print("  hooks already wired in settings.json (no change)")
+PY
+else
+  echo "  (skipped hook auto-wiring — needs python3 and INSTALL_WIRE_HOOKS=1; see hooks/README.md)"
+fi
+
+echo "PER-PROJECT setup: run ./init-project.sh from a project repo root"
+echo "  -> creates .claude/loop.conf (cheap typecheck gate), docs/REVIEW_LEDGER.md, docs/RISK_MAP.md, AGENTS.md symlink."
+echo "Optional root hardening: docs/EGRESS_SANDBOX.md."
 echo "Done. Inside Claude Code, always call helpers by ABSOLUTE path."

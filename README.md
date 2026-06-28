@@ -13,15 +13,23 @@ The multi-model AI development protocol I use across projects, plus the advisory
 
 Principles: **execution/tests are the primary correctness gate**; LLM auditors are secondary. Privacy is enforced at the TOOL layer — ZDR/no-training provider routing, a hard secret filter, and an append-only egress log — not by prompt discipline.
 
-## Install
+## Install — turnkey, two steps
+**1) Once per machine** — installs the CLIs, skills, hooks, and **auto-wires the hooks** in `settings.json`:
 ```bash
 git clone https://github.com/danielsimisi-coder/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-.git
 cd Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-
-./install.sh                       # bin/* → ~/bin, skills → ~/.claude/skills, hooks → ~/.claude/hooks
+./install.sh                       # bin/*→~/bin; skills+hooks→~/.claude; wires Stop+PostToolUseFailure (backup kept)
 printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
-~/bin/glm-review --version
 ~/bin/glm-audit --zdr-selftest     # confirms live full-ZDR routing (fail-closed if not)
 ```
+**2) Once per project** — scaffolds the per-repo v2.3 artifacts:
+```bash
+cd /path/to/your-project
+/path/to/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-/init-project.sh
+# creates .claude/loop.conf (cheap typecheck gate), docs/REVIEW_LEDGER.md, docs/RISK_MAP.md, AGENTS.md->CLAUDE.md
+```
+> Both scripts are **idempotent** — re-run any time; they never clobber an existing file or config (always back up first).
+> Optional root hardening (egress allowlist / OS sandbox) lives in [`docs/EGRESS_SANDBOX.md`](docs/EGRESS_SANDBOX.md) — it's the one tripwire the scripts can't apply for you (needs root).
 > **Never export `OPENROUTER_API_KEY` in your shell rc** — `glm-review` prefers the env var over the file, so a stale export silently overrides a rotated key. Keep the key only in `~/.config/openrouter/api_key`.
 > Inside Claude Code, call helpers by **absolute path** (it doesn't inherit your terminal `~/bin` PATH).
 
@@ -33,9 +41,11 @@ printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/op
 
 ## Self-improving loop & mechanical gates (v2.2–v2.3)
 - **`skills/`** → installed to `~/.claude/skills/`: `multimodel-review` (GLM+M3 review recipe) and `reflect-and-save` (persist durable lessons to file-based memory at the end of a task — the "periodic nudge").
-- **`hooks/`** → flat Claude Code hooks (wire in `settings.json`; see `hooks/README.md`):
-  - `loop-stop-check.sh` — **test-green completion gate**. OPT-IN per repo via `.claude/loop.conf` (`TEST_CMD`), **change-aware** (instant no-op when no tracked files changed — clean/chat stops cost nothing), livelock-guarded (`MAX_BLOCKS`, default 3). Use a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, not a slow full suite) so it can run on every code-change stop without burning the token/compute budget — the full suite still runs before a PR/CI. Copy `docs/loop.conf.example` → `.claude/loop.conf` to enable, and gitignore `.claude/.loop-stop-blocks`.
+- **`hooks/`** → flat Claude Code hooks, **auto-wired by `install.sh`** (manual schema in `hooks/README.md`):
+  - `loop-stop-check.sh` — **test-green completion gate**. OPT-IN per repo via `.claude/loop.conf` (`TEST_CMD`), **change-aware** (instant no-op when no tracked files changed — clean/chat stops cost nothing), livelock-guarded (`MAX_BLOCKS`, default 3). Uses a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, not a slow full suite) so it runs on every code-change stop without burning the token/compute budget — the full suite still runs before a PR/CI. `init-project.sh` writes `.claude/loop.conf` and gitignores the counter for you.
   - `capture-failure.sh` — appends tool failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
+- **`init-project.sh`** — run in a project root to scaffold `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md` (template), and the `AGENTS.md → CLAUDE.md` symlink. Idempotent.
 - **`docs/REVIEW_LEDGER.md`** — false-positive ledger so reviewers stop re-raising rejected findings.
+- **`docs/EGRESS_SANDBOX.md`** — optional root-level egress allowlist / OS sandbox (defense-in-depth; the tool layer already enforces core privacy).
 
 Current version: **v2.3** (2026-06-28).
