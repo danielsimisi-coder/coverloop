@@ -24,6 +24,20 @@ Default to the LIGHTEST safe row; when unsure between two rows pick the heavier 
 
 ---
 
+## Session Start — load & engage the protocol (run FIRST, every session)
+
+**The protocol only works if it is LOADED INTO ACTIVE CONTEXT and ENGAGED — not sitting in a side-doc.** A session that operates off a project `CLAUDE.md` which merely points to a `docs/` file, or which names a reviewer roster that omits GLM/M3, is NOT running this protocol no matter how good the doc is. Before any work, run this ritual and report it:
+
+1. **Confirm the protocol is active.** State `PROTOCOL_VERSION` and the roster (below). If the auto-loaded `CLAUDE.md`/`AGENTS.md` does NOT carry this contract (pointer-only, or a roster without GLM/M3), that is a **WIRING BUG** — flag it to Daniel, treat this protocol as authoritative for code review, and inline the contract into the project file.
+2. **Load memory.** Read the project's **git-tracked** memory (`docs/MEMORY.md` or `.agent/memory/` — see §10a). Machine-local Claude memory does NOT travel between the Mac / Arcade-VPS / Alex-VPS — durable lessons must live in the repo or they never reach the other sessions.
+3. **Read the Risk Map + `docs/REVIEW_LEDGER.md`** (skip findings already marked rejected/wontfix).
+4. **Resolve helper paths** (`glm-*`/`m3-*`, §0) and record them in the Risk Map.
+5. **Restate the Task Card + risk tier (§4)** before touching code.
+
+**Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **M3 (`data_collection:deny`, L3 only)** optional 2nd auditor (value is in *divergence*) · **Daniel** gates risk. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
+
+---
+
 ## Section 0 — Helper CLIs (absolute paths, mandatory inside Claude Code)
 
 Claude Code does NOT inherit the terminal `~/bin` PATH. Always invoke helpers by ABSOLUTE path.
@@ -275,10 +289,10 @@ Never leave the reader thinking something is live when it is only merged.
 
 The loop improves over time the way a good engineer does — by keeping **notes** and **reusable recipes**, NOT by retraining the model. Two mechanisms:
 
-1. **Memory — reflect & save (the "periodic nudge").** At the end of every meaningful task, reflect: did anything *durable* happen — a user correction/preference, a non-obvious project/infra fact (not in code or git), a decision + its reason, or a workflow that will recur? If yes, write it to the memory store (one fact per file, with frontmatter; update the index; check for an existing file first — update, don't duplicate). If nothing durable, skip — do not save noise. Invoke the **`reflect-and-save`** skill. The agent curates its own memory; durable lessons survive into the next session.
+1. **Memory — reflect & save (the "periodic nudge").** At the end of every meaningful task, reflect: did anything *durable* happen — a user correction/preference, a non-obvious project/infra fact (not in code or git), a decision + its reason, or a workflow that will recur? If yes, write it to the **git-tracked** memory store (one fact per file, with frontmatter; update the index; check for an existing file first — update, don't duplicate; **commit it with the work** so other machines' sessions inherit it). If nothing durable, skip — do not save noise. Invoke the **`reflect-and-save`** skill. This is the loop's **#1 reliability gap** — it is opt-in and easy to forget, so treat it as a required step of the Final Report (§10), not an afterthought.
 2. **Skills — reusable recipes.** When a non-trivial workflow recurs (the multi-model review, wiring a webhook, a cutover sequence), capture it as a Skill (`.claude/skills/<name>/SKILL.md`) so the agent reuses the exact recipe instead of re-deriving it. Starter set: **`multimodel-review`** (GLM + M3 review) and **`reflect-and-save`**.
 
-Memory is injected at session start (a frozen snapshot); skills load as on-demand procedures. Together, each new session starts smarter than the last — with zero change to model weights.
+**Memory must be PORTABLE.** The durable store is **git-tracked in the project repo** (`docs/MEMORY.md` or `.agent/memory/`), NOT machine-local Claude memory — otherwise a lesson learned on the Mac never reaches the Arcade-VPS or Alex-VPS session, and the "self-improving loop" silently does nothing across the fleet. Machine-local Claude memory is a per-session cache; the **repo file is the source of truth** and is committed when it changes. Memory loads at session start (per *Session Start* above); skills load as on-demand procedures. Together, each new session — **on any machine** — starts smarter than the last, with zero change to model weights.
 
 ---
 
@@ -334,6 +348,8 @@ Every advisory external-model CLI invocation appends one JSON line to `~/.config
 ## 12. Project Initialization
 
 When added to a new project: read repo structure; identify deploy platform; database/migration system; whether main auto-deploys; worker/cron/queue systems; auth/RLS/payment/external providers; test commands; production/staging environments; existing docs/runbooks; then create a project-specific **Risk Map** before risky work, recording the resolved absolute paths for `glm-*`/`m3-*`. Also record the **environment matrix** (host + DB + auth redirect config for local/staging/prod) and the **seeded test fixtures** (a known admin + customer with roles/balances) so QA is deterministic and local auth works without host-swapping (§7a). Do not assume this project works like another — map the actual system.
+
+**Wire the protocol into ACTIVE context (the most common reason "the protocol didn't work").** The project's auto-loaded `CLAUDE.md`/`AGENTS.md` MUST inline this protocol's **Operating Contract** — the roster + Decision Card + *Session Start* ritual — with the full protocol linked for depth. A `CLAUDE.md` that only points to a `docs/` protocol file, or whose roster names other reviewers (Codex/Antigravity/GPT) but **omits GLM/M3**, never loads the loop into the agent's context: the session then runs an older, partial setup while the real protocol sits unread on the side. Fix this BEFORE treating the protocol as active. Likewise the durable memory must be a **git-tracked repo file** (§10a), or sessions on other machines start blank.
 
 **Install checklist (run before treating CLAUDE.md as active):**
 1. Verify helper paths resolve (`command -v glm-audit`, or the absolute path) and record them in the Risk Map.
