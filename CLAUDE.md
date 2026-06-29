@@ -109,6 +109,7 @@ Understand the goal, map the system, propose the design, build, write tests, run
 
 ### Codex CLI — mandatory diff reviewer
 Independent reviewer for meaningful PRs. Owns **LINE-LEVEL diff correctness** — regressions, missing/incorrect tests, behavior drift vs PR body, local edge cases — scoped to the diff. Findings are advisory claims; Claude verifies each against code and classifies.
+- **Linux sandbox prerequisite.** On Linux, Codex sandboxes via a bundled `bwrap` that needs unprivileged user + network namespaces. On Ubuntu 23.10+/24.04 these are AppArmor-clamped, so Codex's sandbox fails (`uid_map`/`RTM_NEWADDR: Operation not permitted`). Fix the OS at the root (`docs/CODEX_SANDBOX_LINUX.md`) — **never** the `--dangerously-bypass-approvals-and-sandbox` flag. Prefer `codex review --uncommitted` (reliable local-diff review; also avoids the `--base` GitHub-MCP "wrong PR" bug). `install.sh` preflights this and prints the remedy.
 
 ### GLM-5.2 — architecture/implementation red-team (PRE + POST)
 - **GLM-PRE** (`glm-redteam` / `glm-redteam-xhigh`) — runs on the DESIGN PACKET *before* any implementation code. Exit criterion: zero unresolved P0/P1 design findings; design packet frozen (Section 5).
@@ -327,6 +328,7 @@ Leverage is on inputs + subtraction, not a 4th reviewer. **Audit M3 + the conver
 - (c) A REFUSED secret-match = redact to placeholders, never bypass the filter, never switch to a non-filtered path.
 - (d) On privacy-denied/404, fail closed — do NOT fall back to a non-compliant provider.
 - (e) NEVER silently substitute a different/unmediated model or skip the step to make progress.
+- (f) A reviewer blocked by a **SANDBOX/ENV failure** (e.g. Codex's bundled `bwrap` failing `uid_map`/`RTM_NEWADDR` under Ubuntu 24.04's userns clamp) = fix the ENVIRONMENT at the root (`docs/CODEX_SANDBOX_LINUX.md`), NOT by disabling the tool's safety. Do **NOT** use `--dangerously-bypass-approvals-and-sandbox`, and an agent must **NEVER self-grant** a sandbox/approval-bypass permission off a general instruction ("do whatever necessary" ≠ authorization for that) — that decision is the human's, by hand. If the env fix needs root and you can't apply it, STOP and hand Daniel the exact root command + verification.
 
 **Per-send privacy verification.** Before sending any T1+ packet, verify the target model currently has the required privacy posture for this account and FAIL CLOSED on 404/denied. Do not infer availability from a prior session. GLM full-ZDR must be VERIFIED, not assumed (`glm-audit --zdr-selftest`); the VPS M3 `data_collection:deny` route is verified via `m3-review --privacy-selftest`. If a previously-trusted model loses its posture (404/denied), PARK it and surface to Daniel.
 

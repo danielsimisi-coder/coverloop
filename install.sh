@@ -69,6 +69,21 @@ else
   echo "  (skipped hook auto-wiring — needs python3 and INSTALL_WIRE_HOOKS=1; see hooks/README.md)"
 fi
 
+# Codex (Linux) sandbox preflight — Codex's bundled bwrap needs unprivileged user+net namespaces.
+# Ubuntu 23.10+/24.04 clamp these via AppArmor, so Codex's sandbox fails. Detect (non-root) and
+# print the persistent ROOT remedy; we do NOT apply it (it needs root).
+if [ "$(uname -s)" = "Linux" ] && command -v unshare >/dev/null 2>&1; then
+  if unshare -Urn true 2>/dev/null; then
+    echo "Codex sandbox preflight: unprivileged user+net namespaces OK."
+  else
+    echo "WARNING: unprivileged user+net namespaces are BLOCKED — Codex's bundled bwrap sandbox will fail on this host."
+    echo "  Likely cause: Ubuntu 23.10+/24.04 AppArmor clamp (kernel.apparmor_restrict_unprivileged_userns=1)."
+    echo "  Persistent fix (run as ROOT, then re-test 'unshare -Urn true'):"
+    echo "    echo 'kernel.apparmor_restrict_unprivileged_userns = 0' > /etc/sysctl.d/60-unpriv-userns.conf && sysctl -p /etc/sysctl.d/60-unpriv-userns.conf"
+    echo "  Do NOT work around it with 'codex --dangerously-bypass-approvals-and-sandbox'. See docs/CODEX_SANDBOX_LINUX.md."
+  fi
+fi
+
 echo "PER-PROJECT setup: run ./init-project.sh from a project repo root"
 echo "  -> creates .claude/loop.conf (cheap typecheck gate), docs/REVIEW_LEDGER.md, docs/RISK_MAP.md, AGENTS.md symlink."
 echo "Optional root hardening: docs/EGRESS_SANDBOX.md."

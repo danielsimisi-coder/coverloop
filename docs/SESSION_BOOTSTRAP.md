@@ -15,6 +15,7 @@ printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/op
 # On a VPS where M3 is approved:
 #   touch ~/.config/openrouter/m3_enabled && ~/bin/m3-review --privacy-selftest
 ```
+> **Linux:** `install.sh` preflights Codex's sandbox (unprivileged user namespaces). If it prints a WARNING, the Codex gate won't run until you apply the one-line **root** fix from [`docs/CODEX_SANDBOX_LINUX.md`](CODEX_SANDBOX_LINUX.md) — do **not** use the `--dangerously-bypass` flag.
 
 ## 2) Project (once per repo — creates NEW files only, never edits your CLAUDE.md)
 ```bash

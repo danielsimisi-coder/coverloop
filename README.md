@@ -52,5 +52,6 @@ cd /path/to/your-project
 - **`docs/SESSION_BOOTSTRAP.md`** — what to install + paste-ready prompts (machine install · project init · per-session Session-Start · "is it wired?" self-check · end-of-task reflect).
 - **`docs/REVIEW_LEDGER.md`** — false-positive ledger so reviewers stop re-raising rejected findings.
 - **`docs/EGRESS_SANDBOX.md`** — optional root-level egress allowlist / OS sandbox (defense-in-depth; the tool layer already enforces core privacy).
+- **`docs/CODEX_SANDBOX_LINUX.md`** — fix for Codex's `bwrap` sandbox failing on Linux (Ubuntu 24.04 unprivileged-userns clamp): a persistent root sysctl so Codex runs **sandboxed** without the `--dangerously-bypass` flag. `install.sh` auto-detects and points here.
 
 Current version: **v2.3** (2026-06-28).
