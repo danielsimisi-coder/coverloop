@@ -44,7 +44,10 @@ cd /path/to/your-project
 - **`hooks/`** → flat Claude Code hooks, **auto-wired by `install.sh`** (manual schema in `hooks/README.md`):
   - `loop-stop-check.sh` — **test-green completion gate**. OPT-IN per repo via `.claude/loop.conf` (`TEST_CMD`), **change-aware** (instant no-op when no tracked files changed — clean/chat stops cost nothing), livelock-guarded (`MAX_BLOCKS`, default 3). Uses a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, not a slow full suite) so it runs on every code-change stop without burning the token/compute budget — the full suite still runs before a PR/CI. `init-project.sh` writes `.claude/loop.conf` and gitignores the counter for you.
   - `capture-failure.sh` — appends tool failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
-- **`init-project.sh`** — run in a project root to scaffold `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md` (template), and the `AGENTS.md → CLAUDE.md` symlink. Idempotent.
+- **`init-project.sh`** — run in a project root to scaffold `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md`, `docs/MEMORY.md` (portable memory), `docs/OPERATING_CONTRACT.md`, and the `AGENTS.md → CLAUDE.md` symlink. **New files only — never edits your existing `CLAUDE.md`.** Idempotent.
+- **`docs/OPERATING_CONTRACT.md`** — the loop's binding contract (roster incl. GLM/M3 + Decision Card + Session-Start ritual) to **inline at the top of a project's `CLAUDE.md`** so the protocol loads into active context. A pointer-only `CLAUDE.md`, or one whose roster omits GLM/M3, is the #1 reason "the protocol didn't work."
+- **`docs/MEMORY.example.md`** — template for `docs/MEMORY.md`: **git-tracked, portable** memory so lessons travel between the Mac and each VPS (machine-local Claude memory does not). `reflect-and-save` appends here and commits.
+- **`docs/SESSION_BOOTSTRAP.md`** — what to install + paste-ready prompts (machine install · project init · per-session Session-Start · "is it wired?" self-check · end-of-task reflect).
 - **`docs/REVIEW_LEDGER.md`** — false-positive ledger so reviewers stop re-raising rejected findings.
 - **`docs/EGRESS_SANDBOX.md`** — optional root-level egress allowlist / OS sandbox (defense-in-depth; the tool layer already enforces core privacy).
 

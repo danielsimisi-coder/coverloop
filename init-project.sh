@@ -39,7 +39,23 @@ else
   echo "  + docs/RISK_MAP.md  (template — fill in, or delete if you use Obsidian)"
 fi
 
-# 5) AGENTS.md -> CLAUDE.md symlink so Codex/other agents read ONE source of truth
+# 5) portable memory (git-tracked — travels with the repo; loaded at Session Start)
+if [ -e "$PROJ/docs/MEMORY.md" ]; then
+  echo "  skip docs/MEMORY.md (exists)"
+else
+  cp "$SRC/docs/MEMORY.example.md" "$PROJ/docs/MEMORY.md"
+  echo "  + docs/MEMORY.md  (portable memory — reflect-and-save appends here; commit it)"
+fi
+
+# 6) Operating Contract template (you inline it into CLAUDE.md yourself — see note below)
+if [ -e "$PROJ/docs/OPERATING_CONTRACT.md" ]; then
+  echo "  skip docs/OPERATING_CONTRACT.md (exists)"
+else
+  cp "$SRC/docs/OPERATING_CONTRACT.md" "$PROJ/docs/OPERATING_CONTRACT.md"
+  echo "  + docs/OPERATING_CONTRACT.md  (TEMPLATE — inline into CLAUDE.md manually)"
+fi
+
+# 7) AGENTS.md -> CLAUDE.md symlink so Codex/other agents read ONE source of truth
 if [ -e "$PROJ/CLAUDE.md" ] && [ ! -e "$PROJ/AGENTS.md" ]; then
   if ln -s CLAUDE.md "$PROJ/AGENTS.md" 2>/dev/null; then
     echo "  + AGENTS.md -> CLAUDE.md"
@@ -48,5 +64,6 @@ if [ -e "$PROJ/CLAUDE.md" ] && [ ! -e "$PROJ/AGENTS.md" ]; then
   fi
 fi
 
-echo "Done. Per-project v2.3 scaffolding is in place."
-echo "Reminder: the Stop hook only runs when .claude/loop.conf exists (it does now) AND the hooks are wired (install.sh does that)."
+echo "Done. Per-project v2.3 scaffolding is in place — NEW files only; your CLAUDE.md was NOT modified."
+echo "MANUAL STEP (yours): inline docs/OPERATING_CONTRACT.md at the TOP of CLAUDE.md so the loop loads into active context. A pointer-only CLAUDE.md = the protocol won't engage."
+echo "Reminder: the Stop hook runs only when .claude/loop.conf exists (it does now) AND the hooks are wired (install.sh)."
