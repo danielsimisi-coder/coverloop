@@ -49,6 +49,8 @@ Send the most sensitive proprietary packets ONLY to a model with a VERIFIED live
 
 **Send rule:** a packet is sent only if (a) every line is T0–T2, (b) the destination model has the required privacy posture for the tier (full-ZDR for T2; full-ZDR or VPS-M3 `data_collection:deny` for T0/T1), AND (c) the CLI secret filter passes. If any line is T3, the packet is BLOCKED. The **Mac M3 is parked** (not a valid destination); the **Arcade-VPS M3** is valid for T0/T1 only, never T2/T3. `xhigh`/M3 reasoning REQUIRES a large token budget; a small budget burns it on reasoning and returns `content:null`/empty. If no compliant model is available for a needed audit, STOP and ask Daniel — never downgrade to an unmediated/non-compliant route.
 
+**Reading your OWN database (QA/debug) is still PII-bound.** Owning the data does not license pulling it into chat/model context. Project **only the non-PII columns you need**: filter by an identifier in the `WHERE` clause (input is fine) but never `SELECT` email/name/phone/raw rows into the output when a non-PII column answers the question — e.g. to check an account's role use `select pu.role from public.users pu join auth.users au on au.id = pu.id where au.email = '<known>'` (role only), NOT `select au.email, pu.role …`. If a tool/MCP read is blocked for PII, **reshape the query to drop the PII column**, don't bounce the task back to the human. Customer-shaped data is T2/T3 even on infrastructure you own.
+
 ---
 
 ## Roles
@@ -203,6 +205,17 @@ Never average two positions or pick the lighter one. A single-tool or divergent 
 
 ---
 
+## 7a. Environment & test-harness parity (local ↔ staging ↔ prod)
+
+Most "the app is broken" time is lost to **environment mismatch**, not code. Map it once in the Risk Map; don't re-derive it every session.
+
+- **Environment matrix (record in the Risk Map):** for each env (local / staging / prod) record its host/URL, which DB/project it points at, and its **auth redirect/callback config**. Magic-link and OAuth callbacks are **env-bound** — a link minted for one host fails on another, and tokens are single-use/expiring.
+- **Local dev MUST have a friction-free auth path.** Configure the auth provider's Site URL + allowed redirect URLs to include the local origin (Supabase: add `http://localhost:3000/**` to Additional Redirect URLs), OR provide a dev-only login that doesn't depend on the email host (a seed/login script, or `generate_link` with explicit `redirect_to=localhost`). If a human has to hand-edit the host of an email link to test locally, that is a **config bug to fix at the root**, not a step to repeat.
+- **Deterministic test fixtures.** Each env has an **idempotent seed** for a KNOWN admin + a KNOWN customer, with documented role and starting balance/state, recorded in the Risk Map. QA must never require live spelunking to discover "who is admin" mid-flow. If a needed account/role/balance is missing, **seed it idempotently** — don't improvise around it.
+- **Two-strikes rule (root-cause over workaround).** If you instruct the human to perform the same manual workaround **twice** — host-swapping a link, re-requesting an email, hand-running a query a tool refused — STOP and fix the underlying cause (redirect config, a seed, a PII-safe query, a dev-login). Repeating a manual workaround is a protocol failure, not a fix.
+
+---
+
 ## 8. Testing Rules (the PRIMARY gate)
 
 **Execution is the highest-confidence correctness signal — run it first, and treat its result as outranking any unverified LLM claim.** LLM auditors (GLM/M3) are SECONDARY: invoke them for what execution can't verify — architecture, schema/deploy consistency, security, cross-file invariants. Do not let LLM critics override a green, well-targeted test on a plausible-but-unverified "must-fix"; settle it with a test.
@@ -320,7 +333,7 @@ Every advisory external-model CLI invocation appends one JSON line to `~/.config
 
 ## 12. Project Initialization
 
-When added to a new project: read repo structure; identify deploy platform; database/migration system; whether main auto-deploys; worker/cron/queue systems; auth/RLS/payment/external providers; test commands; production/staging environments; existing docs/runbooks; then create a project-specific **Risk Map** before risky work, recording the resolved absolute paths for `glm-*`/`m3-*`. Do not assume this project works like another — map the actual system.
+When added to a new project: read repo structure; identify deploy platform; database/migration system; whether main auto-deploys; worker/cron/queue systems; auth/RLS/payment/external providers; test commands; production/staging environments; existing docs/runbooks; then create a project-specific **Risk Map** before risky work, recording the resolved absolute paths for `glm-*`/`m3-*`. Also record the **environment matrix** (host + DB + auth redirect config for local/staging/prod) and the **seeded test fixtures** (a known admin + customer with roles/balances) so QA is deterministic and local auth works without host-swapping (§7a). Do not assume this project works like another — map the actual system.
 
 **Install checklist (run before treating CLAUDE.md as active):**
 1. Verify helper paths resolve (`command -v glm-audit`, or the absolute path) and record them in the Risk Map.
@@ -336,7 +349,7 @@ When added to a new project: read repo structure; identify deploy platform; data
 
 ## 13. Versioning & Sync
 
-This protocol carries `PROTOCOL_VERSION` (v2.1 — the evidence-backed refinement). Each CLI prints `FILTER_VERSION` and `CLI_VERSION` on `--version`. Single source of truth lives in the repo/dotfiles; Mac (`/Users/danielsimantov/bin`) and VPS (`/home/actdev/bin`) copies are installed FROM it, never edited in place. A `--version` mismatch between Mac and VPS is a STOP for cross-machine work until reconciled. When this protocol changes, bump `PROTOCOL_VERSION` and re-sync both machines in the same change.
+This protocol carries `PROTOCOL_VERSION` (v2.3 — enforce + subtract; §7a adds environment & test-harness discipline). Each CLI prints `FILTER_VERSION` and `CLI_VERSION` on `--version`. Single source of truth lives in the repo/dotfiles; Mac (`/Users/danielsimantov/bin`) and VPS (`/home/actdev/bin`) copies are installed FROM it, never edited in place. A `--version` mismatch between Mac and VPS is a STOP for cross-machine work until reconciled. When this protocol changes, bump `PROTOCOL_VERSION` and re-sync both machines in the same change.
 
 ---
 

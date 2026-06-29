@@ -26,5 +26,18 @@ Claude Code does NOT inherit your terminal `~/bin` PATH — record the resolved 
 - Per-stop `TEST_CMD` (cheap, change-aware): `npx tsc --noEmit`
 - Full suite (`npm test`) runs before a PR / in CI — not on every stop.
 
+## Environments (§7a — kills the magic-link / wrong-host pain)
+| env | host / URL | DB / project | auth redirect config |
+|-----|-----------|--------------|----------------------|
+| local | `http://localhost:3000` | ____ | Site URL + redirects MUST include `http://localhost:3000/**` |
+| staging | `https://____` | ____ | ____ |
+| prod | `https://____` | ____ | ____ |
+- **Friction-free local login (no host-swapping):** ____ (redirect allowlist includes localhost · OR dev-login/seed script · OR `generate_link` with `redirect_to=localhost`)
+
+## Test fixtures (deterministic, idempotent seed)
+- **Admin:** `____` — role `admin` — seeded by: ____
+- **Customer:** `____` — role `customer`, starting balance ____ — seeded by: ____
+- Re-check a role **without leaking PII**: `select pu.role from public.users pu join auth.users au on au.id = pu.id where au.email = '<known>'` (role only).
+
 ## Sensitive surfaces (fill in)
 - e.g. payment/webhook handlers, auth tokens, RLS policies, migrations, deploy config …
