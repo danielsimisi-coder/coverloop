@@ -4,6 +4,8 @@ The multi-model AI development protocol I use across projects, plus the advisory
 
 **`CLAUDE.md` is the canonical protocol** (v2.3). Drop it into a project root (Claude Code auto-loads it); symlink `AGENTS.md -> CLAUDE.md` so Codex reads the same source.
 
+> 👉 **New here / setting up a machine, a project, or a session? Start with [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)** — it spells out exactly what to install and what to paste, in order: **machine** (`install.sh`) → **project** (`init-project.sh`, then inline `docs/OPERATING_CONTRACT.md` into that project's `CLAUDE.md`) → **every session** (paste the Session-Start prompt). The single most important step is inlining the Operating Contract into the project's `CLAUDE.md` — without it the loop never loads into the agent's context.
+
 ## Roles
 - **Claude Code** builds & coordinates (not final authority).
 - **Codex CLI** independently reviews diffs (line-level correctness) — the gate.
