@@ -36,6 +36,8 @@ Default to the LIGHTEST safe row; when unsure between two rows pick the heavier 
 
 **Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **M3 (`data_collection:deny`, L3 only)** optional 2nd auditor (value is in *divergence*) · **Daniel** gates risk. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
+**Why this persists (anti-drift — read if you ever "forget" the protocol mid-session).** Long sessions drift for two mechanical reasons: (1) automatic **context compaction** summarizes away anything that was only *read once* (e.g. a `docs/` protocol file), and (2) attention decays as the window fills with task detail. Three things keep the protocol present: **(a)** this contract lives in the **auto-loaded `CLAUDE.md`**, which Claude Code re-reads from disk and re-injects after every compaction — so a `CLAUDE.md` that merely *points* to a `docs/` file does NOT survive compaction; the contract must be **inlined**. **(b)** A `SessionStart` hook (`hooks/session-contract.sh`) re-states these standing rules as fresh, high-attention context at every session start **and after every compaction**. **(c)** A `PreToolUse` hook (`hooks/pre-risky-git.sh`) re-injects the gate checklist right before `git push`/`merge`/migration/deploy. If you ever catch yourself acting without the roster/gates in mind, that IS the drift — re-read `CLAUDE.md` and resume the Session Start ritual.
+
 ---
 
 ## Section 0 — Helper CLIs (absolute paths, mandatory inside Claude Code)

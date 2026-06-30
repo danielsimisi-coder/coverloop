@@ -41,8 +41,13 @@ if [ "${INSTALL_WIRE_HOOKS:-1}" = "1" ] && command -v python3 >/dev/null; then
 import json, os, sys, shutil, time
 hk = sys.argv[1]
 p  = os.path.expanduser("~/.claude/settings.json")
-want = {"Stop": os.path.join(hk, "loop-stop-check.sh"),
-        "PostToolUseFailure": os.path.join(hk, "capture-failure.sh")}
+# (event, hook-script, matcher-or-None). Matcher is only set where it matters (PreToolUse->Bash).
+want = [
+    ("Stop",              os.path.join(hk, "loop-stop-check.sh"),  None),
+    ("PostToolUseFailure",os.path.join(hk, "capture-failure.sh"),  None),
+    ("SessionStart",      os.path.join(hk, "session-contract.sh"), None),
+    ("PreToolUse",        os.path.join(hk, "pre-risky-git.sh"),    "Bash"),
+]
 d = {}
 if os.path.exists(p):
     try:
@@ -52,16 +57,18 @@ if os.path.exists(p):
         sys.exit(0)
 hooks = d.setdefault("hooks", {})
 changed = False
-for ev, cmd in want.items():
+for ev, cmd, matcher in want:
     arr = hooks.setdefault(ev, [])
     if not any(cmd in json.dumps(x) for x in arr):
-        arr.append({"hooks": [{"type": "command", "command": cmd}]})
+        entry = {"hooks": [{"type": "command", "command": cmd}]}
+        if matcher: entry["matcher"] = matcher
+        arr.append(entry)
         changed = True
 if changed:
     os.makedirs(os.path.dirname(p), exist_ok=True)
     if os.path.exists(p): shutil.copy(p, p + ".bak.%d" % int(time.time()))
     with open(p, "w") as f: json.dump(d, f, indent=2)
-    print("  wired Stop + PostToolUseFailure hooks in %s (backup kept)" % p)
+    print("  wired Stop + PostToolUseFailure + SessionStart + PreToolUse hooks in %s (backup kept)" % p)
 else:
     print("  hooks already wired in settings.json (no change)")
 PY

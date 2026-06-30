@@ -5,13 +5,17 @@ These are flat shell hooks for Claude Code. **`install.sh` installs them to `~/.
 ```jsonc
 {
   "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "<ABS>/.claude/hooks/session-contract.sh" }] }],
+    "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "<ABS>/.claude/hooks/pre-risky-git.sh" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "<ABS>/.claude/hooks/loop-stop-check.sh" }] }],
     "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "<ABS>/.claude/hooks/capture-failure.sh" }] }]
   }
 }
 ```
 
-- **loop-stop-check.sh** — OPT-IN per repo: no-op unless the repo has `.claude/loop.conf` with a `TEST_CMD`. Blocks "stop" while that check is red; livelock-guarded (MAX_BLOCKS, default 3) so it can never trap you. **Change-aware:** it short-circuits to an instant no-op when no tracked files changed (untracked ignored), so clean/chat stops cost nothing — the check only runs when you actually edited code. Pick a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, NOT a slow full suite) so it can run on every code-change stop without burning budget; the full suite still runs before a PR/CI. Gitignore `.claude/.loop-stop-blocks` (the livelock counter). See `docs/loop.conf.example`.
-- **capture-failure.sh** — appends failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
+- **session-contract.sh** (`SessionStart`) — **anti-drift re-injection.** `SessionStart` fires at every session start AND after every automatic compaction; whatever this prints to stdout is injected into context. So it re-states the protocol's standing rules as FRESH, high-attention context, fixing the drift where a long/compacted session "forgets" the protocol. Scoped (only fires in a protocol project) and short (token economy); the full contract lives in `CLAUDE.md`/`docs/OPERATING_CONTRACT.md`, which survive compaction on their own.
+- **pre-risky-git.sh** (`PreToolUse`, matcher `Bash`) — reads the command from stdin JSON; when it's a risky op (`git push`/`merge`/`rebase`, `db push`/migration/deploy) it injects the **gate checklist** (`additionalContext`) at the exact moment it matters. **Advisory only — it does not block.** Scoped to protocol projects.
+- **loop-stop-check.sh** (`Stop`) — OPT-IN per repo: no-op unless the repo has `.claude/loop.conf` with a `TEST_CMD`. Blocks "stop" while that check is red; livelock-guarded (MAX_BLOCKS, default 3) so it can never trap you. **Change-aware:** it short-circuits to an instant no-op when no tracked files changed (untracked ignored), so clean/chat stops cost nothing — the check only runs when you actually edited code. Pick a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, NOT a slow full suite) so it can run on every code-change stop without burning budget; the full suite still runs before a PR/CI. Gitignore `.claude/.loop-stop-blocks` (the livelock counter). See `docs/loop.conf.example`.
+- **capture-failure.sh** (`PostToolUseFailure`) — appends failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
 
 > Verify the exact hook event names + schema against YOUR Claude Code version's docs before wiring — schemas change between versions. Wiring is per-machine/per-project and is a Daniel-gated config change.
