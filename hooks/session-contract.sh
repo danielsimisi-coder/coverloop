@@ -26,6 +26,7 @@ cat <<'EOF'
 - End each meaningful task with reflect-and-save -> append a durable lesson to git-tracked docs/MEMORY.md and commit it.
 - Two-strikes: if you tell the human to repeat the same manual workaround twice, STOP and fix the root cause.
 - Sandbox/env failure (e.g. Codex bwrap) -> fix the environment at root; never disable a tool's safety; never self-grant a sandbox/approval bypass.
+- Background-task hygiene: don't leave background processes running once you've read their output. Keep AT MOST ONE dev/preview server and reuse it (kill the old one before starting a new one). Reap one-shot background jobs (Codex/GLM/M3/tests) when done, and clean up before you pause or declare done — don't let them pile up.
 - Re-read CLAUDE.md now. If it does not carry the Operating Contract (roster incl. GLM/M3 + this gate table), that's a WIRING BUG — flag it to Daniel.
 EOF
 exit 0

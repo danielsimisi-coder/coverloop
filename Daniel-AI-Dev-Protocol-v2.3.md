@@ -256,6 +256,7 @@ Claude alone for L0; Claude + tests + Codex for L1/L2; Claude + tests + Codex + 
 3. **Output discipline.** Never pipe whole-repo or large logs into a model — write a script that prints only the answer (the single biggest context-cost cut). Honor the 120k packet cap.
 4. **Prompt-cache friendliness.** Keep system prompts stable so OpenRouter/Anthropic caching applies (GLM cached input is ~5x cheaper than fresh).
 5. **Subtract standing components.** A 2nd auditor that fires on <~10% of work, or a cron, is recurring token cost — cut it (§10c).
+6. **Background-task hygiene.** Don't leave background processes/tasks running once you've read their output — over a long session they pile up (dozens of stale Codex/GLM/server jobs), leak RAM/CPU, and cause port conflicts. Keep AT MOST ONE dev/preview server and reuse it (kill the old one before starting a new one); reap one-shot background jobs when done; clean up before you pause or declare done.
 
 Tiering (§2) + execution-first (§8) remain the biggest levers — they decide *whether* an expensive model runs at all.
 
