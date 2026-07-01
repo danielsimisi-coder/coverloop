@@ -6,15 +6,19 @@ How to take a new machine, a project, or a fresh Claude/Codex session and get it
 
 ## 1) Machine (once per machine — Mac / each VPS)
 Installs the CLIs, skills, hooks, and **auto-wires the hooks**.
+
+> **On a VPS / remote box, authenticate `gh` FIRST** — as the OS user the agent runs as (e.g. `su - actdev` → `gh auth login` → GitHub.com → HTTPS → "Login with a web browser" → enter the device code). This **private** repo won't clone otherwise, and gh auth is also what lets that box **open its own PRs**. A box's git *deploy key* usually reaches only its one project repo, so it's `gh` auth — not the deploy key — that unblocks the protocol repo. (Credential lands in `~/.config/gh`, chmod 600; "saved in plain text" is normal on a headless box.)
+
 ```bash
-git clone https://github.com/danielsimisi-coder/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-.git
+gh repo clone danielsimisi-coder/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-   # (or git clone https://… on an already-authed box)
 cd Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-
-./install.sh
+./install.sh                             # <-- RUN THIS YOURSELF (see note below)
 printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
 ~/bin/glm-audit --zdr-selftest          # must print OK (full-ZDR)
 # On a VPS where M3 is approved:
 #   touch ~/.config/openrouter/m3_enabled && ~/bin/m3-review --privacy-selftest
 ```
+> **Run `install.sh` YOURSELF** — in the box's terminal, or with the `!` prefix inside a session (`! ./install.sh`). Do NOT ask the agent to run it: it wires hooks into `~/.claude/settings.json`, and the harness **correctly blocks an agent from modifying its own hook config** (self-modification guard). The right split is: the *agent clones + inspects* `install.sh` and the hook scripts; the *human runs it*.
 > **Linux:** `install.sh` preflights Codex's sandbox (unprivileged user namespaces). If it prints a WARNING, the Codex gate won't run until you apply the one-line **root** fix from [`docs/CODEX_SANDBOX_LINUX.md`](CODEX_SANDBOX_LINUX.md) — do **not** use the `--dangerously-bypass` flag.
 
 ## 2) Project (once per repo — creates NEW files only, never edits your CLAUDE.md)
@@ -24,7 +28,9 @@ cd /path/to/your-project
 ```
 `init-project.sh` scaffolds (idempotent, never overwrites): `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md`, **`docs/MEMORY.md`** (portable git-tracked memory), and **`docs/OPERATING_CONTRACT.md`**.
 
-Then **you** do the one manual wiring step it deliberately won't do for you: **inline the Operating Contract at the top of the project's `CLAUDE.md`** (copy from `docs/OPERATING_CONTRACT.md`). This is the step that makes the loop load into active context — a `CLAUDE.md` that only points to `docs/`, or whose roster omits GLM/M3, means the protocol never loads.
+Then **you** do the one manual wiring step it deliberately won't do for you: **inline the Operating Contract at the top of the project's `CLAUDE.md`** (copy from `docs/OPERATING_CONTRACT.md`). This is the step that makes the loop load into active context — a `CLAUDE.md` that only points to `docs/`, or whose roster omits GLM/M3, means the protocol never loads. (`init-project.sh` skips writing `docs/OPERATING_CONTRACT.md` if `CLAUDE.md` already carries the contract.)
+
+**Also enable auto-delete of merged branches** (once per repo): `gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true`. Otherwise a lingering merged branch can be re-merged into empty **duplicate PRs** — we hit exactly this (the `#87`/`#88` no-op merges).
 
 ## 3) Every session — paste this FIRST to a fresh Claude/Codex session
 ```

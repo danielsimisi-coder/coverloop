@@ -47,9 +47,12 @@ else
   echo "  + docs/MEMORY.md  (portable memory — reflect-and-save appends here; commit it)"
 fi
 
-# 6) Operating Contract template (you inline it into CLAUDE.md yourself — see note below)
+# 6) Operating Contract template (you inline it into CLAUDE.md yourself — see note below).
+#    Skip if the contract is ALREADY inlined in CLAUDE.md (avoids a redundant file).
 if [ -e "$PROJ/docs/OPERATING_CONTRACT.md" ]; then
   echo "  skip docs/OPERATING_CONTRACT.md (exists)"
+elif [ -f "$PROJ/CLAUDE.md" ] && grep -q "Operating Contract" "$PROJ/CLAUDE.md" 2>/dev/null; then
+  echo "  skip docs/OPERATING_CONTRACT.md (already inlined in CLAUDE.md)"
 else
   cp "$SRC/docs/OPERATING_CONTRACT.md" "$PROJ/docs/OPERATING_CONTRACT.md"
   echo "  + docs/OPERATING_CONTRACT.md  (TEMPLATE — inline into CLAUDE.md manually)"
