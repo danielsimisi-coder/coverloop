@@ -1,0 +1,24 @@
+# Protocol changelog
+
+Operational history of the Daniel Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
+
+## v2.5 (2026-07-02) — efficiency + measurement ("prove it, cheaply")
+No contract change — **projects need NO resync**; machines just `git pull && ./install.sh`.
+- **Contract/Protocol decoupling (§13):** `CONTRACT_VERSION` (the block inlined in each project's `CLAUDE.md`, currently v2.4) now bumps ONLY when the contract's content changes; `PROTOCOL_VERSION` bumps freely. Ends the fleet-resync tax on every doc release.
+- **`bin/protocol-selftest`** — ONE command that mechanizes the §12 install checklist + drift detection: version consistency (repo doc / hook banner / project contract), hooks wired, CLIs + filter parity, gh auth, loop.conf cheapness, project artifacts (MEMORY/RISK_MAP/REVIEW_LEDGER). Session Start step 1 is now "run it and report".
+- **Measurement loop (§10c):** every multi-model review appends one line to the project's `docs/REVIEW_LEDGER.md` "Review log" (tier · reviewers · findings · verdicts); quarterly, read the log and SUBTRACT any reviewer/gate that isn't earning its keep. Mechanizes "M3 must prove its keep".
+- **Memory hygiene (§10a):** `docs/MEMORY.md` capped (~30 entries — consolidate, don't hoard); `reflect-staging.md` auto-rotates (hook keeps the newest ~300 lines).
+- **Model tiering (§9):** route mechanical sub-tasks (bulk reads, sweeps, formatting) to cheaper models/subagents; reserve the frontier model + high effort for design/build/debug of the hard parts.
+- Header history moved to this file (was ~4.7KB re-read by every session).
+
+## v2.4 (2026-07-01) — wired + anti-drift
+Every item is a failure mode we actually hit in production sessions, promoted to a rule: **(1) Anti-drift wiring** — the Operating Contract must be **INLINED in the auto-loaded `CLAUDE.md`** (project-root CLAUDE.md is re-read after every context compaction; a `docs/` side-file read once is summarized away — THE root cause of sessions "forgetting" the protocol). A `SessionStart` hook re-injects the standing rules at start + after each compaction; a `PreToolUse` hook re-states the gate checklist right before push/merge/migration/deploy. **(2) §7a Environment & test-harness parity** — per-env matrix, friction-free local auth, seeded admin/customer fixtures, the two-strikes rule, PII-safe own-DB reads. **(3) Background-task hygiene** (§9.6) — reap finished background jobs, one dev server max (long sessions had piled up 50+ stale tasks). **(4) Codex Linux sandbox prerequisite** — Ubuntu 23.10+/24.04's userns clamp breaks Codex's bwrap; fix the OS at root (`docs/CODEX_SANDBOX_LINUX.md`), NEVER bypass a tool's sandbox, an agent NEVER self-grants a bypass (Model-unreachable rule (f)). **(5) Portable memory** — durable lessons live in git-tracked `docs/MEMORY.md`, not machine-local stores. **(6) Turnkey install** — `install.sh` auto-wires all 4 hooks (the HUMAN runs it; the agent clones + inspects); `init-project.sh` scaffolds per-repo artifacts; on a VPS authenticate `gh` FIRST; enable `delete_branch_on_merge`.
+
+## v2.3 (2026-06-28) — enforce + subtract
+Two research tracks (frontier sources + the 11 top-starred OSS agent repos) independently agreed v2.2 is already frontier-grade for a solo founder — so v2.3 ENFORCES existing gates and SUBTRACTS rarely-firing parts rather than adding models. New: a mechanical test-gate, auto-failure-capture, and a false-positive ledger (§10b); the agreement signal demoted to a triage hint (models co-hallucinate); security tripwires (egress allowlist/sandbox, `dep-check` slopsquatting gate, MCP-untrust, memory provenance guard); explicit right-sizing (audit M3 — drop below L3 / if it fires on <~10% of work) (§10c).
+
+## v2.2 (2026-06-28) — self-improving loop
+Hermes-style loop: (a) **reflect & save** — at the end of each meaningful task, persist durable lessons to memory (the model isn't retrained; it keeps better notes); (b) **skills** — capture recurring workflows as reusable `SKILL.md` recipes. Ships `reflect-and-save` and `multimodel-review`.
+
+## v2.1 (2026-06-28) — evidence-backed refinement (from v2.0)
+Driven by a cited deep-research pass + a real GLM-vs-M3 bake-off on live code: **(1)** Execution/tests are the PRIMARY correctness gate; LLM auditors are secondary, used where execution can't verify (architecture, schema/deploy consistency, security, invariants). **(2)** The second wide-context auditor (M3) is reserved for L2/L3 and must *prove its keep* — measured data shows ~93% of real findings come from a SINGLE auditor, so agreement is rare-but-strong and a single-tool finding is the norm (verify it, don't discard it). **(3)** Reviewers flag correctness/requirement gaps ONLY (standalone LLM reviewers over-report; ~6–16% precision). **(4)** M3 un-parked on the Arcade VPS under `data_collection:deny` (NOT full ZDR; GLM stays the full-ZDR path). Mac M3 stays parked.

@@ -17,6 +17,9 @@ Reusable recipe for the cross-model review step. Use on a FOCUSED diff/snippet o
 4. Reconcile (cross-model agreement): CONVERGENCE (both flag) = high-confidence must-fix; DIVERGENCE (only one) = verify against the code, that is where the 2nd model earns its keep — don't discard it.
 5. Every finding is a hypothesis — verify against actual code before acting.
 6. Confirm the audit trail: `tail -n 4 ~/.config/openrouter/egress.log` (hash only, privacy-routed).
+7. **Log the review (v2.5, mandatory):** append ONE line to the project's `docs/REVIEW_LEDGER.md` under `## Review log`:
+   `| YYYY-MM-DD | L<tier> | <reviewers used> | <N raised> | <accepted/rejected/needs-test counts> |`
+   This feeds the quarterly right-size read (§10c) — a reviewer that can't show accepted findings gets subtracted.
 
 ## Rules
 - Execution/tests are the PRIMARY gate; these auditors are secondary.

@@ -34,11 +34,11 @@ Then **you** do the one manual wiring step it deliberately won't do for you: **i
 
 ## 3) Every session — paste this FIRST to a fresh Claude/Codex session
 ```
-Session Start (v2.4 protocol). Before any work, do this and report it:
-1. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · Daniel gate).
-2. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
-3. Read the Risk Map + docs/REVIEW_LEDGER.md; skip findings already marked rejected.
-4. Resolve the ABSOLUTE paths of glm-*/m3-* and record them in the Risk Map (you do NOT inherit the ~/bin PATH).
+Session Start (v2.5 protocol). Before any work, do this and report it:
+1. Run $HOME/bin/protocol-selftest from the project root and report its output (GREEN or the FAIL lines). It verifies versions, hooks, CLIs, contract, memory, ledger, and the test-gate in one shot.
+2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · Daniel gate).
+3. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
+4. Read docs/REVIEW_LEDGER.md; skip findings already marked rejected.
 5. Restate the Task Card + risk tier (L0–L3) before touching code.
 If the Operating Contract is not present in your loaded CLAUDE.md/AGENTS.md, say so — that's a wiring bug.
 ```

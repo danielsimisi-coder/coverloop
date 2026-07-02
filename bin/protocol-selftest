@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# protocol-selftest — ONE command that verifies the whole v2.5 wiring (machine + project).
+# Mechanizes the §12 install checklist and catches version drift. Read-only; never fixes.
+# Run anywhere for the machine checks; run from a project root to add the project checks.
+# Exit 0 = no FAIL lines (WARNs allowed). Exit 1 = at least one FAIL.
+set -u
+FAILS=0
+ok()   { printf 'PASS  %s\n' "$1"; }
+warn() { printf 'WARN  %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
+
+# ---------- locate the protocol repo (for the reference version) ----------
+SRC=""
+for c in "$HOME/protocol-loop" "$HOME/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-" \
+         "$(cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)"; do
+  [ -f "$c/CLAUDE.md" ] && grep -q "PROTOCOL_VERSION" "$c/CLAUDE.md" 2>/dev/null && SRC="$c" && break
+done
+if [ -n "$SRC" ]; then
+  REPO_V=$(grep -om1 'PROTOCOL_VERSION: v[0-9.]*' "$SRC/CLAUDE.md" | grep -o 'v[0-9.]*')
+  CONTRACT_REF_V=$(grep -om1 'CONTRACT_VERSION: v[0-9.]*' "$SRC/CLAUDE.md" | grep -o 'v[0-9.]*' || true)
+  ok "protocol source: $SRC (PROTOCOL_VERSION $REPO_V, CONTRACT_VERSION ${CONTRACT_REF_V:-n/a})"
+else
+  warn "protocol repo clone not found (~/protocol-loop) — version cross-checks limited"
+  REPO_V=""; CONTRACT_REF_V=""
+fi
+
+# ---------- machine: helper CLIs ----------
+if [ -x "$HOME/bin/glm-review" ]; then
+  FV=$("$HOME/bin/glm-review" --version 2>/dev/null | grep -o '"filter_version": *"[^"]*"' | cut -d'"' -f4)
+  [ -n "$FV" ] && ok "glm CLIs installed (filter $FV)" || warn "glm-review present but --version unreadable"
+else
+  fail "glm CLIs missing from ~/bin (run install.sh)"
+fi
+if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this user (data_collection:deny, L3-only)"; else ok "M3: parked for this user (fail-closed)"; fi
+
+# ---------- machine: hooks installed + wired ----------
+HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
+for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
+  [ -f "$HOOKS_DIR/$h" ] || MISSING="$MISSING $h"
+done
+[ -z "$MISSING" ] && ok "all 4 hook scripts present" || fail "hook scripts missing:$MISSING"
+if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
+  BANNER_V=$(grep -om1 '\[v[0-9.]* PROTOCOL' "$HOOKS_DIR/session-contract.sh" | grep -o 'v[0-9.]*')
+  if [ -n "$REPO_V" ] && [ "$BANNER_V" != "$REPO_V" ]; then
+    warn "hook banner $BANNER_V != repo $REPO_V — machine needs: cd protocol repo && git pull && ./install.sh"
+  else ok "hook banner version: ${BANNER_V:-unknown}"; fi
+fi
+WIRED=$(python3 - <<'PY' 2>/dev/null
+import json,os
+try: d=json.load(open(os.path.expanduser("~/.claude/settings.json")))
+except Exception: print("UNREADABLE"); raise SystemExit
+evs=d.get("hooks",{}); want=["Stop","PostToolUseFailure","SessionStart","PreToolUse"]
+missing=[e for e in want if e not in evs]
+print("OK" if not missing else "MISSING:"+",".join(missing))
+PY
+)
+case "$WIRED" in
+  OK) ok "all 4 hook events wired in ~/.claude/settings.json" ;;
+  MISSING:*) fail "hook events not wired: ${WIRED#MISSING:} (run install.sh)" ;;
+  *) warn "could not read ~/.claude/settings.json" ;;
+esac
+
+# ---------- machine: gh + codex sandbox ----------
+gh auth status >/dev/null 2>&1 && ok "gh authenticated" || warn "gh NOT authenticated (clone/PR from this box limited)"
+if [ "$(uname -s)" = "Linux" ] && command -v unshare >/dev/null 2>&1; then
+  unshare -Urn true 2>/dev/null && ok "codex sandbox prerequisite (userns) OK" || fail "unprivileged userns BLOCKED — see docs/CODEX_SANDBOX_LINUX.md (root fix); do NOT bypass"
+fi
+
+# ---------- project checks (only when run inside a project) ----------
+PROJ="$(pwd)"
+if [ -f "$PROJ/CLAUDE.md" ] && [ "$PROJ" != "$SRC" ]; then
+  if grep -q "Operating Contract" "$PROJ/CLAUDE.md"; then
+    PC_V=$(grep -om1 'OPERATING CONTRACT (v[0-9.]*)' "$PROJ/CLAUDE.md" | grep -o 'v[0-9.]*')
+    if [ -n "$CONTRACT_REF_V" ] && [ "$PC_V" != "$CONTRACT_REF_V" ]; then
+      warn "project contract $PC_V != current CONTRACT_VERSION $CONTRACT_REF_V — resync the inlined block"
+    else ok "Operating Contract inlined in CLAUDE.md (${PC_V:-version unknown})"; fi
+  else
+    fail "CLAUDE.md has NO inlined Operating Contract — the protocol will not load (see docs/SESSION_BOOTSTRAP.md)"
+  fi
+  [ -f "$PROJ/docs/MEMORY.md" ] && ok "docs/MEMORY.md present" || fail "docs/MEMORY.md missing (portable memory)"
+  N=$(grep -c '^- ' "$PROJ/docs/MEMORY.md" 2>/dev/null || echo 0)
+  [ "$N" -gt 30 ] && warn "MEMORY.md has $N entries — consolidate (cap ~30; merge/retire stale)" || true
+  [ -f "$PROJ/docs/REVIEW_LEDGER.md" ] && ok "docs/REVIEW_LEDGER.md present" || warn "docs/REVIEW_LEDGER.md missing (false-positive ledger + review log)"
+  [ -f "$PROJ/docs/RISK_MAP.md" ] && ok "docs/RISK_MAP.md present" || warn "docs/RISK_MAP.md missing (or kept in Obsidian)"
+  if [ -f "$PROJ/.claude/loop.conf" ]; then
+    TC=$(grep -om1 'TEST_CMD="[^"]*"' "$PROJ/.claude/loop.conf" | cut -d'"' -f2)
+    case "$TC" in
+      *"tsc --noEmit"*|*typecheck*|*lint*) ok "loop.conf gate is cheap: $TC" ;;
+      *"npm test"*|*"vitest run"*|*"jest"*) warn "loop.conf runs a FULL suite per stop ($TC) — switch to a cheap typecheck" ;;
+      "") warn "loop.conf present but TEST_CMD empty" ;;
+      *) ok "loop.conf gate: $TC (verify it's cheap)" ;;
+    esac
+  else warn "no .claude/loop.conf — test-green Stop gate dormant (opt-in)"; fi
+  D=$(git -C "$PROJ" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+  ok "project: $PROJ (branch $D)"
+fi
+
+# ---------- reflect staging size ----------
+RS="$HOME/.claude/reflect-staging.md"
+if [ -f "$RS" ]; then
+  L=$(wc -l < "$RS")
+  [ "$L" -gt 500 ] && warn "reflect-staging.md has $L lines — reflect-and-save then let rotation trim" || ok "reflect-staging.md size OK ($L lines)"
+fi
+
+echo "----"
+if [ "$FAILS" -eq 0 ]; then echo "SELFTEST: GREEN (0 fails)"; exit 0; else echo "SELFTEST: $FAILS FAIL(s)"; exit 1; fi
