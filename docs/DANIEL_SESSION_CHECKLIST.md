@@ -16,7 +16,7 @@ So sessions auto-load the protocol instead of you reminding them:
 
 **1. Paste Session-Start** (makes it load the protocol + memory):
 ```
-Session Start (v2.3). Before any work, do this and report:
+Session Start (v2.4). Before any work, do this and report:
 1. State PROTOCOL_VERSION + the 5-role roster (Claude build · Codex diff-gate · GLM full-ZDR red-team/audit · M3 L3-only 2nd auditor · Daniel gate).
 2. Read docs/MEMORY.md and summarize what's relevant to today.
 3. Read the Risk Map + docs/REVIEW_LEDGER.md (skip already-rejected findings).

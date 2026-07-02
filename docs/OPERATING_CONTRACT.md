@@ -1,16 +1,16 @@
-<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.3) =====================
+<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.4) =====================
      Inlined so the loop loads into ACTIVE context every session. This contract is AUTHORITATIVE
      for the code-review roster and supersedes any older/partial roster elsewhere in this repo
      (including AGENTS.md and docs/). Full protocol + depth: docs/MULTI_MODEL_PROTOCOL.md. -->
 
 ## ⚙️ Operating Contract — multi-model loop (READ & ENGAGE FIRST)
 
-This project runs the **Daniel Multi-Model Production Protocol v2.3**. **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
+This project runs the **Daniel Multi-Model Production Protocol v2.4**. **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
 
 **Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **Daniel** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
 **Session Start — run FIRST and report it:**
-1. State `PROTOCOL_VERSION` (v2.3) + the roster above.
+1. State `PROTOCOL_VERSION` (v2.4) + the roster above.
 2. **Load memory:** read `docs/MEMORY.md` (git-tracked — machine-local Claude memory does NOT travel between the Mac / VPS sessions).
 3. Read the Risk Map + `docs/REVIEW_LEDGER.md` (skip findings already marked rejected).
 4. Resolve helper absolute paths (`glm-*` / `m3-*`) and record them in the Risk Map — Claude Code does NOT inherit the terminal `~/bin` PATH.
@@ -31,6 +31,8 @@ This project runs the **Daniel Multi-Model Production Protocol v2.3**. **No mode
 - End every meaningful task with **reflect-and-save** → write durable lessons to git-tracked `docs/MEMORY.md` and **commit them** (the loop's #1 reliability gap — easy to forget).
 - Use the **`multimodel-review`** skill when reviewing an L2/L3 diff.
 - **Two-strikes rule:** if you instruct the human to repeat the same manual workaround twice (host-swapping a link, re-requesting an email, hand-running a blocked query), STOP and fix the root cause.
+- **Background-task hygiene:** don't leave background jobs running once you've read their output — reap them; keep AT MOST ONE dev/preview server and reuse it; clean up before you pause or declare done. (Long sessions piled up 50+ stale tasks.)
+- **Sandbox/env failures** (e.g. Codex bwrap): fix the environment at root — never disable a tool's safety, never self-grant a sandbox/approval bypass.
 - If this Operating Contract is ever missing from the loaded instructions, that is a **wiring bug** — flag it to Daniel.
 
 <!-- ===================== END OPERATING CONTRACT ===================== -->

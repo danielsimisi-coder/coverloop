@@ -2,7 +2,7 @@
 
 The multi-model AI development protocol I use across projects, plus the advisory helper CLIs.
 
-**`CLAUDE.md` is the canonical protocol** (v2.3). Drop it into a project root (Claude Code auto-loads it); symlink `AGENTS.md -> CLAUDE.md` so Codex reads the same source.
+**`CLAUDE.md` is the canonical protocol** (v2.4). Drop it into a project root (Claude Code auto-loads it); symlink `AGENTS.md -> CLAUDE.md` so Codex reads the same source.
 
 > 👉 **New here / setting up a machine, a project, or a session? Start with [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)** — it spells out exactly what to install and what to paste, in order: **machine** (`install.sh`) → **project** (`init-project.sh`, then inline `docs/OPERATING_CONTRACT.md` into that project's `CLAUDE.md`) → **every session** (paste the Session-Start prompt). The single most important step is inlining the Operating Contract into the project's `CLAUDE.md` — without it the loop never loads into the agent's context.
 
@@ -56,4 +56,4 @@ cd /path/to/your-project
 - **`docs/EGRESS_SANDBOX.md`** — optional root-level egress allowlist / OS sandbox (defense-in-depth; the tool layer already enforces core privacy).
 - **`docs/CODEX_SANDBOX_LINUX.md`** — fix for Codex's `bwrap` sandbox failing on Linux (Ubuntu 24.04 unprivileged-userns clamp): a persistent root sysctl so Codex runs **sandboxed** without the `--dangerously-bypass` flag. `install.sh` auto-detects and points here.
 
-Current version: **v2.3** (2026-06-28).
+Current version: **v2.4** (2026-07-01) — "wired + anti-drift": inlined Operating Contract + SessionStart/PreToolUse re-injection hooks, §7a env parity, background-task hygiene, Codex Linux sandbox prerequisite, portable `docs/MEMORY.md`, turnkey install.

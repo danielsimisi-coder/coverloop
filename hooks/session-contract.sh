@@ -18,7 +18,7 @@ in_protocol_project() {
 in_protocol_project || exit 0
 
 cat <<'EOF'
-[v2.3 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
+[v2.4 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
 - Code-review roster: Claude builds · Codex gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · Daniel gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
 - Execution/tests are the PRIMARY gate. No model is an authority — verify every finding against code/tests/runtime.
 - Risk gates: L2 -> Codex MANDATORY. L3 (money/auth·RLS/migration/deploy/secrets/worker) -> Codex + GLM MANDATORY + Daniel gate before merge/apply/deploy (M3 optional). Lightest safe row; tie -> heavier.

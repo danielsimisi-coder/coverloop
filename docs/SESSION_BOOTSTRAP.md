@@ -34,7 +34,7 @@ Then **you** do the one manual wiring step it deliberately won't do for you: **i
 
 ## 3) Every session — paste this FIRST to a fresh Claude/Codex session
 ```
-Session Start (v2.3 protocol). Before any work, do this and report it:
+Session Start (v2.4 protocol). Before any work, do this and report it:
 1. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · Daniel gate).
 2. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
 3. Read the Risk Map + docs/REVIEW_LEDGER.md; skip findings already marked rejected.
