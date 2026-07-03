@@ -1,16 +1,16 @@
-<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.4) =====================
+<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.5) =====================
      Inlined so the loop loads into ACTIVE context every session. This contract is AUTHORITATIVE
      for the code-review roster and supersedes any older/partial roster elsewhere in this repo
      (including AGENTS.md and docs/). Full protocol + depth: docs/MULTI_MODEL_PROTOCOL.md. -->
 
 ## ⚙️ Operating Contract — multi-model loop (READ & ENGAGE FIRST)
 
-This project runs the **Daniel Multi-Model Production Protocol v2.4**. **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
+This project runs the **Daniel Multi-Model Production Protocol** (current `PROTOCOL_VERSION` lives in `CLAUDE.md` / run `~/bin/protocol-selftest` — this contract stays version-agnostic so protocol bumps never require a project resync). **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
 
 **Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **Daniel** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
 **Session Start — run FIRST and report it:**
-1. State `PROTOCOL_VERSION` (v2.4) + the roster above.
+1. State the current `PROTOCOL_VERSION` (from `CLAUDE.md`, or run `~/bin/protocol-selftest`) + `CONTRACT_VERSION` v2.5 + the roster above.
 2. **Load memory:** read `docs/MEMORY.md` (git-tracked — machine-local Claude memory does NOT travel between the Mac / VPS sessions).
 3. Read the Risk Map + `docs/REVIEW_LEDGER.md` (skip findings already marked rejected).
 4. Resolve helper absolute paths (`glm-*` / `m3-*`) and record them in the Risk Map — Claude Code does NOT inherit the terminal `~/bin` PATH.
