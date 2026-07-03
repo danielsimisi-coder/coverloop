@@ -1,59 +1,196 @@
-# Daniel's Master Coding Loop — Claude · Codex · GLM · M3
+# Coverloop
 
-The multi-model AI development protocol I use across projects, plus the advisory helper CLIs.
+### The multi-agent coding loop that covers every angle — so nothing slips through.
 
-**`CLAUDE.md` is the canonical protocol** (v2.5; contract v2.4 — see §13 decoupling). Drop it into a project root (Claude Code auto-loads it); symlink `AGENTS.md -> CLAUDE.md` so Codex reads the same source. **Verify any machine/project in one command: `~/bin/protocol-selftest`.** History: [`CHANGELOG.md`](CHANGELOG.md).
+**One model builds. Independent AI models review it from every direction. Tests decide. You hold the final gate.**
+Execution-first · privacy-enforced · self-improving · sized for a solo dev, not an enterprise.
 
-> 👉 **New here / setting up a machine, a project, or a session? Start with [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)** — it spells out exactly what to install and what to paste, in order: **machine** (`install.sh`) → **project** (`init-project.sh`, then inline `docs/OPERATING_CONTRACT.md` into that project's `CLAUDE.md`) → **every session** (paste the Session-Start prompt). The single most important step is inlining the Operating Contract into the project's `CLAUDE.md` — without it the loop never loads into the agent's context.
+> **Protocol v2.5** · works with [Claude Code](https://claude.com/claude-code) + [Codex CLI](https://developers.openai.com/codex/cli) today, model-agnostic by design. History → [`CHANGELOG.md`](CHANGELOG.md).
 
-## Roles
-- **Claude Code** builds & coordinates (not final authority).
-- **Codex CLI** independently reviews diffs (line-level correctness) — the gate.
-- **GLM-5.2** (full-ZDR) red-teams architecture/implementation and audits consistency.
-- **MiniMax M3** (optional, L2/L3, `data_collection:deny` — no-training, NOT full ZDR) — a diverse second auditor; value is in divergence.
-- **Daniel** is the human gate for risky actions.
+---
 
-Principles: **execution/tests are the primary correctness gate**; LLM auditors are secondary. Privacy is enforced at the TOOL layer — ZDR/no-training provider routing, a hard secret filter, and an append-only egress log — not by prompt discipline.
+## Why this exists
 
-## Install — turnkey, two steps
-**1) Once per machine** — installs the CLIs, skills, hooks, and **auto-wires the hooks** in `settings.json`:
-```bash
-git clone https://github.com/danielsimisi-coder/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-.git
-cd Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-
-./install.sh                       # bin/*→~/bin; skills+hooks→~/.claude; wires Stop+PostToolUseFailure (backup kept)
-printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
-~/bin/glm-audit --zdr-selftest     # confirms live full-ZDR routing (fail-closed if not)
+AI writes code fast. The problem is everything *after* the code:
+
+- **One reviewer misses bugs.** A single model (even a great one) rubber-stamps its own blind spots. Real defects hide in the gaps between what any one model checks.
+- **Long sessions forget the rules.** As context fills up and compacts, the agent quietly drops your standards — and starts "vibing" past the guardrails you set an hour ago.
+- **Privacy leaks by accident.** Secrets, `.env` files, and customer data get pasted into model calls without anyone noticing.
+- **"It passed"** is not the same as **"it's correct, migrated, deployed, and safe."**
+
+Coverloop turns AI-assisted development into a **disciplined, gated pipeline** where a builder model, several independent reviewer models, your test suite, and *you* each close a different angle — and a change only ships when they agree.
+
+It's not a framework you install into your app. It's a **protocol + a few small scripts** that drop into any repo and run inside the AI coding tools you already use.
+
+---
+
+## What you get
+
+| | Benefit |
+|---|---|
+| 🧩 **Multi-model review** | A **builder** proposes; independent **reviewers** (line-level + architecture + a second auditor) attack it from different angles. A bug has to get past all of them *and* your tests. |
+| ✅ **Execution is the primary gate** | Tests/typecheck outrank any model opinion. When a test can settle a question, you run the test — not stack more LLM guesses. |
+| 🧠 **It stops forgetting** | The rules live **inlined in the auto-loaded instructions** (they survive context compaction) and a `SessionStart` hook re-injects them every session and after every compaction. No more mid-session drift. |
+| 🔒 **Privacy at the tool layer** | Secrets never leave, enforced by a hard filter + zero-data-retention provider routing + an append-only egress log — not by "please be careful" prompting. |
+| ♻️ **Self-improving** | Durable lessons are saved to **git-tracked memory** that travels with the repo, so every new session — on any machine — starts smarter than the last. |
+| ⚖️ **Right-sized, not bloated** | Risk tiers (L0–L3) decide how much review a change earns. Trivial changes stay fast; money/auth/migrations get the full treatment. The protocol actively **subtracts** machinery that isn't earning its keep. |
+| 🩺 **One-command health check** | `protocol-selftest` verifies the whole wiring — versions, hooks, tools, privacy routing, memory — in a single command. |
+| 🚀 **Turnkey** | `install.sh` (machine) + `init-project.sh` (repo) and you're wired. Built and battle-tested on live production apps, not a whiteboard. |
+
+---
+
+## The loop in 30 seconds
+
 ```
-**2) Once per project** — scaffolds the per-repo v2.3 artifacts:
+        you: the task + the final gate on anything risky
+         │
+   ┌─────▼─────┐   builds & coordinates (never the authority)
+   │  BUILDER  │
+   └─────┬─────┘
+         │ diff
+   ┌─────▼───────────────────────────────────────────┐
+   │  REVIEWERS  (each covers a different angle)       │
+   │   • line-level diff correctness                   │
+   │   • architecture / implementation red-team        │
+   │   • a second auditor — value is in *divergence*   │
+   └─────┬───────────────────────────────────────────┘
+         │ findings (claims, not verdicts)
+   ┌─────▼─────┐   the highest-confidence signal
+   │   TESTS   │   execution beats opinion
+   └─────┬─────┘
+         │ green + reviewers satisfied
+   ┌─────▼─────┐
+   │ YOU: gate │   merge / deploy / migrate — human call on L2+
+   └───────────┘
+```
+
+**No model is an authority.** Every finding is a *claim*, verified against real code, tests, and runtime before it blocks anything.
+
+### Risk tiers decide the rigor
+
+| Risk | Example | Gets |
+|------|---------|------|
+| **L0** trivial | copy, CSS | quick check |
+| **L1** normal | isolated fix/refactor | relevant tests + typecheck |
+| **L2** product flow | onboarding, admin UX | + a mandatory independent diff review |
+| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + red-team + second auditor + **your explicit gate** |
+
+Default to the lightest safe row; when unsure, go heavier.
+
+---
+
+## Quickstart
+
+**1) Once per machine** — installs the helper CLIs, skills, and hooks, and auto-wires them:
+
+```bash
+git clone https://github.com/danielsimisi-coder/coverloop.git
+cd coverloop
+./install.sh
+# add your model-provider API key to the single source of truth (never your shell rc):
+printf '%s' 'sk-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
+~/bin/protocol-selftest      # verify the whole wiring in one command
+```
+
+**2) Once per project** — scaffold the per-repo artifacts (creates new files only, never edits your existing `CLAUDE.md`):
+
 ```bash
 cd /path/to/your-project
-/path/to/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-/init-project.sh
-# creates .claude/loop.conf (cheap typecheck gate), docs/REVIEW_LEDGER.md, docs/RISK_MAP.md, AGENTS.md->CLAUDE.md
+/path/to/coverloop/init-project.sh
 ```
-> Both scripts are **idempotent** — re-run any time; they never clobber an existing file or config (always back up first).
-> Optional root hardening (egress allowlist / OS sandbox) lives in [`docs/EGRESS_SANDBOX.md`](docs/EGRESS_SANDBOX.md) — it's the one tripwire the scripts can't apply for you (needs root).
-> **Never export `OPENROUTER_API_KEY` in your shell rc** — `glm-review` prefers the env var over the file, so a stale export silently overrides a rotated key. Keep the key only in `~/.config/openrouter/api_key`.
-> Inside Claude Code, call helpers by **absolute path** (it doesn't inherit your terminal `~/bin` PATH).
 
-## What's in `bin/`
-- `glm-review` — core (OpenRouter→GLM, text-only, `{zdr:true,allow_fallbacks:false,data_collection:deny}` routing, 15-pattern secret filter, append-only `egress.log`, `--version`, `--zdr-selftest`).
-- `glm-{ask,scout,tests,audit,redteam,code}` + `-xhigh` variants (audit/redteam/code) — mode wrappers.
-- `m3-review` + `m3-{ask,audit,deploy-audit}` — MiniMax M3 second auditor, routed `{data_collection:deny,allow_fallbacks:false}` (no-training; NOT full ZDR), `--privacy-selftest`. M3 is a reasoning model — raise `M3_MAX_TOKENS` (12000+) for real audits.
-- `dep-check` — slopsquatting gate: refuses npm packages that don't exist, are brand-new, or have ~no downloads (blocks hallucinated dependencies). Exit 1 on a bad package.
+**3) The one manual step that makes it stick** — inline `docs/OPERATING_CONTRACT.md` at the top of your project's `CLAUDE.md`. That's what loads the loop into the agent's context and keeps it there.
 
-## Self-improving loop & mechanical gates (v2.2–v2.3)
-- **`skills/`** → installed to `~/.claude/skills/`: `multimodel-review` (GLM+M3 review recipe) and `reflect-and-save` (persist durable lessons to file-based memory at the end of a task — the "periodic nudge").
-- **`hooks/`** → flat Claude Code hooks, **auto-wired by `install.sh`** (manual schema in `hooks/README.md`):
-  - `session-contract.sh` (`SessionStart`) — **anti-drift re-injection**: re-states the standing rules into context at every session start **and after every compaction**, so long sessions stop "forgetting" the protocol. Scoped to protocol projects; short (token economy).
-  - `pre-risky-git.sh` (`PreToolUse`/`Bash`) — injects the **gate checklist** right before `git push`/`merge`/migration/deploy. Advisory, non-blocking.
-  - `loop-stop-check.sh` — **test-green completion gate**. OPT-IN per repo via `.claude/loop.conf` (`TEST_CMD`), **change-aware** (instant no-op when no tracked files changed — clean/chat stops cost nothing), livelock-guarded (`MAX_BLOCKS`, default 3). Uses a **cheap** `TEST_CMD` (a typecheck like `npx tsc --noEmit`, not a slow full suite) so it runs on every code-change stop without burning the token/compute budget — the full suite still runs before a PR/CI. `init-project.sh` writes `.claude/loop.conf` and gitignores the counter for you.
-  - `capture-failure.sh` — appends tool failures to `~/.claude/reflect-staging.md` for `reflect-and-save` to curate.
-- **`init-project.sh`** — run in a project root to scaffold `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md`, `docs/MEMORY.md` (portable memory), `docs/OPERATING_CONTRACT.md`, and the `AGENTS.md → CLAUDE.md` symlink. **New files only — never edits your existing `CLAUDE.md`.** Idempotent.
-- **`docs/OPERATING_CONTRACT.md`** — the loop's binding contract (roster incl. GLM/M3 + Decision Card + Session-Start ritual) to **inline at the top of a project's `CLAUDE.md`** so the protocol loads into active context. A pointer-only `CLAUDE.md`, or one whose roster omits GLM/M3, is the #1 reason "the protocol didn't work."
-- **`docs/MEMORY.example.md`** — template for `docs/MEMORY.md`: **git-tracked, portable** memory so lessons travel between the Mac and each VPS (machine-local Claude memory does not). `reflect-and-save` appends here and commits.
-- **`docs/SESSION_BOOTSTRAP.md`** — what to install + paste-ready prompts (machine install · project init · per-session Session-Start · "is it wired?" self-check · end-of-task reflect).
-- **`docs/REVIEW_LEDGER.md`** — false-positive ledger so reviewers stop re-raising rejected findings.
-- **`docs/EGRESS_SANDBOX.md`** — optional root-level egress allowlist / OS sandbox (defense-in-depth; the tool layer already enforces core privacy).
-- **`docs/CODEX_SANDBOX_LINUX.md`** — fix for Codex's `bwrap` sandbox failing on Linux (Ubuntu 24.04 unprivileged-userns clamp): a persistent root sysctl so Codex runs **sandboxed** without the `--dangerously-bypass` flag. `install.sh` auto-detects and points here.
+Full, copy-paste walkthrough (machine → project → every session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md).
 
-Current version: **v2.5** (2026-07-02) — "efficiency + measurement": `protocol-selftest` (one-command wiring check), review log + quarterly right-size read, memory caps, model tiering, contract/protocol version decoupling (**no project resync needed** — machines just `git pull && ./install.sh`). Previous: v2.4 "wired + anti-drift" — see [`CHANGELOG.md`](CHANGELOG.md).
+---
+
+## How it works
+
+<details>
+<summary><b>Anti-drift — why it doesn't forget the rules</b></summary>
+
+Long AI sessions "forget" instructions for two mechanical reasons: automatic **context compaction** summarizes away anything read only once, and attention decays as the window fills. Coverloop fixes both:
+
+- The **Operating Contract** (roster + risk gates + session-start ritual) is **inlined in the auto-loaded `CLAUDE.md`**, which the tool re-reads after every compaction — a `docs/` side-file read once does *not* survive.
+- A `SessionStart` hook re-injects the standing rules as fresh, high-attention context at every start **and after every compaction**.
+- A `PreToolUse` hook re-states the gate checklist right before `git push` / `merge` / migration / deploy.
+</details>
+
+<details>
+<summary><b>Privacy — enforced by tools, not by prompting</b></summary>
+
+- **Tiered egress:** public → proprietary-non-secret → sensitive identifiers → **secrets/PII (never sent, no exceptions)**.
+- The most sensitive packets route only to a **verified zero-data-retention** endpoint; a hard, boundary-aware secret filter blocks `.env`/keys/tokens/DB URLs *before* any send; an append-only **egress log** records a hash of every payload (never the body) for audit.
+- A **slopsquatting gate** (`dep-check`) blocks hallucinated / typosquatted dependencies before they're installed.
+</details>
+
+<details>
+<summary><b>Self-improving memory — the Hermes loop</b></summary>
+
+The loop improves the way a good engineer does — by keeping **notes** and **reusable recipes**, not by retraining a model:
+
+- **Portable memory:** durable lessons live in a **git-tracked `docs/MEMORY.md`** that travels with the repo, so a lesson learned on one machine reaches every session on every machine (kept capped and consolidated, not hoarded).
+- **Skills:** recurring workflows (the multi-model review, reflect-and-save) are captured as reusable `SKILL.md` recipes.
+- **Measurement:** every review logs one line to a ledger; periodically you read it and **subtract** any reviewer/gate that isn't catching real bugs. "Prove your keep" is mechanical, not a hunch.
+</details>
+
+<details>
+<summary><b>Versioning — decoupled so upgrades are free</b></summary>
+
+`PROTOCOL_VERSION` (the doc + tooling) bumps freely; `CONTRACT_VERSION` (the block inlined in each project) bumps only when the contract's *content* changes. So a docs/tooling release costs your projects **zero resyncs** — machines just `git pull && ./install.sh`.
+</details>
+
+---
+
+## What's in the box
+
+```
+CLAUDE.md                 the canonical protocol (drop into any project root)
+docs/
+  OPERATING_CONTRACT.md   the block you inline into a project's CLAUDE.md
+  SESSION_BOOTSTRAP.md    what to install + what to paste, in order
+  MEMORY.example.md       template for git-tracked portable memory
+  RISK_MAP.example.md     per-project risk map (envs, fixtures, helper paths)
+  REVIEW_LEDGER.md        false-positive ledger + review log
+bin/
+  protocol-selftest       one-command wiring + drift check
+  <model helper CLIs>     privacy-routed, secret-filtered advisory reviewers
+  dep-check               slopsquatting / hallucinated-dependency gate
+hooks/                    SessionStart re-injection, PreToolUse gate reminder,
+                          test-green Stop gate, failure auto-capture
+skills/                   reusable recipes (multi-model review, reflect-and-save)
+install.sh                machine setup (auto-wires hooks)
+init-project.sh           per-repo scaffolding
+CHANGELOG.md              the story of how it got here
+```
+
+---
+
+## Who it's for
+
+- **Solo founders & indie devs** shipping real products with AI, who can't afford a bug in billing or auth — but also can't afford enterprise ceremony.
+- **"Vibe coders"** who want the speed of AI coding **without** the "it looked fine and then prod broke" tax.
+- Anyone running **more than one AI coding tool** who wants them to check each other instead of each rubber-stamping its own work.
+
+## Design philosophy
+
+- **No model is an authority.** Findings are claims; code, tests, and runtime are the truth.
+- **Execution beats opinion.** Run the test instead of stacking another reviewer.
+- **Subtract, don't add.** The dominant risk at this scale is over-engineering. New machinery has to earn its keep — and gets removed when it doesn't.
+- **Privacy is a property of the tools, not the prompt.**
+- **Every rule here was born from a real failure**, not a whiteboard — that's what `CHANGELOG.md` is.
+
+## Requirements
+
+An AI coding tool that auto-loads `CLAUDE.md` and supports command hooks (built for **Claude Code**; **Codex CLI** as the independent diff reviewer). The advisory reviewer CLIs route through [OpenRouter](https://openrouter.ai) and are model-swappable. Linux/macOS.
+
+---
+
+## Status & license
+
+Actively used in production. Semantic-ish versioning via `PROTOCOL_VERSION` — run `protocol-selftest` to see what any machine/project is on.
+
+Released for the community — use it, fork it, adapt the roster to your own models. Attribution appreciated. See [`LICENSE`](LICENSE).
+
+> Coverloop started as one founder's answer to a simple question: *how do I let AI write most of my code without letting a single bug reach a paying customer?* This is that answer, hardened over real shipping days.

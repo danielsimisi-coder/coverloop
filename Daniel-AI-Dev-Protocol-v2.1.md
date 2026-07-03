@@ -26,12 +26,12 @@ Default to the LIGHTEST safe row; when unsure between two rows pick the heavier 
 
 Claude Code does NOT inherit the terminal `~/bin` PATH. Always invoke helpers by ABSOLUTE path.
 
-- **Mac:** `/Users/danielsimantov/bin/{glm-ask,glm-scout,glm-tests,glm-audit,glm-redteam,glm-code}` and the `-xhigh` variants (`glm-audit-xhigh`, `glm-redteam-xhigh`, `glm-code-xhigh`).
-- **Arcade VPS (as actdev):** `/home/actdev/bin/glm-*` AND `/home/actdev/bin/m3-{review,ask,audit,deploy-audit}`.
+- **Mac:** `~/bin/{glm-ask,glm-scout,glm-tests,glm-audit,glm-redteam,glm-code}` and the `-xhigh` variants (`glm-audit-xhigh`, `glm-redteam-xhigh`, `glm-code-xhigh`).
+- **Arcade VPS (as actdev):** `~/bin/glm-*` AND `~/bin/m3-{review,ask,audit,deploy-audit}`.
 
 **These paths are machine-specific — do NOT treat them as universal.** For any other project or server, do not assume the Mac or Arcade-VPS paths exist. Resolve the actual helper paths first (e.g. `command -v glm-audit` in an interactive shell, or check the install dir) and record them in the project Risk Map before first use. If no helper is installed for the environment, that is a STOP — do not improvise an unmediated model call.
 
-Pipe focused non-secret text only, e.g.: `git diff -- src | /Users/danielsimantov/bin/glm-redteam "..."`. If a helper exits non-zero or prints `REFUSED`/`ERROR`/`404`, that is a STOP condition (see Model-unreachable rule) — do not skip the step and do not fall back to an unmediated model; report to Daniel. **M3 status is machine-specific:** the **Mac** `m3-*` commands are PARKED (full-ZDR fail-closed) — do not use. The **Arcade VPS** `m3-*` commands are ENABLED under `data_collection:deny` (Daniel-approved) — see Model Roster.
+Pipe focused non-secret text only, e.g.: `git diff -- src | ~/bin/glm-redteam "..."`. If a helper exits non-zero or prints `REFUSED`/`ERROR`/`404`, that is a STOP condition (see Model-unreachable rule) — do not skip the step and do not fall back to an unmediated model; report to Daniel. **M3 status is machine-specific:** the **Mac** `m3-*` commands are PARKED (full-ZDR fail-closed) — do not use. The **Arcade VPS** `m3-*` commands are ENABLED under `data_collection:deny` (Daniel-approved) — see Model Roster.
 
 ---
 
@@ -103,7 +103,7 @@ GLM owns **INVARIANT and CROSS-FILE safety** — money/auth/migration invariant 
 Invoked via `glm-audit` / `glm-audit-xhigh` (GLM-5.2, `z-ai/glm-5.2`) for cross-layer mismatch at Level 3: app/worker code depending on DB columns/RPCs not deployed everywhere; app auto-deploy vs gated migrations; staging/prod drift; unsafe blanket db push or migration ordering; runbook/STATE/DECISIONS contradictions; route/page assumptions failing on null/missing fields; rollback-order gaps; merged-but-not-live ambiguity. Same hardened text-only CLI, hard secret filter, and `{zdr:true, allow_fallbacks:false, data_collection:deny}` routing as the GLM red-team. Output the 7-column table: `Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required?`. Every finding is reconciled by Claude; the auditor authorizes nothing.
 
 ### MiniMax M3 — optional second-opinion auditor (L2/L3 only)
-- **Arcade VPS: ENABLED** (Daniel-approved 2026-06-28). Invoked via `/home/actdev/bin/m3-audit` / `m3-ask` / `m3-deploy-audit` (`m3-review` core). Routes with `{data_collection:deny, allow_fallbacks:false}` — the provider does NOT train on/retain the data, verified via `m3-review --privacy-selftest`. This is **NOT full ZDR** — GLM stays the full-ZDR path for the most sensitive packets. Same hardened secret filter + egress log (logs `zdr:false, provider_policy:data_collection_deny`).
+- **Arcade VPS: ENABLED** (Daniel-approved 2026-06-28). Invoked via `~/bin/m3-audit` / `m3-ask` / `m3-deploy-audit` (`m3-review` core). Routes with `{data_collection:deny, allow_fallbacks:false}` — the provider does NOT train on/retain the data, verified via `m3-review --privacy-selftest`. This is **NOT full ZDR** — GLM stays the full-ZDR path for the most sensitive packets. Same hardened secret filter + egress log (logs `zdr:false, provider_policy:data_collection_deny`).
 - **Mac: PARKED / fail-closed** (full-ZDR-only tooling) — do not use.
 - **When to use:** a SECOND, perspective-diverse wide-context auditor run ALONGSIDE `glm-audit` on **L2/L3 packets only** — never as the sole auditor, never on L0/L1. Its value is **divergence**: in a real bake-off it surfaced security vectors GLM missed while GLM caught contract/robustness risks.
 - **Token budget (load-bearing):** M3 is a reasoning model — a low `M3_MAX_TOKENS` (the 4000 default) gets burned on reasoning and returns EMPTY (exit 5), which is **NOT** a no-findings result. Always set a generous budget (`M3_MAX_TOKENS=12000`+) for real audits.
@@ -135,7 +135,7 @@ glm_pre_redteam: yes|no  # yes for L3 high-risk (architecture)
 glm_post_redteam: yes|no # yes for L3 (implementation)
 glm_audit: yes|no        # yes when deploy/runtime/schema consistency is a risk (GLM, full-ZDR)
 m3_audit: yes|no         # OPTIONAL 2nd auditor, L2/L3 ONLY (Arcade VPS, data_collection:deny); set a high M3_MAX_TOKENS
-reviewer_commands: [exact absolute paths, e.g. /Users/danielsimantov/bin/glm-audit-xhigh]
+reviewer_commands: [exact absolute paths, e.g. ~/bin/glm-audit-xhigh]
 daniel_gate: yes|no
 stop_conditions: [...]
 ```
@@ -248,7 +248,7 @@ Never leave the reader thinking something is live when it is only merged.
 
 **Privacy is enforced at the TOOL layer, not by model discipline.** Every *advisory* external-model call MUST go through a CLI that enforces, BEFORE the network call: (1) provider routing — GLM uses `{zdr:true, allow_fallbacks:false, data_collection:deny}`; the VPS M3 uses `{data_collection:deny, allow_fallbacks:false}` (no-training, Daniel-approved); (2) a hard secret-pattern filter that aborts transmission on any match (a deny mechanism, not a prompt instruction — it holds even if the operator or a model believes the content is safe; a scan error blocks the send); (3) a verified live endpoint with the required posture for the target tier. `allow_fallbacks` must never be true for any call carrying T1+ content. The privacy provider flags must not be disableable by environment override on a T1+ send. **Do NOT hand-craft curl / raw-API calls to model providers** — they bypass all three guarantees. A wrapper lacking any of the three is forbidden and is itself a P0 incident.
 
-**Secret-filter parity (load-bearing).** All advisory CLIs share ONE canonical `SECRET_PATTERNS` set (15 patterns), version-stamped via `FILTER_VERSION`. Required minimum set: `OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, SUPABASE_SERVICE_ROLE, service_role, DATABASE_URL, VERCEL_TOKEN, PRIVATE KEY, BEGIN RSA PRIVATE KEY, BEGIN OPENSSH PRIVATE KEY, sk-or-, sk-ant-, sk-proj-, sk-, eyJhbGciOi`. The Mac and VPS (`/home/actdev/bin`) copies of `glm-review` (and the VPS `m3-review`) must report the same `FILTER_VERSION`. Any divergence is a P0 to fix before the next Level-3 send.
+**Secret-filter parity (load-bearing).** All advisory CLIs share ONE canonical `SECRET_PATTERNS` set (15 patterns), version-stamped via `FILTER_VERSION`. Required minimum set: `OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, SUPABASE_SERVICE_ROLE, service_role, DATABASE_URL, VERCEL_TOKEN, PRIVATE KEY, BEGIN RSA PRIVATE KEY, BEGIN OPENSSH PRIVATE KEY, sk-or-, sk-ant-, sk-proj-, sk-, eyJhbGciOi`. The Mac and VPS (`~/bin`) copies of `glm-review` (and the VPS `m3-review`) must report the same `FILTER_VERSION`. Any divergence is a P0 to fix before the next Level-3 send.
 
 **Model-unreachable rule (FAIL CLOSED):** a required reviewer that does not return a usable result is a STOP, never a pass.
 - (a) Non-zero exit, network/timeout, or HTTP 404 (privacy-denied) from a required CLI = mandated step NOT satisfied; stop and tell Daniel.
@@ -286,7 +286,7 @@ When added to a new project: read repo structure; identify deploy platform; data
 
 ## 13. Versioning & Sync
 
-This protocol carries `PROTOCOL_VERSION` (v2.1 — the evidence-backed refinement). Each CLI prints `FILTER_VERSION` and `CLI_VERSION` on `--version`. Single source of truth lives in the repo/dotfiles; Mac (`/Users/danielsimantov/bin`) and VPS (`/home/actdev/bin`) copies are installed FROM it, never edited in place. A `--version` mismatch between Mac and VPS is a STOP for cross-machine work until reconciled. When this protocol changes, bump `PROTOCOL_VERSION` and re-sync both machines in the same change.
+This protocol carries `PROTOCOL_VERSION` (v2.1 — the evidence-backed refinement). Each CLI prints `FILTER_VERSION` and `CLI_VERSION` on `--version`. Single source of truth lives in the repo/dotfiles; Mac (`~/bin`) and VPS (`~/bin`) copies are installed FROM it, never edited in place. A `--version` mismatch between Mac and VPS is a STOP for cross-machine work until reconciled. When this protocol changes, bump `PROTOCOL_VERSION` and re-sync both machines in the same change.
 
 ---
 
