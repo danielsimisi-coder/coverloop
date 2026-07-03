@@ -70,8 +70,12 @@ Fail-closed rules:
 - **Missing or corrupt `.coverloop/config.json` fails every non-L0 tier** —
   the gate refuses to run in a repo that never onboarded.
 - The docs-only waiver (L1 only) applies when every changed file is
-  documentation or a report file. Changing `.coverloop/config.json` is
-  **never** waived — it alters gate behavior.
+  documentation or a report file — **and only when a base is passed on the
+  command line** (`--base origin/<base_ref>`, as the CI workflow does). The
+  base is never read from `.coverloop/config.json`, because that file ships
+  inside the PR and could be set to hide a code change. No trusted base →
+  no waiver → tests required.
+- Changing `.coverloop/config.json` is **never** waived — it alters gate behavior.
 - `--approve` requires `--approver <name>`: approval must be attributable.
 
 ## Enforce it in CI (GitHub Actions)
@@ -116,6 +120,14 @@ nothing local can. What it changes is the failure mode: silent drift
 ("the loop probably ran") becomes an explicit, committed, PR-visible
 artifact that a human reviewer can audit. Forging it is no longer an
 accident; it's a choice that leaves a trail.
+
+**Known residual — tier is self-declared.** The risk tier comes from the
+committed report unless CI pins it. A PR could label an L3 change as L0 to
+dodge the gates; the defense is that the tier is a committed, reviewable
+field, and you can **pin a floor in CI** — e.g. `coverloop gate --ci --tier L2`
+forces at least L2 evidence on every PR regardless of what the report claims.
+Pin the tier to your repo's risk appetite; leave it unpinned only where a
+human reviews the declared tier on each PR.
 
 `--json` emits a machine-readable verdict on stdout; `--ci` adds GitHub
 error annotations on **stderr** so failures show inline on the PR — the two

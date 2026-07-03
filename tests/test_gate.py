@@ -58,7 +58,7 @@ class GateTestCase(unittest.TestCase):
         ).stdout.strip()
 
     def init_project(self, test_command="true"):
-        r = run(["init", "--test-command", test_command, "--base", self.base_sha], self.repo)
+        r = run(["init", "--test-command", test_command], self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         # Commit the scaffolding on its own, then move base past it, so later
         # "docs-only" assertions aren't polluted by .coverloop/config.json
@@ -289,6 +289,29 @@ class GateTestCase(unittest.TestCase):
         run(["attest", "--tier", "L1"], self.repo)
         code, _ = self.gate_json(["--tier", "L1", "--base", self.base_sha])
         self.assertEqual(code, 1)
+
+    def test_config_base_cannot_waive_tests_on_code_change(self):
+        """Codex round-3 P1: default_base ships inside the PR, so it must not
+        be trusted to compute the waiver diff. A code change + a report with no
+        tests must FAIL when gated with no explicit --base (fail closed)."""
+        self.init_project()
+        # commit A: real code change + a config that (historically) pointed the
+        # base at itself; the report records NO test run
+        self.write("app.py", "print('unshipped code change')\n")
+        self.write(".coverloop/config.json", json.dumps(
+            {"schema": "coverloop-config/v1", "test_command": "true",
+             "default_base": "HEAD~1"}))  # attacker-controlled hint — must be ignored
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "A: code + evil config"], self.repo)
+        run(["attest", "--tier", "L1"], self.repo)  # note: no --tests
+        sh(["git", "add", ".coverloop/reports"], self.repo)
+        sh(["git", "commit", "-qm", "B: report only"], self.repo)
+        # No trusted --base -> waiver cannot apply -> tests required -> FAIL
+        r = run(["gate", "--tier", "L1"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        # And with the REAL base, the code change is visible -> also FAIL
+        r = run(["gate", "--tier", "L1", "--base", self.base_sha], self.repo)
+        self.assertEqual(r.returncode, 1)
 
     def test_rename_into_docs_cannot_smuggle_code_past_waiver(self):
         """With diff.renames on, a code file renamed into docs/ must NOT

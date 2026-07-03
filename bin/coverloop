@@ -107,10 +107,12 @@ def cmd_init(args):
     if os.path.exists(cfg_path):
         print(f"skip {CONFIG_FILE} (exists)")
     else:
+        # No base is stored here on purpose: the diff base for the L1 waiver
+        # must come from the trusted caller (CI's --base), never from a file
+        # that ships inside the PR under review.
         cfg = {
             "schema": "coverloop-config/v1",
             "test_command": args.test_command or "npx tsc --noEmit",
-            "default_base": args.base or "origin/main",
         }
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
@@ -407,8 +409,14 @@ def cmd_gate(args):
               [check("config", False, f"{cfg_err} — run `coverloop init` and commit {CONFIG_FILE}")])
         sys.exit(1)
 
-    base = args.base or (cfg or {}).get("default_base")
-    files = changed_files(root, base, sha)
+    # The docs-only waiver may rely ONLY on a base passed on the command line
+    # (CI/operator-controlled — the workflow supplies --base origin/<base_ref>).
+    # A base from in-repo config ships INSIDE the PR and is therefore
+    # attacker-controllable (set default_base=HEAD~1 and the waiver diff skips
+    # your own code change), so config's default_base must NEVER enable a
+    # waiver. With no trusted base, `files` is None -> the waiver simply does
+    # not apply and tests are required (fail closed).
+    files = changed_files(root, args.base, sha) if args.base else None
 
     verdict, checks = evaluate(report, tier, files)
     _emit(args, sha, tier, verdict, checks)
@@ -445,7 +453,6 @@ def main(argv=None):
 
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
     pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
-    pi.add_argument("--base", help="default diff base (default: origin/main)")
     pi.set_defaults(fn=cmd_init)
 
     pa = sub.add_parser("attest", help="record evidence for the HEAD commit")
@@ -461,7 +468,8 @@ def main(argv=None):
 
     pg = sub.add_parser("gate", help="verify required evidence for the tier; exit non-zero if missing")
     pg.add_argument("--tier", choices=TIERS, help="risk tier (default: from the HEAD report)")
-    pg.add_argument("--base", help="diff base for the docs-only waiver (default: from config)")
+    pg.add_argument("--base", help="trusted diff base for the L1 docs-only waiver (e.g. origin/main); "
+                                   "without it the waiver never applies and tests are required")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)
