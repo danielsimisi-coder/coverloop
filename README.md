@@ -259,10 +259,6 @@ CHANGELOG.md              the story of how it got here
 
 ---
 
-## Requirements
-
-An AI coding tool that auto-loads `CLAUDE.md` and supports command hooks (built for **[Claude Code](https://claude.com/claude-code)**, with **[Codex CLI](https://developers.openai.com/codex/cli)** as the independent diff reviewer). The advisory reviewer CLIs route through [OpenRouter](https://openrouter.ai) and are model-swappable. Linux / macOS.
-
 ## 🙋 FAQ
 
 <details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one — it's never a requirement.</details>
