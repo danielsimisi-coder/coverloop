@@ -215,6 +215,27 @@ The loop improves by keeping **notes** and **reusable recipes** — not by retra
 
 ---
 
+## 🧠 The clever bits
+
+The non-obvious decisions — each one born from a real failure — that make Coverloop actually work instead of just sounding good:
+
+- 🎭 **Agreement isn't proof.** Two models agreeing can just mean two models hallucinating the *same* thing. Coverloop treats agreement as a **triage hint, never a verdict** — every finding is checked against real code and tests.
+- 📍 **Every finding must cite `file:line`.** A vague "this looks risky" with no evidence is discarded as noise. This kills the over-reporting that makes solo AI reviewers exhausting to trust.
+- 📒 **A false-positive ledger.** Once a finding is judged wrong, it's logged — and **never re-raised**. Your reviewers stop re-litigating points you already settled.
+- ✂️ **"Split, don't grind."** If the same real issues keep resurfacing past a round cap, that's a signal the change is **too big** — Coverloop tells you to split the PR instead of looping on it forever.
+- 🎨 **Cosmetic carve-out.** A fix that only touches comments/strings/docs (tests provably unaffected) is noted, *not* pushed through a fresh, paid review round. Saves time and money on changes that can't break anything.
+- 🧬 **Batch-merge integration gate.** After you merge a stack of PRs, the combined `main` is a state **no single PR's CI ever tested** — so it runs one cumulative review on the union. Catches bugs that only appear *after* everything's merged.
+- ✌️ **Two-strikes rule.** If the AI makes you do the same manual workaround twice, it must **stop and fix the root cause** — no death by a thousand papercuts.
+- 🔐 **The agent can't weaken its own safety.** If a sandbox blocks it, it fixes the environment at the root — it's *forbidden* from granting itself a bypass. Safety you can trust precisely because the agent can't switch it off.
+- 🛡️ **Even reading your own database is privacy-bound.** It pulls only the non-personal columns it needs — your customers' data doesn't get swept into a model call "just because it could."
+- 💸 **Cheap work goes to cheap models.** Bulk reads, sweeps, and formatting route to cheaper models; the expensive frontier model is reserved for the hard design and debugging. Lower bill, same quality.
+- 🧩 **Reviewers get full context, not just the diff.** The #1 cause of false alarms is a reviewer judging a 5-line diff with no surrounding code. Coverloop feeds cross-file context so reviewers stop crying wolf.
+- 🔗 **One source of truth, zero drift.** `AGENTS.md` is a *symlink* to `CLAUDE.md`, so Claude Code and Codex read the exact same rules — they can never fall out of sync.
+- 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — you get a provable record of what left your machine without the log itself ever containing your code or secrets.
+- 🆓 **Upgrades are free.** A versioning split means improving the protocol never forces your projects to re-sync — tooling updates cost your repos zero changes.
+
+---
+
 ## 📦 What's in the box
 
 ```
