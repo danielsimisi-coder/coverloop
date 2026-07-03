@@ -48,6 +48,24 @@ flowchart TD
 
 ---
 
+## ✅ Before you start — what you need
+
+Coverloop is a **safety layer on top of the AI coding tools you already use** — not a standalone app, and not something that needs a server.
+
+> **It runs in any normal Mac or Linux dev setup that uses Claude Code — no VPS, no server, no special environment.** On Windows, run it inside [WSL](https://learn.microsoft.com/windows/wsl/install).
+
+| You need | Why | Cost |
+|---|---|---|
+| 🖥️ **Mac or Linux** (Windows → WSL) | the helper scripts are bash | free |
+| 🤖 **[Claude Code](https://claude.com/claude-code)** | Coverloop runs *inside* it (uses its `CLAUDE.md` + hooks) | paid tool |
+| 🐍 **Python 3 + git** | to run the helper scripts | free (usually pre-installed) |
+| 🔑 **An [OpenRouter](https://openrouter.ai) API key** | powers the reviewer models (GLM, M3) — **a few cents per review** | pay-as-you-go |
+| 🧪 **[Codex CLI](https://developers.openai.com/codex/cli)** *(recommended)* | the independent diff-reviewer in the loop | paid tool |
+
+**In one line:** if you already code with Claude Code and have an OpenRouter key, you're ~2 minutes from running it. New to AI coding tools? Get comfortable with one first, then add Coverloop.
+
+---
+
 ## Why this exists
 
 AI writes code fast. The problem is everything *after* the code:
@@ -72,6 +90,20 @@ It's **not a framework you install into your app.** It's a protocol + a handful 
 | **Secrets** | "Please be careful" | Blocked at the tool layer, before any send |
 | **Risky changes** | Same treatment as a typo | Escalated to a human gate |
 | **Over time** | Repeats the same mistakes | Saves lessons to memory that travels with the repo |
+
+---
+
+## 🎬 What it looks like in practice
+
+You ask your AI to add a **"cancel subscription"** button. It touches money → Coverloop treats it as **L3 (dangerous)**, so the full loop kicks in:
+
+1. 🤖 **The builder** writes the code.
+2. 🔍 **Codex** reviews the diff line-by-line — spots that the refund fires *before* the database transaction commits.
+3. 🧠 **GLM** red-teams the design — flags that a failed refund would leave the user "cancelled but still charged."
+4. ✅ **Tests run** — one fails on that exact race condition. Red → back to the builder to fix.
+5. 🟢 Fixed, green, reviewers satisfied → Coverloop **stops and asks *you* to approve the merge** (money always hits the human gate).
+
+You ship it knowing three independent checks, your test suite, and you **all agreed** — instead of finding out from an angry customer.
 
 ---
 
@@ -230,6 +262,24 @@ CHANGELOG.md              the story of how it got here
 ## Requirements
 
 An AI coding tool that auto-loads `CLAUDE.md` and supports command hooks (built for **[Claude Code](https://claude.com/claude-code)**, with **[Codex CLI](https://developers.openai.com/codex/cli)** as the independent diff reviewer). The advisory reviewer CLIs route through [OpenRouter](https://openrouter.ai) and are model-swappable. Linux / macOS.
+
+## 🙋 FAQ
+
+<details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one — it's never a requirement.</details>
+
+<details><summary><b>Does it cost money to run?</b></summary><br/>The tooling is free and open source. The reviewer models (GLM, M3) run through OpenRouter, which is pay-as-you-go — usually a few cents per review. You decide which change tiers trigger the paid reviewers; trivial changes (L0/L1) don't call them at all.</details>
+
+<details><summary><b>Which AI coding tool does it work with?</b></summary><br/>It's built for <b>Claude Code</b> (it relies on the auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
+
+<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Yes — it's a core design goal. Secrets, <code>.env</code> files, and personal data are blocked at the tool layer <i>before</i> any model call, and the most sensitive reviews route only to a zero-data-retention endpoint. See the Privacy section under <a href="#how-it-works">How it works</a>.</details>
+
+<details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap GLM/M3 for other models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
+
+<details><summary><b>Does it work on Windows?</b></summary><br/>Run it inside <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> (Windows Subsystem for Linux) — the scripts are bash.</details>
+
+<details><summary><b>I'm new to this — is it for me?</b></summary><br/>Coverloop is for people who already code with AI tools and want to ship safely. If you've never used Claude Code or Codex, get comfortable with one of those first, then add Coverloop on top.</details>
+
+---
 
 ## Contributing
 
