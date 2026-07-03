@@ -1,0 +1,18 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "bbdb4811bcb7fb347fc345d29fe20cedff17b2d9",
+  "risk_tier": "L2",
+  "created_at": "2026-07-03T14:44:00Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-07-03T14:44:14Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-07-03T14:44:14Z"
+  },
+  "glm": null,
+  "human_gate": null
+}
