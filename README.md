@@ -65,7 +65,9 @@ coverloop attest --codex pass                   # record the independent review
 coverloop gate                                  # exit 0 only if the tier's evidence is complete
 ```
 
-Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml)) and an unreviewed change *physically cannot merge*. Full docs + honest threat model: [`docs/GATE.md`](docs/GATE.md).
+Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — the gate then labels each verdict `[captured <hash>]` vs `[self-attested]`, so a reviewer can tell a real run from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), pinned to a release tag) and an unreviewed change *physically cannot merge*.
+
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim*, not proof — use `--codex-run` to back it with a hashed transcript. The risk tier is self-declared unless CI pins a floor (`--tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
 
@@ -100,7 +102,7 @@ Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its o
 | The secret-filter's `sk-` pattern also matched innocent words like `task-start` and `risk-based` | **Codex** (diff review) | Flooded you with false "secret detected!" alarms until you stopped trusting it |
 | A model call **sent your data before** the privacy guard's failure-check ran | **Codex** (diff review) | A payload could leave your machine even when it should've been blocked |
 | An exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | Sensitive code quietly routed to a non-ZDR endpoint without you knowing |
-| **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **17 green tests missed it.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
+| **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **All 17 tests that existed then were green.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
 
 *(Have Coverloop caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
 
@@ -202,7 +204,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own test suite (17 cases, stdlib only)
+tests/                      the gate's own test suite (29 cases, stdlib only)
 CHANGELOG.md                the story of how it got here
 ```
 

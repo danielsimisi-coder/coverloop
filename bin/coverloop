@@ -32,6 +32,7 @@ evidence); 2 = usage or environment error.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import subprocess
@@ -217,6 +218,45 @@ def save_report(root, report):
     return path
 
 
+# ---------------------------------------------------------------- capture
+
+def capture_run(root, sha, name, cmd):
+    """Run a reviewer command, save its combined output to
+    .coverloop/reports/<sha>.<name>.log, and return provenance (command, exit
+    code, output path, sha256, line count, timestamp).
+
+    This turns a bare `--codex pass` claim into evidence backed by the actual
+    reviewer transcript, committed alongside the report and hashed so tampering
+    with the log invalidates the recorded digest. It does NOT auto-derive the
+    verdict — reviewer output is prose, and inferring pass/fail from it
+    reliably is not possible — so the caller still states pass/fail, but now
+    against a captured, inspectable artifact rather than thin air.
+    """
+    log_rel = os.path.join(REPORTS_DIR, f"{sha}.{name}.log")
+    log_path = os.path.join(root, log_rel)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    print(f"capturing {name} reviewer: {cmd}")
+    try:
+        # shell=True: same trust model as the test command — an operator-typed
+        # reviewer invocation (e.g. 'codex exec ...'), printed before it runs.
+        proc = subprocess.run(cmd, shell=True, cwd=root,
+                              capture_output=True, text=True, timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        fail_usage(f"could not run {name} reviewer command: {e}")
+    output = (proc.stdout or "") + (proc.stderr or "")
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(output)
+    return {
+        "source": "captured",
+        "command": cmd,
+        "exit_code": proc.returncode,
+        "output_file": log_rel,
+        "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+        "output_lines": output.count("\n"),
+        "ran_at": now_utc(),
+    }
+
+
 # ---------------------------------------------------------------- attest
 
 def cmd_attest(args):
@@ -262,17 +302,27 @@ def cmd_attest(args):
         report["tests"] = {"command": cmd, "status": status, "ran_at": now_utc()}
         did.append(f"tests={status}")
 
-    for name, verdict, findings in (
-        ("codex", args.codex, args.codex_findings),
-        ("glm", args.glm, args.glm_findings),
+    for name, verdict, findings, run_cmd in (
+        ("codex", args.codex, args.codex_findings, args.codex_run),
+        ("glm", args.glm, args.glm_findings, args.glm_run),
     ):
+        if run_cmd and not verdict:
+            fail_usage(f"--{name}-run requires --{name} pass|fail — you state the "
+                       f"verdict for the captured run (its output is prose, not a status)")
         if verdict:
-            report[name] = {
+            entry = {
                 "status": verdict,
                 "findings_open": findings if findings is not None else 0,
                 "recorded_at": now_utc(),
+                "source": "self-attested",
             }
-            did.append(f"{name}={verdict}")
+            if run_cmd:
+                # capture_run sets source="captured" + provenance; keep verdict.
+                entry.update(capture_run(root, sha, name, run_cmd))
+                entry["status"] = verdict
+                entry["findings_open"] = findings if findings is not None else 0
+            report[name] = entry
+            did.append(f"{name}={verdict}[{entry['source']}]")
 
     if args.approve:
         if not args.approver or not args.approver.strip():
@@ -328,6 +378,14 @@ def check(name, ok, detail):
     return {"check": name, "status": "pass" if ok else "FAIL", "detail": detail}
 
 
+def source_tag(entry):
+    """Human tag for how a reviewer verdict was recorded."""
+    src = entry.get("source", "self-attested")
+    if src == "captured":
+        return f"captured {entry.get('output_sha256', '')[:8]}"
+    return "self-attested"
+
+
 def evaluate(report, tier, files):
     """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout."""
     checks = []
@@ -351,7 +409,7 @@ def evaluate(report, tier, files):
         codex = report.get("codex") if report else None
         codex_ok = bool(codex) and codex.get("status") == "pass" and codex.get("findings_open") == 0
         detail = (
-            f"codex: {codex.get('status')}, open findings: {codex.get('findings_open')}" if codex
+            f"codex: {codex.get('status')}, open findings: {codex.get('findings_open')} [{source_tag(codex)}]" if codex
             else "codex: NO RECORD — independent diff review is mandatory at L2/L3"
         )
         checks.append(check("codex", codex_ok, detail))
@@ -360,7 +418,7 @@ def evaluate(report, tier, files):
         glm = report.get("glm") if report else None
         glm_ok = bool(glm) and glm.get("status") == "pass" and glm.get("findings_open") == 0
         detail = (
-            f"glm: {glm.get('status')}, open findings: {glm.get('findings_open')}" if glm
+            f"glm: {glm.get('status')}, open findings: {glm.get('findings_open')} [{source_tag(glm)}]" if glm
             else "glm: NO RECORD — red-team/audit is mandatory at L3"
         )
         checks.append(check("glm", glm_ok, detail))
@@ -460,8 +518,12 @@ def main(argv=None):
     pa.add_argument("--tests", action="store_true", help="run the configured test command and record the result")
     pa.add_argument("--codex", choices=["pass", "fail"], help="record the Codex diff-review verdict")
     pa.add_argument("--codex-findings", type=int, help="open Codex findings (default 0)")
+    pa.add_argument("--codex-run", metavar="CMD", help="run CMD as the Codex reviewer and "
+                    "capture its output (hashed, committed) as evidence backing the verdict")
     pa.add_argument("--glm", choices=["pass", "fail"], help="record the GLM red-team/audit verdict")
     pa.add_argument("--glm-findings", type=int, help="open GLM findings (default 0)")
+    pa.add_argument("--glm-run", metavar="CMD", help="run CMD as the GLM reviewer and "
+                    "capture its output (hashed, committed) as evidence backing the verdict")
     pa.add_argument("--approve", action="store_true", help="record the human gate approval (L3)")
     pa.add_argument("--approver", help="who approved (required with --approve)")
     pa.set_defaults(fn=cmd_attest)

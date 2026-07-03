@@ -16,7 +16,14 @@ jobs:
           fetch-depth: 0  # the gate diffs against the PR base
       - name: Coverloop gate
         run: |
+          # Pin to a RELEASE TAG, never main — don't run live code from an
+          # external branch in your CI. Bump the tag deliberately.
+          COVERLOOP_REF=v2.6.1
           curl -fsSL -o coverloop \
-            https://raw.githubusercontent.com/danielsimisi-coder/coverloop/main/bin/coverloop
+            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
-          ./coverloop gate --ci --base "origin/${{ github.base_ref }}"
+          # Pin a RISK FLOOR with --tier so a PR can't dodge review by
+          # self-declaring a lower tier. Set it to your repo's real minimum
+          # (L2 = every PR needs an independent review recorded); drop it only
+          # if a human reviews the declared tier on each PR.
+          ./coverloop gate --ci --tier L2 --base "origin/${{ github.base_ref }}"

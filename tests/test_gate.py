@@ -4,6 +4,7 @@
 Run from the repo root:  python3 -m unittest discover -s tests -v
 No third-party dependencies.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -255,6 +256,42 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         json.loads(r.stdout)  # stdout must stay pure JSON
         self.assertIn("::error", r.stderr)
+
+    # captured (tool-produced) evidence ------------------------------
+    def test_codex_run_captures_hashed_transcript(self):
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "printf 'CLEAN: no findings\\n'"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            rep = json.load(f)
+        self.assertEqual(rep["codex"]["source"], "captured")
+        self.assertIn("output_sha256", rep["codex"])
+        self.assertEqual(rep["codex"]["command"], "printf 'CLEAN: no findings\\n'")
+        # the transcript log exists and its hash matches what was recorded
+        log = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")
+        self.assertTrue(os.path.exists(log))
+        with open(log, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        self.assertEqual(digest, rep["codex"]["output_sha256"])
+
+    def test_gate_detail_distinguishes_captured_from_self_attested(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)  # bare claim
+        _, out = self.gate_json()
+        codex_detail = [c["detail"] for c in out["checks"] if c["check"] == "codex"][0]
+        self.assertIn("self-attested", codex_detail)
+        run(["attest", "--codex", "pass", "--codex-run", "echo ok"], self.repo)
+        _, out = self.gate_json()
+        codex_detail = [c["detail"] for c in out["checks"] if c["check"] == "codex"][0]
+        self.assertIn("captured", codex_detail)
+
+    def test_run_without_verdict_is_rejected(self):
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--codex-run", "echo hi"], self.repo)
+        self.assertEqual(r.returncode, 2)
 
     # docs-only waiver ----------------------------------------------
     def test_L1_docs_only_diff_waives_tests(self):

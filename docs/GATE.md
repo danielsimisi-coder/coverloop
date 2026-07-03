@@ -24,16 +24,24 @@ commit, **committed with the change** so it is visible in the PR.
 
 ```bash
 coverloop attest --tier L2 --tests            # runs config's test_command, records pass/fail
-coverloop attest --codex pass                  # record the independent diff-review verdict
-coverloop attest --codex fail --codex-findings 3
-coverloop attest --glm pass                    # record the red-team/audit verdict (L3)
+coverloop attest --codex pass                  # record the diff-review verdict (self-attested)
+coverloop attest --codex pass \                # STRONGER: run the reviewer and capture its
+  --codex-run "codex exec --sandbox read-only '...'"   # output (hashed, committed as evidence)
+coverloop attest --glm pass --glm-run "glm-audit '...'"
 coverloop attest --approve --approver daniel   # record the human gate (L3)
 ```
 
-`attest --tests` is the only subcommand that executes anything: it runs the
-`test_command` from `.coverloop/config.json` (the repo owner's own config —
-same trust model as `package.json` scripts) and records the result honestly,
-including failures.
+**Self-attested vs. captured evidence.** `--codex pass` on its own records a
+*claim* — honest as an audit trail, but nothing ran. Add `--codex-run "<cmd>"`
+and the tool executes the reviewer, writes its full output to
+`.coverloop/reports/<sha>.codex.log` (committed with the change), and records
+the log's **sha256** in the report. The verdict is still yours to state
+(reviewer output is prose, not a status), but now it's backed by a hashed,
+inspectable transcript rather than thin air — and `coverloop gate` labels each
+verdict `[captured <hash>]` or `[self-attested]` so a reviewer, or a stricter
+CI policy, can tell them apart. `attest --tests` likewise actually runs the
+`test_command` (same trust model as `package.json` scripts) and records the
+real result, failures included.
 
 ## What each tier requires
 
@@ -97,11 +105,13 @@ jobs:
           fetch-depth: 0
       - name: Coverloop gate
         run: |
+          COVERLOOP_REF=v2.6.1   # pin to a release tag, never main
           curl -fsSL -o coverloop \
-            https://raw.githubusercontent.com/danielsimisi-coder/coverloop/main/bin/coverloop
+            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
-          # tier comes from the report the PR carries; add --tier to pin it
-          ./coverloop gate --ci --base "origin/${{ github.base_ref }}"
+          # Pin --tier to a risk FLOOR so a PR can't dodge review by declaring
+          # a lower tier; drop it only if a human reviews the tier per PR.
+          ./coverloop gate --ci --tier L2 --base "origin/${{ github.base_ref }}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
@@ -121,13 +131,25 @@ nothing local can. What it changes is the failure mode: silent drift
 artifact that a human reviewer can audit. Forging it is no longer an
 accident; it's a choice that leaves a trail.
 
-**Known residual — tier is self-declared.** The risk tier comes from the
-committed report unless CI pins it. A PR could label an L3 change as L0 to
-dodge the gates; the defense is that the tier is a committed, reviewable
-field, and you can **pin a floor in CI** — e.g. `coverloop gate --ci --tier L2`
-forces at least L2 evidence on every PR regardless of what the report claims.
-Pin the tier to your repo's risk appetite; leave it unpinned only where a
-human reviews the declared tier on each PR.
+**What "captured" does and doesn't buy you.** `--codex-run` upgrades a verdict
+from a bare claim to a hashed transcript committed in the PR — forging it now
+means fabricating a plausible reviewer log *and* running the fake command, and
+the log is right there for a human to read. It does **not** cryptographically
+prove the real reviewer ran; a determined author can still lie. It raises the
+cost and visibility of lying, which is the honest ceiling for a local tool.
+
+**Known residuals (by design, until a GitHub App exists):**
+- **Tier is self-declared** unless CI pins it. A PR could label an L3 change L0
+  to dodge gates; defense is the committed, reviewable tier field plus a pinned
+  floor — `coverloop gate --ci --tier L2` forces ≥L2 evidence on every PR
+  regardless of what the report claims. Pin it to your repo's risk appetite.
+- **Human approval is *named*, not *authenticated*.** `--approver daniel`
+  records who approved, but doesn't verify it was really them via a GitHub
+  review/environment approval. Treat the approver field as attributable intent,
+  and lean on branch protection's own required-reviews for identity until the
+  planned `--require-github-approval` lands.
+- **`test_command` and reviewer commands come from in-repo config/flags** — a
+  PR that changes them is high-signal and must be reviewed as such.
 
 `--json` emits a machine-readable verdict on stdout; `--ci` adds GitHub
 error annotations on **stderr** so failures show inline on the PR — the two

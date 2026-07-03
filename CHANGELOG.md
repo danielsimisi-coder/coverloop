@@ -2,6 +2,12 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## v2.6.1 (2026-07-03) — captured evidence + honest limits
+From a second external review of the v2.6 gate whose core point was right: the evidence was still *self-attested*. This release makes it capturable and pins the supply chain.
+- **Captured (tool-produced) evidence** — `coverloop attest --codex pass --codex-run "<cmd>"` (and `--glm-run`) executes the reviewer, writes its full output to `.coverloop/reports/<sha>.<reviewer>.log` (committed with the change), and records the log's **sha256** in the report. The verdict is still caller-stated (reviewer output is prose), but it is now backed by a hashed, PR-visible transcript instead of a bare claim. `coverloop gate` labels every verdict `[captured <hash>]` or `[self-attested]` so reviewers/CI can tell them apart.
+- **Pinned CI** — the GitHub Actions example now pins `coverloop` to a **release tag** (`v2.6.0`), not `main` (don't run live external code in CI), and pins a **risk floor** (`--tier L2`) so a PR can't dodge review by self-declaring a lower tier.
+- **Honest limits documented** in README + `docs/GATE.md`: capture raises the cost/visibility of lying but isn't cryptographic proof; tier is self-declared unless pinned; human approval is *named*, not GitHub-authenticated (planned `--require-github-approval`). Fixed a stale "17 cases" README line (suite is now **29 cases**).
+
 ## v2.6 (2026-07-03) — enforcement ("a gate, not a sticky note")
 No contract change — **projects need NO resync**; machines just `git pull && ./install.sh`.
 Born from an outside review whose sharpest line was *"this is not a safety layer yet — it's a disciplined local workflow with good taste."* Correct: the hooks remind, nothing blocked. v2.6 adds the blocking layer:
