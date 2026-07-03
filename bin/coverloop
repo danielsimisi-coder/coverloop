@@ -1,0 +1,474 @@
+#!/usr/bin/env python3
+"""coverloop — evidence gate for AI-written changes.
+
+Subcommands:
+  init    scaffold .coverloop/ (config + reports dir) in the current repo
+  attest  record evidence (test run, reviewer verdicts, human approval)
+          into a report bound to the current HEAD commit
+  gate    verify the required evidence exists for the given risk tier;
+          exit 0 only if every required gate has a passing, HEAD-bound record
+
+Design rules (do not weaken):
+  * FAIL CLOSED: missing config (non-L0), missing report (non-L0), stale
+    evidence, unreadable JSON, unknown tier -> non-zero exit. A malformed,
+    forged, or SHA-mismatched report fails EVERY tier, including L0.
+  * The gate NEVER sends code anywhere and NEVER calls a model. It only
+    inspects local files and git metadata. `attest` records results the
+    human/agent obtained via the existing reviewer tools; it does not
+    run reviewers itself (except the project's own test command).
+  * Evidence binds to a commit SHA. The gate accepts a report bound to an
+    ancestor commit ONLY when the diff from that ancestor to HEAD touches
+    nothing but files under .coverloop/reports/ — this makes the
+    "attest, then commit the report" flow possible while guaranteeing any
+    CODE change after attestation still invalidates the evidence.
+
+Honest threat model: this verifies that evidence EXISTS and is bound to
+the commit under review; it cannot stop someone from hand-writing a lying
+report. It turns silent drift into an explicit, committed, auditable lie —
+and in CI the report travels with the PR, where a reviewer can see it.
+
+Exit codes: 0 = all required gates pass; 1 = gate failure (missing/failed
+evidence); 2 = usage or environment error.
+"""
+import argparse
+import datetime
+import json
+import os
+import subprocess
+import sys
+
+SCHEMA = "coverloop-report/v1"
+CONFIG_DIR = ".coverloop"
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+REPORTS_DIR = os.path.join(CONFIG_DIR, "reports")
+TIERS = ("L0", "L1", "L2", "L3")
+# Paths that never require the test gate on their own (docs-only changes).
+# Report files ride along with every change (they ARE the evidence), so they
+# are waivable too — but .coverloop/config.json is NOT: it alters gate
+# behavior, so changing it always demands the test gate.
+DOC_PREFIXES = ("docs/", REPORTS_DIR + "/")
+DOC_SUFFIXES = (".md", ".txt", ".rst")
+DOC_FILES = ("LICENSE", "CHANGELOG", "CHANGELOG.md", "README.md")
+
+
+def fail_usage(msg):
+    print(f"coverloop: error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def git(args, cwd=None):
+    """Run a git command; return stdout or None on failure."""
+    try:
+        out = subprocess.run(
+            ["git"] + args, cwd=cwd, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
+
+
+def repo_root():
+    root = git(["rev-parse", "--show-toplevel"])
+    if not root:
+        fail_usage("not inside a git repository")
+    return root
+
+
+def head_sha(root):
+    sha = git(["rev-parse", "HEAD"], cwd=root)
+    if not sha:
+        fail_usage("cannot resolve HEAD (empty repository?)")
+    return sha
+
+
+def now_utc():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_json(path):
+    """Return (data, error). Fail closed on unreadable/invalid JSON."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f), None
+    except FileNotFoundError:
+        return None, f"{path}: not found"
+    except (json.JSONDecodeError, OSError) as e:
+        return None, f"{path}: unreadable ({e})"
+
+
+# ---------------------------------------------------------------- init
+
+def cmd_init(args):
+    root = repo_root()
+    cfg_path = os.path.join(root, CONFIG_FILE)
+    os.makedirs(os.path.join(root, REPORTS_DIR), exist_ok=True)
+    if os.path.exists(cfg_path):
+        print(f"skip {CONFIG_FILE} (exists)")
+    else:
+        cfg = {
+            "schema": "coverloop-config/v1",
+            "test_command": args.test_command or "npx tsc --noEmit",
+            "default_base": args.base or "origin/main",
+        }
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        print(f"+ {CONFIG_FILE}  (test_command: {cfg['test_command']!r} — edit for your stack)")
+    gi_path = os.path.join(root, CONFIG_DIR, ".gitignore")
+    if not os.path.exists(gi_path):
+        # Reports are meant to be committed (they are the PR-visible evidence);
+        # nothing is ignored by default. The file exists to make that explicit.
+        with open(gi_path, "w", encoding="utf-8") as f:
+            f.write("# Coverloop reports are evidence — commit them with the change.\n")
+    print(f"+ {REPORTS_DIR}/")
+    print("Done. Record evidence with `coverloop attest`, verify with `coverloop gate`.")
+    return 0
+
+
+# ---------------------------------------------------------------- reports
+
+def report_path(root, sha):
+    return os.path.join(root, REPORTS_DIR, f"{sha}.json")
+
+
+def load_report(root, sha):
+    """Load the report for this exact SHA. (None, reason) if unusable."""
+    path = report_path(root, sha)
+    data, err = load_json(path)
+    if err:
+        return None, err
+    if data.get("schema") != SCHEMA:
+        return None, f"{path}: unknown schema {data.get('schema')!r} (want {SCHEMA})"
+    if data.get("commit") != sha:
+        return None, f"{path}: bound to commit {data.get('commit')!r}, HEAD is {sha}"
+    return data, None
+
+
+# How many first-parent ancestors to search for an evidence-only report.
+EVIDENCE_WALK_LIMIT = 20
+
+
+def only_evidence_changed(root, frm, to):
+    """True iff the diff frm..to touches ONLY files under .coverloop/reports/."""
+    out = git(["diff", "--no-renames", "--name-only", f"{frm}..{to}"], cwd=root)
+    if out is None:
+        return False  # unresolvable range -> fail closed
+    files = [line for line in out.splitlines() if line.strip()]
+    return bool(files) and all(f.startswith(REPORTS_DIR + "/") for f in files)
+
+
+def find_report(root, head):
+    """Locate the report that governs HEAD.
+
+    Returns (report, reason, malformed):
+      * exact HEAD report when present;
+      * else a report bound to a first-parent ancestor, accepted ONLY if the
+        diff ancestor..HEAD touches nothing but evidence files (this is what
+        makes "attest, commit the report, gate in CI" possible);
+      * (None, why, True) when a report file exists but is corrupt, forged,
+        or SHA-mismatched — malformed evidence fails EVERY tier;
+      * (None, why, False) when no usable report exists.
+    """
+    path = report_path(root, head)
+    if os.path.exists(path):
+        report, why = load_report(root, head)
+        if report is None:
+            return None, why, True
+        return report, None, False
+    for i in range(1, EVIDENCE_WALK_LIMIT + 1):
+        anc = git(["rev-parse", f"{head}~{i}"], cwd=root)
+        if not anc:
+            break
+        if not os.path.exists(report_path(root, anc)):
+            continue
+        report, why = load_report(root, anc)
+        if report is None:
+            return None, why, True
+        if only_evidence_changed(root, anc, head):
+            return report, None, False
+        return None, (f"evidence at {anc[:12]} is STALE: non-evidence files "
+                      f"changed between it and HEAD — re-run the loop"), False
+    return None, "no report found for HEAD or any evidence-only ancestor", False
+
+
+def new_report(sha, tier):
+    return {
+        "schema": SCHEMA,
+        "commit": sha,
+        "risk_tier": tier,
+        "created_at": now_utc(),
+        "tests": None,
+        "codex": None,
+        "glm": None,
+        "human_gate": None,
+    }
+
+
+def save_report(root, report):
+    path = report_path(root, report["commit"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+        f.write("\n")
+    return path
+
+
+# ---------------------------------------------------------------- attest
+
+def cmd_attest(args):
+    root = repo_root()
+    sha = head_sha(root)
+    report, why, malformed = find_report(root, sha)
+    if malformed:
+        fail_usage(f"existing report is unusable — fix or delete it: {why}")
+    if report is not None and report["commit"] != sha:
+        # Inherit evidence from an ancestor whose only difference is evidence
+        # files (find_report guarantees that), rebound to the current HEAD.
+        report = dict(report)
+        report["commit"] = sha
+    if report is None:
+        if not args.tier:
+            fail_usage("no report for HEAD yet — pass --tier L0|L1|L2|L3 to create one")
+        report = new_report(sha, args.tier)
+    elif args.tier:
+        report["risk_tier"] = args.tier
+    if report["risk_tier"] not in TIERS:
+        fail_usage(f"invalid tier {report['risk_tier']!r}")
+
+    did = []
+
+    if args.tests:
+        cfg, err = load_json(os.path.join(root, CONFIG_FILE))
+        if err:
+            fail_usage(f"cannot run tests: {err} (run `coverloop init` first)")
+        cmd = (cfg or {}).get("test_command")
+        if not cmd or not str(cmd).strip():
+            fail_usage(f"no test_command configured in {CONFIG_FILE}")
+        print(f"running tests: {cmd}")
+        try:
+            # shell=True is deliberate: test_command is the repo owner's own
+            # config (same trust model as package.json scripts / Makefiles /
+            # loop.conf TEST_CMD) and legitimately needs shell semantics
+            # ("npm test && npx tsc --noEmit"). It is printed above before it
+            # runs. Never feed this from untrusted input.
+            proc = subprocess.run(cmd, shell=True, cwd=root)
+            status = "pass" if proc.returncode == 0 else "fail"
+        except OSError as e:
+            fail_usage(f"could not execute test command: {e}")
+        report["tests"] = {"command": cmd, "status": status, "ran_at": now_utc()}
+        did.append(f"tests={status}")
+
+    for name, verdict, findings in (
+        ("codex", args.codex, args.codex_findings),
+        ("glm", args.glm, args.glm_findings),
+    ):
+        if verdict:
+            report[name] = {
+                "status": verdict,
+                "findings_open": findings if findings is not None else 0,
+                "recorded_at": now_utc(),
+            }
+            did.append(f"{name}={verdict}")
+
+    if args.approve:
+        if not args.approver or not args.approver.strip():
+            fail_usage("--approve requires --approver <name> (approval must be attributable)")
+        report["human_gate"] = {
+            "required": True,
+            "approved": True,
+            "approver": args.approver.strip(),
+            "approved_at": now_utc(),
+        }
+        did.append(f"human_gate=approved({args.approver.strip()})")
+
+    if not did and not args.tier:
+        fail_usage("nothing to attest — pass --tests, --codex, --glm, --approve, or --tier")
+
+    path = save_report(root, report)
+    rel = os.path.relpath(path, root)
+    print(f"recorded [{', '.join(did) or 'tier=' + report['risk_tier']}] -> {rel}")
+    print("commit this report with your change — it is the PR-visible evidence.")
+    # attest --tests reflects reality: a failing test run is recorded AND
+    # reported via exit code so CI/callers can react immediately.
+    if args.tests and report["tests"]["status"] == "fail":
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------- gate
+
+def changed_files(root, base, sha):
+    """Files changed base..sha, or None when the range can't be resolved."""
+    if not base:
+        return None
+    out = git(["diff", "--no-renames", "--name-only", f"{base}..{sha}"], cwd=root)
+    if out is None:
+        return None
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def docs_only(files):
+    if not files:  # empty diff or unknown -> not provably docs-only
+        return False
+    for f in files:
+        base = os.path.basename(f)
+        if f.startswith(DOC_PREFIXES) or base in DOC_FILES:
+            continue
+        if any(f.endswith(s) for s in DOC_SUFFIXES):
+            continue
+        return False
+    return True
+
+
+def check(name, ok, detail):
+    return {"check": name, "status": "pass" if ok else "FAIL", "detail": detail}
+
+
+def evaluate(report, tier, files):
+    """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout."""
+    checks = []
+
+    if tier == "L0":
+        checks.append(check("tier", True, "L0: trivial — no evidence required"))
+        return True, checks
+
+    tests = report.get("tests") if report else None
+    tests_ok = bool(tests) and tests.get("status") == "pass" and bool(str(tests.get("command", "")).strip())
+    if tier == "L1" and docs_only(files):
+        checks.append(check("tests", True, "docs-only diff — test gate waived"))
+    else:
+        detail = (
+            f"tests: {tests.get('status')} ({tests.get('command')})" if tests
+            else "tests: NO RECORD — run `coverloop attest --tests`"
+        )
+        checks.append(check("tests", tests_ok, detail))
+
+    if tier in ("L2", "L3"):
+        codex = report.get("codex") if report else None
+        codex_ok = bool(codex) and codex.get("status") == "pass" and codex.get("findings_open") == 0
+        detail = (
+            f"codex: {codex.get('status')}, open findings: {codex.get('findings_open')}" if codex
+            else "codex: NO RECORD — independent diff review is mandatory at L2/L3"
+        )
+        checks.append(check("codex", codex_ok, detail))
+
+    if tier == "L3":
+        glm = report.get("glm") if report else None
+        glm_ok = bool(glm) and glm.get("status") == "pass" and glm.get("findings_open") == 0
+        detail = (
+            f"glm: {glm.get('status')}, open findings: {glm.get('findings_open')}" if glm
+            else "glm: NO RECORD — red-team/audit is mandatory at L3"
+        )
+        checks.append(check("glm", glm_ok, detail))
+
+        hg = report.get("human_gate") if report else None
+        hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
+        detail = (
+            f"human gate: approved by {hg.get('approver')!r}" if hg_ok
+            else "human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`"
+        )
+        checks.append(check("human_gate", hg_ok, detail))
+
+    verdict = all(c["status"] == "pass" for c in checks)
+    return verdict, checks
+
+
+def cmd_gate(args):
+    root = repo_root()
+    sha = head_sha(root)
+    report, why, malformed = find_report(root, sha)
+
+    tier = args.tier or (report or {}).get("risk_tier")
+
+    # A corrupt/forged/SHA-mismatched report fails EVERY tier, including L0.
+    if malformed:
+        _emit(args, sha, tier or "unknown", False,
+              [check("report", False, f"malformed evidence: {why}")])
+        sys.exit(1)
+
+    if not tier:
+        print(f"coverloop gate: FAIL — no risk tier: {why or 'no report'}", file=sys.stderr)
+        print("state the tier explicitly: `coverloop gate --tier L0|L1|L2|L3`", file=sys.stderr)
+        sys.exit(1)
+    if tier not in TIERS:
+        fail_usage(f"invalid tier {tier!r} (use L0|L1|L2|L3)")
+
+    if report is None and tier != "L0":
+        _emit(args, sha, tier, False, [check("report", False, why or "no report for HEAD")])
+        sys.exit(1)
+
+    # Non-L0 tiers require a loadable config: the gate must know it is running
+    # in an onboarded repo (fail closed on missing/corrupt config).
+    cfg, cfg_err = load_json(os.path.join(root, CONFIG_FILE))
+    if cfg_err and tier != "L0":
+        _emit(args, sha, tier, False,
+              [check("config", False, f"{cfg_err} — run `coverloop init` and commit {CONFIG_FILE}")])
+        sys.exit(1)
+
+    base = args.base or (cfg or {}).get("default_base")
+    files = changed_files(root, base, sha)
+
+    verdict, checks = evaluate(report, tier, files)
+    _emit(args, sha, tier, verdict, checks)
+    sys.exit(0 if verdict else 1)
+
+
+def _emit(args, sha, tier, verdict, checks):
+    # CI annotations go to STDERR so they also work alongside --json
+    # (stdout stays pure JSON for tooling; GitHub reads both streams).
+    if args.ci:
+        for c in checks:
+            if c["status"] != "pass":
+                print(f"::error title=coverloop gate::{c['check']}: {c['detail']}",
+                      file=sys.stderr)
+    if args.json:
+        print(json.dumps(
+            {"schema": "coverloop-gate/v1", "commit": sha, "tier": tier,
+             "verdict": "pass" if verdict else "fail", "checks": checks},
+            indent=2,
+        ))
+        return
+    print(f"coverloop gate — commit {sha[:12]} — tier {tier}")
+    for c in checks:
+        mark = "✔" if c["status"] == "pass" else "✘"
+        print(f"  {mark} {c['check']:<11} {c['detail']}")
+    print(f"VERDICT: {'PASS' if verdict else 'FAIL — required evidence missing or failing'}")
+
+
+# ---------------------------------------------------------------- main
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="coverloop", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
+    pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
+    pi.add_argument("--base", help="default diff base (default: origin/main)")
+    pi.set_defaults(fn=cmd_init)
+
+    pa = sub.add_parser("attest", help="record evidence for the HEAD commit")
+    pa.add_argument("--tier", choices=TIERS, help="risk tier of this change")
+    pa.add_argument("--tests", action="store_true", help="run the configured test command and record the result")
+    pa.add_argument("--codex", choices=["pass", "fail"], help="record the Codex diff-review verdict")
+    pa.add_argument("--codex-findings", type=int, help="open Codex findings (default 0)")
+    pa.add_argument("--glm", choices=["pass", "fail"], help="record the GLM red-team/audit verdict")
+    pa.add_argument("--glm-findings", type=int, help="open GLM findings (default 0)")
+    pa.add_argument("--approve", action="store_true", help="record the human gate approval (L3)")
+    pa.add_argument("--approver", help="who approved (required with --approve)")
+    pa.set_defaults(fn=cmd_attest)
+
+    pg = sub.add_parser("gate", help="verify required evidence for the tier; exit non-zero if missing")
+    pg.add_argument("--tier", choices=TIERS, help="risk tier (default: from the HEAD report)")
+    pg.add_argument("--base", help="diff base for the docs-only waiver (default: from config)")
+    pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
+    pg.add_argument("--json", action="store_true", help="machine-readable verdict")
+    pg.set_defaults(fn=cmd_gate)
+
+    args = p.parse_args(argv)
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

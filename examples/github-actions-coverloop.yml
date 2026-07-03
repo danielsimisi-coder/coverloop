@@ -1,0 +1,22 @@
+# Copy to .github/workflows/coverloop.yml in YOUR project, then make
+# "coverloop / gate" a required status check in branch protection.
+# Full docs: https://github.com/danielsimisi-coder/coverloop/blob/main/docs/GATE.md
+name: coverloop
+on: pull_request
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Check out the REAL PR head, not GitHub's synthetic merge commit —
+          # the evidence reports live on the PR branch, and the merge commit's
+          # first-parent chain walks the BASE branch, where they don't exist.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0  # the gate diffs against the PR base
+      - name: Coverloop gate
+        run: |
+          curl -fsSL -o coverloop \
+            https://raw.githubusercontent.com/danielsimisi-coder/coverloop/main/bin/coverloop
+          chmod +x coverloop
+          ./coverloop gate --ci --base "origin/${{ github.base_ref }}"

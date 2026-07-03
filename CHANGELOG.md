@@ -2,6 +2,16 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## v2.6 (2026-07-03) — enforcement ("a gate, not a sticky note")
+No contract change — **projects need NO resync**; machines just `git pull && ./install.sh`.
+Born from an outside review whose sharpest line was *"this is not a safety layer yet — it's a disciplined local workflow with good taste."* Correct: the hooks remind, nothing blocked. v2.6 adds the blocking layer:
+- **`bin/coverloop`** — a fail-closed evidence gate (`init` / `attest` / `gate`). Evidence lives in `.coverloop/reports/<sha>.json`, committed with the change (PR-visible artifact, not a chat-log claim). `gate` exits non-zero unless the tier's required evidence governs HEAD: L1 tests (docs-only diffs waived), L2 + Codex pass with 0 open findings, L3 + GLM pass + **named** human approval. Evidence-only commits ride along (a report bound to an ancestor is accepted ONLY when the diff to HEAD touches nothing but report files); any code change after attestation invalidates the evidence; corrupt/forged/SHA-mismatched reports fail EVERY tier. The gate never sends code anywhere and never calls a model.
+- **The gate's own review round proved the loop (dogfood):** Codex reviewed the gate's diff before merge and caught a **P0 the builder and 17 green tests both missed** — the evidence-commit paradox (attest binds to HEAD; committing the report creates a NEW head, so CI could never find the evidence for the commit carrying it: the documented flow was impossible). Plus: missing/corrupt config didn't fail non-L0 (P1), malformed reports passed at L0 (P2), `--ci` was silently ignored with `--json` (P2). All four fixed + regression-tested in the same change.
+- **CI enforcement** — `coverloop gate --ci` + a copy-paste GitHub Actions workflow (`examples/github-actions-coverloop.yml`); make `coverloop / gate` a required check and an unreviewed change physically cannot merge. Docs + honest threat model: `docs/GATE.md`.
+- **Waiver semantics** (caught by the gate's own test suite): report files are waivable in docs-only diffs (they ARE the evidence and ride along with every change); `.coverloop/config.json` is NEVER waivable — it alters gate behavior.
+- **Tests**: `tests/test_gate.py` — 17 cases on real temporary git repos, stdlib only.
+- Language rule going forward: hooks are described as *advisory*; "enforceable" refers to the gate.
+
 ## v2.5 (2026-07-02) — efficiency + measurement ("prove it, cheaply")
 No contract change — **projects need NO resync**; machines just `git pull && ./install.sh`.
 - **v2.5 refinements (2026-07-02, from a live L3 review loop):** (a) `skills/multimodel-review` — give reviewers full cross-file CONTEXT, not just the raw diff (the #1 false-positive source: M3 flagged `confirmClock` as undefined because it only saw the diff). (b) §9a — **cosmetic-change carve-out**: a post-review fix whose diff touches only comments/strings/docs (tsc+tests provably unaffected) is fixed-and-noted, NOT sent through a fresh review round. Both born from the loop catching its own over-application in real time.

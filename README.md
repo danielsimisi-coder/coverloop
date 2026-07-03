@@ -54,6 +54,19 @@ printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/op
 > **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key (a few ¢/review) · [Codex CLI](https://developers.openai.com/codex/cli) recommended. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
 > Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
 
+### 🔒 Make it unskippable — `coverloop gate`
+
+Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any code change after attestation invalidates the evidence by construction.**
+
+```bash
+coverloop init                                  # once per repo
+coverloop attest --tier L2 --tests              # run + record tests
+coverloop attest --codex pass                   # record the independent review
+coverloop gate                                  # exit 0 only if the tier's evidence is complete
+```
+
+Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml)) and an unreviewed change *physically cannot merge*. Full docs + honest threat model: [`docs/GATE.md`](docs/GATE.md).
+
 ---
 
 ## 🎬 Watch it catch a bug
@@ -72,9 +85,9 @@ You ask for a routine change. It touches the database → Coverloop treats it as
 >
 > **🛑 Coverloop:** stops the loop and asks **you** to approve before anything touches the database.
 >
-> **You:** never even saw the bug — **because it never reached you.**
+> **You:** never even saw the bug.
 
-That's the whole product in one scene: **every bug has to find a gap. Coverloop covers every gap.**
+Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop saved you** — because every bug has to find a gap, and Coverloop covers every gap.
 
 ---
 
@@ -87,6 +100,7 @@ Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its o
 | The secret-filter's `sk-` pattern also matched innocent words like `task-start` and `risk-based` | **Codex** (diff review) | Flooded you with false "secret detected!" alarms until you stopped trusting it |
 | A model call **sent your data before** the privacy guard's failure-check ran | **Codex** (diff review) | A payload could leave your machine even when it should've been blocked |
 | An exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | Sensitive code quietly routed to a non-ZDR endpoint without you knowing |
+| **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **17 green tests missed it.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
 
 *(Have Coverloop caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
 
@@ -174,7 +188,9 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 ## 📦 What's in the box
 
 ```
+bin/coverloop               the enforceable evidence gate (init / attest / gate)
 CLAUDE.md                 the canonical rules (drop into any project root)
+docs/GATE.md                gate docs: schema, tiers, CI wiring, threat model
 docs/OPERATING_CONTRACT.md the block you inline into a project's CLAUDE.md
 docs/SESSION_BOOTSTRAP.md   what to install + what to paste, in order
 docs/MEMORY.example.md      template for git-tracked portable memory
@@ -184,7 +200,9 @@ bin/glm-* / m3-*            privacy-routed, secret-filtered reviewers
 bin/dep-check               slopsquatting / hallucinated-dependency gate
 hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
+examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
+tests/                      the gate's own test suite (17 cases, stdlib only)
 CHANGELOG.md                the story of how it got here
 ```
 
@@ -207,6 +225,8 @@ CHANGELOG.md                the story of how it got here
 ---
 
 ## 🙋 FAQ
+
+<details><summary><b>Is this actually enforced, or just conventions?</b></summary><br/>Both layers exist, honestly labeled. Inside the session, hooks re-inject the rules (advisory — they keep the agent on-protocol). At the boundary, <a href="docs/GATE.md"><code>coverloop gate</code></a> is <b>fail-closed enforcement</b>: it exits non-zero unless commit-bound evidence of tests + reviews + human approval exists, and you can make it a required GitHub check so an unreviewed change cannot merge. Evidence is a committed JSON artifact in the PR, not a claim in a chat log.</details>
 
 <details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one.</details>
 

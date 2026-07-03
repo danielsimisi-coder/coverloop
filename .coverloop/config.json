@@ -1,0 +1,5 @@
+{
+  "schema": "coverloop-config/v1",
+  "test_command": "python3 -m unittest discover -s tests",
+  "default_base": "origin/main"
+}
