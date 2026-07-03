@@ -11,7 +11,7 @@ fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
 
 # ---------- locate the protocol repo (for the reference version) ----------
 SRC=""
-for c in "$HOME/protocol-loop" "$HOME/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-" \
+for c in "$HOME/protocol-loop" "$HOME/coverloop" \
          "$(cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)"; do
   [ -f "$c/CLAUDE.md" ] && grep -q "PROTOCOL_VERSION" "$c/CLAUDE.md" 2>/dev/null && SRC="$c" && break
 done

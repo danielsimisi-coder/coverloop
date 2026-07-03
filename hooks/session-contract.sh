@@ -19,9 +19,9 @@ in_protocol_project || exit 0
 
 cat <<'EOF'
 [v2.5 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
-- Code-review roster: Claude builds · Codex gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · Daniel gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
+- Code-review roster: Claude builds · Codex gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · the human operator gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
 - Execution/tests are the PRIMARY gate. No model is an authority — verify every finding against code/tests/runtime.
-- Risk gates: L2 -> Codex MANDATORY. L3 (money/auth·RLS/migration/deploy/secrets/worker) -> Codex + GLM MANDATORY + Daniel gate before merge/apply/deploy (M3 optional). Lightest safe row; tie -> heavier.
+- Risk gates: L2 -> Codex MANDATORY. L3 (money/auth·RLS/migration/deploy/secrets/worker) -> Codex + GLM MANDATORY + the operator gate before merge/apply/deploy (M3 optional). Lightest safe row; tie -> heavier.
 - Privacy: NEVER send .env/secrets/keys/PII (T3) to any model. Reading your own DB is PII-bound — select only non-PII columns; if a read is blocked for PII, reshape the query, don't bounce it to the human.
 - End each meaningful task with reflect-and-save -> append a durable lesson to git-tracked docs/MEMORY.md and commit it.
 - Two-strikes: if you tell the human to repeat the same manual workaround twice, STOP and fix the root cause.
@@ -29,6 +29,6 @@ cat <<'EOF'
 - Background-task hygiene: don't leave background processes running once you've read their output. Keep AT MOST ONE dev/preview server and reuse it (kill the old one before starting a new one). Reap one-shot background jobs (Codex/GLM/M3/tests) when done, and clean up before you pause or declare done — don't let them pile up.
 - Verify wiring once per session: run \$HOME/bin/protocol-selftest from the project root and report GREEN/FAILs.
 - After each multi-model review, append one line to docs/REVIEW_LEDGER.md "## Review log" (date · tier · reviewers · findings · verdicts) — the quarterly right-size read depends on it.
-- Re-read CLAUDE.md now. If it does not carry the Operating Contract (roster incl. GLM/M3 + this gate table), that's a WIRING BUG — flag it to Daniel.
+- Re-read CLAUDE.md now. If it does not carry the Operating Contract (roster incl. GLM/M3 + this gate table), that's a WIRING BUG — flag it to the human operator.
 EOF
 exit 0

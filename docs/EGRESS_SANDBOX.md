@@ -5,7 +5,7 @@ machine-specific, so getting it wrong can lock the box out of the network. Treat
 suspenders**, not a prerequisite — the core privacy guarantee is already enforced at the tool layer.
 
 ## What already protects you (no root needed — shipped by install.sh)
-- The worker runs as a **non-root user** (e.g. `actdev` / `alexdev`), not root.
+- The worker runs as a **non-root user** (e.g. `your-vps-user` / `your-vps-user`), not root.
 - `glm_secret_filter.py` **refuses** to send `.env`/keys/tokens/DB URLs (boundary-aware, fail-closed).
 - Provider routing is pinned: GLM `{zdr:true, allow_fallbacks:false, data_collection:deny}`, M3
   `{data_collection:deny, allow_fallbacks:false}`. Self-test with `--zdr-selftest` / `--privacy-selftest`.

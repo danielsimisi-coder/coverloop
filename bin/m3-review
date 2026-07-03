@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Arcade M3 — Daniel explicitly approved 2026-06-26 (NON-full-ZDR).
+# M3 advisory — the operator explicitly approved 2026-06-26 (NON-full-ZDR).
 # Privacy posture: provider {data_collection:deny, allow_fallbacks:false} => routes only to a
 # provider that does NOT train on / retain the data. Verified 200 from Minimax. This is NOT full
 # ZDR (zero transient retention). Secret filter + egress log are mandatory protections.
@@ -20,8 +20,8 @@ PROVIDER = {"data_collection": "deny", "allow_fallbacks": False}
 
 
 SYSTEMS = {
-    "ask": "You are MiniMax M3 as a low-authority advisory software engineering specialist in Daniel's Arcade workflow. Analyze only the text provided. You cannot access shell, files, repo, secrets, or commands. You are advisory only; Codex/Daniel remain the gates. Be concise and evidence-based.",
-    "audit": "You are MiniMax M3 acting as a LOW-AUTHORITY System/Runtime Consistency Auditor in Daniel's Arcade workflow. You are not a builder. You cannot run commands or access files unless pasted. You cannot approve merge, deploy, migrations, prod, env, secrets, or payments. Findings are advisory only. Catch cross-layer deployment/runtime mismatches: app/worker code depending on assets not built everywhere; state/flow inconsistencies; build/deploy ordering; docs/STATE contradictions; assumptions that fail on missing/null data; rollback-order gaps. Return a markdown table with exactly: Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required? Never output only None. If evidence is missing, write needs verification. Do not invent runtime facts.",
+    "ask": "You are MiniMax M3 as a low-authority advisory software engineering specialist in the operator's multi-model workflow. Analyze only the text provided. You cannot access shell, files, repo, secrets, or commands. You are advisory only; Codex/the operator remain the gates. Be concise and evidence-based.",
+    "audit": "You are MiniMax M3 acting as a LOW-AUTHORITY System/Runtime Consistency Auditor in the operator's multi-model workflow. You are not a builder. You cannot run commands or access files unless pasted. You cannot approve merge, deploy, migrations, prod, env, secrets, or payments. Findings are advisory only. Catch cross-layer deployment/runtime mismatches: app/worker code depending on assets not built everywhere; state/flow inconsistencies; build/deploy ordering; docs/STATE contradictions; assumptions that fail on missing/null data; rollback-order gaps. Return a markdown table with exactly: Finding | Severity P0/P1/P2 | Evidence | Why it matters | Required verification | Suggested action | Gate required? Never output only None. If evidence is missing, write needs verification. Do not invent runtime facts.",
 }
 
 def read_key():
@@ -55,7 +55,7 @@ def log_egress(mode, http_status, secret_scan, char_count, payload_sha, extra=No
 def do_request(payload, timeout):
     req = urllib.request.Request(API_URL, data=json.dumps(payload).encode("utf-8"),
         headers={"Authorization": f"Bearer {read_key()}", "Content-Type": "application/json",
-                 "X-Title": "Daniel Arcade M3 (data_collection:deny)"}, method="POST")
+                 "X-Title": "M3 advisory (data_collection:deny)"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -81,8 +81,8 @@ def main():
                           "model": MODEL, "provider_policy": "data_collection_deny (NOT full ZDR)",
                           "secret_patterns": len(SECRET_PATTERNS)}, indent=2)); sys.exit(0)
     if not (os.path.exists(os.path.expanduser("~/.config/openrouter/m3_enabled")) or os.getenv("M3_ENABLED") == "1"):
-        print("M3 is PARKED in this environment (default). Approved only where Daniel opted in. "
-              "To enable: create ~/.config/openrouter/m3_enabled (Daniel-approved environments only).", file=sys.stderr)
+        print("M3 is PARKED in this environment (default). Approved only where the operator opted in. "
+              "To enable: create ~/.config/openrouter/m3_enabled (operator-approved environments only).", file=sys.stderr)
         sys.exit(4)
     if "--privacy-selftest" in args:
         sys.exit(privacy_selftest())

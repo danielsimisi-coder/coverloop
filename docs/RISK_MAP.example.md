@@ -20,7 +20,7 @@ Claude Code does NOT inherit your terminal `~/bin` PATH — record the resolved 
 | copy / comments / CSS polish | L0 | quick check |
 | isolated component / small bug fix | L1 | relevant tests + typecheck |
 | product flow (no money/auth/migration) | L2 | + Codex **mandatory** |
-| money / auth / migration / deploy / RLS / secrets | L3 | + GLM red-team + GLM audit + M3 audit + **Daniel gate** |
+| money / auth / migration / deploy / RLS / secrets | L3 | + GLM red-team + GLM audit + M3 audit + **the operator gate** |
 
 ## Test gate
 - Per-stop `TEST_CMD` (cheap, change-aware): `npx tsc --noEmit`

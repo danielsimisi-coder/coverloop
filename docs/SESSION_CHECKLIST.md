@@ -1,4 +1,4 @@
-# Daniel's Session Checklist — the human routine
+# the operator's Session Checklist — the human routine
 
 What **you** do around every session. Two prompts to open, three things to watch, three to close.
 
@@ -17,7 +17,7 @@ So sessions auto-load the protocol instead of you reminding them:
 **1. Paste Session-Start** (makes it load the protocol + memory):
 ```
 Session Start (v2.4). Before any work, do this and report:
-1. State PROTOCOL_VERSION + the 5-role roster (Claude build · Codex diff-gate · GLM full-ZDR red-team/audit · M3 L3-only 2nd auditor · Daniel gate).
+1. State PROTOCOL_VERSION + the 5-role roster (Claude build · Codex diff-gate · GLM full-ZDR red-team/audit · M3 L3-only 2nd auditor · the operator gate).
 2. Read docs/MEMORY.md and summarize what's relevant to today.
 3. Read the Risk Map + docs/REVIEW_LEDGER.md (skip already-rejected findings).
 4. Resolve the absolute paths of glm-*/m3-* and record them in the Risk Map.

@@ -5,9 +5,9 @@
 
 ## ⚙️ Operating Contract — multi-model loop (READ & ENGAGE FIRST)
 
-This project runs the **Daniel Multi-Model Production Protocol** (current `PROTOCOL_VERSION` lives in `CLAUDE.md` / run `~/bin/protocol-selftest` — this contract stays version-agnostic so protocol bumps never require a project resync). **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
+This project runs the **Coverloop Multi-Model Production Protocol** (current `PROTOCOL_VERSION` lives in `CLAUDE.md` / run `~/bin/protocol-selftest` — this contract stays version-agnostic so protocol bumps never require a project resync). **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
 
-**Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **Daniel** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
+**Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **the operator** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
 **Session Start — run FIRST and report it:**
 1. State the current `PROTOCOL_VERSION` (from `CLAUDE.md`, or run `~/bin/protocol-selftest`) + `CONTRACT_VERSION` v2.5 + the roster above.
@@ -18,7 +18,7 @@ This project runs the **Daniel Multi-Model Production Protocol** (current `PROTO
 
 **Risk → gates** (pick the lightest safe row; on a tie pick the heavier):
 
-| Risk | Tests (primary) | Codex | GLM | M3 | Daniel |
+| Risk | Tests (primary) | Codex | GLM | M3 | the operator |
 |------|-----------------|-------|-----|----|--------|
 | **L0** trivial (copy/CSS) | quick check | – | – | – | – |
 | **L1** normal (isolated fix/refactor) | relevant tests + typecheck | if behavior changed | – | – | – |
@@ -33,6 +33,6 @@ This project runs the **Daniel Multi-Model Production Protocol** (current `PROTO
 - **Two-strikes rule:** if you instruct the human to repeat the same manual workaround twice (host-swapping a link, re-requesting an email, hand-running a blocked query), STOP and fix the root cause.
 - **Background-task hygiene:** don't leave background jobs running once you've read their output — reap them; keep AT MOST ONE dev/preview server and reuse it; clean up before you pause or declare done. (Long sessions piled up 50+ stale tasks.)
 - **Sandbox/env failures** (e.g. Codex bwrap): fix the environment at root — never disable a tool's safety, never self-grant a sandbox/approval bypass.
-- If this Operating Contract is ever missing from the loaded instructions, that is a **wiring bug** — flag it to Daniel.
+- If this Operating Contract is ever missing from the loaded instructions, that is a **wiring bug** — flag it to the human operator.
 
 <!-- ===================== END OPERATING CONTRACT ===================== -->

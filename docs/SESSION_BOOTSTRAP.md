@@ -7,11 +7,11 @@ How to take a new machine, a project, or a fresh Claude/Codex session and get it
 ## 1) Machine (once per machine — Mac / each VPS)
 Installs the CLIs, skills, hooks, and **auto-wires the hooks**.
 
-> **On a VPS / remote box, authenticate `gh` FIRST** — as the OS user the agent runs as (e.g. `su - actdev` → `gh auth login` → GitHub.com → HTTPS → "Login with a web browser" → enter the device code). This **private** repo won't clone otherwise, and gh auth is also what lets that box **open its own PRs**. A box's git *deploy key* usually reaches only its one project repo, so it's `gh` auth — not the deploy key — that unblocks the protocol repo. (Credential lands in `~/.config/gh`, chmod 600; "saved in plain text" is normal on a headless box.)
+> **On a VPS / remote box, authenticate `gh` FIRST** — as the OS user the agent runs as (e.g. `su - your-vps-user` → `gh auth login` → GitHub.com → HTTPS → "Login with a web browser" → enter the device code). This **private** repo won't clone otherwise, and gh auth is also what lets that box **open its own PRs**. A box's git *deploy key* usually reaches only its one project repo, so it's `gh` auth — not the deploy key — that unblocks the protocol repo. (Credential lands in `~/.config/gh`, chmod 600; "saved in plain text" is normal on a headless box.)
 
 ```bash
-gh repo clone danielsimisi-coder/Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-   # (or git clone https://… on an already-authed box)
-cd Daniel-Master-Coding-Loop-CLAUDE-CODEX-GLM-M3-
+gh repo clone danielsimisi-coder/coverloop   # (or git clone https://… on an already-authed box)
+cd coverloop
 ./install.sh                             # <-- RUN THIS YOURSELF (see note below)
 printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
 ~/bin/glm-audit --zdr-selftest          # must print OK (full-ZDR)
@@ -24,7 +24,7 @@ printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/op
 ## 2) Project (once per repo — creates NEW files only, never edits your CLAUDE.md)
 ```bash
 cd /path/to/your-project
-/path/to/Daniel-Master-Coding-Loop-.../init-project.sh
+/path/to/coverloop/init-project.sh
 ```
 `init-project.sh` scaffolds (idempotent, never overwrites): `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md`, **`docs/MEMORY.md`** (portable git-tracked memory), and **`docs/OPERATING_CONTRACT.md`**.
 
@@ -36,7 +36,7 @@ Then **you** do the one manual wiring step it deliberately won't do for you: **i
 ```
 Session Start (v2.5 protocol). Before any work, do this and report it:
 1. Run $HOME/bin/protocol-selftest from the project root and report its output (GREEN or the FAIL lines). It verifies versions, hooks, CLIs, contract, memory, ledger, and the test-gate in one shot.
-2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · Daniel gate).
+2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · the operator gate).
 3. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
 4. Read docs/REVIEW_LEDGER.md; skip findings already marked rejected.
 5. Restate the Task Card + risk tier (L0–L3) before touching code.

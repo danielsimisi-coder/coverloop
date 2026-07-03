@@ -20,4 +20,4 @@ These are flat shell hooks for Claude Code. **`install.sh` installs them to `~/.
 
 > **When hooks take effect (verified live):** the **event** hooks — `PreToolUse`, `Stop`, `PostToolUseFailure` — activate as soon as `install.sh` wires `settings.json`, **mid-session, no restart** (observed: `pre-risky-git.sh` fired on the very next `git push` in the same session it was installed). Only **`SessionStart`** waits for the next session start (and fires again after each compaction) — that's by nature: it runs *at* session start. So after `install.sh`, the gate reminders are live immediately; the standing-rules re-injection shows up on your next fresh session.
 
-> Verify the exact hook event names + schema against YOUR Claude Code version's docs before wiring — schemas change between versions. Wiring is per-machine/per-project and is a Daniel-gated config change.
+> Verify the exact hook event names + schema against YOUR Claude Code version's docs before wiring — schemas change between versions. Wiring is per-machine/per-project and is a operator-gated config change.

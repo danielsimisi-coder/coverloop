@@ -1,4 +1,4 @@
-"""Canonical secret-pattern filter for Daniel's GLM/M3 advisory CLIs.
+"""Canonical secret-pattern filter for the operator's GLM/M3 advisory CLIs.
 Single source of truth — imported by glm-review and m3-review (use scan()).
 Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --version).
 """

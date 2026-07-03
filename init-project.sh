@@ -2,7 +2,7 @@
 set -euo pipefail
 # init-project.sh — scaffold the v2.3 PER-PROJECT artifacts into the current repo.
 # Idempotent: never overwrites an existing file. Run from your project repo root:
-#   /path/to/Daniel-Master-Coding-Loop/init-project.sh
+#   /path/to/coverloop/init-project.sh
 # (Machine-level tooling — bin/skills/hooks + hook wiring — is installed once by install.sh.)
 
 SRC="$(cd -- "$(dirname -- "$0")" && pwd)"   # the protocol repo (template source)

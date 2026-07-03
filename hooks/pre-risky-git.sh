@@ -21,7 +21,7 @@ fi
 
 case "$CMD" in
   *"git push"*|*"git merge"*|*"git rebase"*|*"db push"*|*"supabase"*migration*|*"migrate"*|*"deploy"*)
-    REMINDER="GATE CHECK before this action (v2.4). What risk tier is this change? L3 = money/auth·RLS/migration/schema/deploy/secrets/worker -> requires: tests green, a Codex diff review recorded, GLM red-team+audit, and a Daniel gate BEFORE you push/merge/apply/deploy. L2 -> Codex mandatory. If any required gate is missing for this tier, STOP and obtain it — do not merge/deploy unreviewed. (This is a reminder, not a block.)"
+    REMINDER="GATE CHECK before this action (v2.4). What risk tier is this change? L3 = money/auth·RLS/migration/schema/deploy/secrets/worker -> requires: tests green, a Codex diff review recorded, GLM red-team+audit, and an operator gate BEFORE you push/merge/apply/deploy. L2 -> Codex mandatory. If any required gate is missing for this tier, STOP and obtain it — do not merge/deploy unreviewed. (This is a reminder, not a block.)"
     if command -v jq >/dev/null 2>&1; then
       jq -n --arg c "$REMINDER" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
     else

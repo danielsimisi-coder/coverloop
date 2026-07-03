@@ -106,7 +106,7 @@ def do_request(payload, timeout):
         headers={
             "Authorization": f"Bearer {read_key()}",
             "Content-Type": "application/json",
-            "X-Title": "Daniel GLM Least Privilege CLI v" + CLI_VERSION,
+            "X-Title": "the operator GLM Least Privilege CLI v" + CLI_VERSION,
         },
         method="POST",
     )
