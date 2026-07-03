@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="Coverloop — the multi-agent coding loop that covers every angle">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1224"/>
+      <stop offset="1" stop-color="#141E3A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34E0B4"/>
+      <stop offset="1" stop-color="#22C7E6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22C7E6" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#22C7E6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="340" rx="0" fill="url(#bg)"/>
+  <circle cx="205" cy="170" r="150" fill="url(#glow)"/>
+
+  <!-- spokes: every angle converges to the center -->
+  <g stroke="url(#accent)" stroke-width="2" stroke-opacity="0.30">
+    <line x1="205" y1="170" x2="205" y2="75"/>
+    <line x1="205" y1="170" x2="295" y2="140.6"/>
+    <line x1="205" y1="170" x2="260.8" y2="246.8"/>
+    <line x1="205" y1="170" x2="149.2" y2="246.9"/>
+    <line x1="205" y1="170" x2="114.6" y2="140.6"/>
+  </g>
+
+  <!-- ring track -->
+  <circle cx="205" cy="170" r="95" fill="none" stroke="#2A3556" stroke-width="10"/>
+  <!-- moving arc -->
+  <g transform="rotate(-90 205 170)">
+    <circle cx="205" cy="170" r="95" fill="none" stroke="url(#accent)" stroke-width="10"
+            stroke-linecap="round" stroke-dasharray="360 237"/>
+  </g>
+
+  <!-- agent nodes (a pentagon of reviewers) -->
+  <g stroke="#0B1224" stroke-width="3">
+    <circle cx="295"   cy="140.6" r="12" fill="#AEB9E6"/>
+    <circle cx="260.8" cy="246.8" r="12" fill="#AEB9E6"/>
+    <circle cx="149.2" cy="246.9" r="12" fill="#AEB9E6"/>
+    <circle cx="114.6" cy="140.6" r="12" fill="#AEB9E6"/>
+    <circle cx="205"   cy="75"    r="13" fill="#5BE3B4"/>
+  </g>
+
+  <!-- center: the verified gate -->
+  <circle cx="205" cy="170" r="31" fill="url(#accent)"/>
+  <circle cx="205" cy="170" r="31" fill="none" stroke="#0B1224" stroke-width="3"/>
+  <path d="M190 170 l10 11 l21 -24" fill="none" stroke="#0B1224" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- wordmark -->
+  <text x="405" y="158" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="92" font-weight="800" fill="#F0F3FF" letter-spacing="-2">Coverloop</text>
+  <text x="408" y="205" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        font-size="26" font-weight="500" fill="#9AA6C6">The multi-agent coding loop that covers every angle.</text>
+  <text x="408" y="244" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="19" font-weight="600" fill="#34E0B4">one builds · many review · tests decide · you gate  →  nothing slips through</text>
+</svg>
