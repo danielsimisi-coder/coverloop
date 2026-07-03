@@ -9,6 +9,7 @@ Reusable recipe for the cross-model review step. Use on a FOCUSED diff/snippet o
 
 ## Steps
 1. Stage focused text (`git diff -- <paths>` or a snippet). No `.env`/secrets/whole-repo (the CLIs also hard-block, but check).
+   - **Give reviewers enough CONTEXT, not just the raw diff (v2.5).** A diff-only view is the #1 source of false positives — a model sees a call to `confirmClock()` in the diff, can't see its definition, and reports "undefined function." When a finding could hinge on code outside the hunk (a helper/type/import defined elsewhere), attach the FULL relevant file(s) alongside the diff — still T0–T2 only, still no secrets/whole-repo. Cost is a few tokens; it removes a whole class of phantom P0/P1s.
 2. GLM red-team (full-ZDR):
    `git diff -- src | <glm-bin>/glm-redteam "Find concrete P0/P1 bugs. Be concise."`
 3. M3 second auditor — L2/L3 only; M3 is a reasoning model so raise the budget:
