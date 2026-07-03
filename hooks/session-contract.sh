@@ -18,10 +18,11 @@ in_protocol_project() {
 in_protocol_project || exit 0
 
 cat <<'EOF'
-[v2.5 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
+[v2.6 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
 - Code-review roster: Claude builds · Codex gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · the human operator gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
 - Execution/tests are the PRIMARY gate. No model is an authority — verify every finding against code/tests/runtime.
 - Risk gates: L2 -> Codex MANDATORY. L3 (money/auth·RLS/migration/deploy/secrets/worker) -> Codex + GLM MANDATORY + the operator gate before merge/apply/deploy (M3 optional). Lightest safe row; tie -> heavier.
+- ENFORCE, don't just claim (v2.6): if this repo has .coverloop/, record evidence with 'coverloop attest' and verify with 'coverloop gate' (fail-closed; exit 1 on missing tests/reviews/approval). Wire it as a required CI check. See docs/GATE.md.
 - Privacy: NEVER send .env/secrets/keys/PII (T3) to any model. Reading your own DB is PII-bound — select only non-PII columns; if a read is blocked for PII, reshape the query, don't bounce it to the human.
 - End each meaningful task with reflect-and-save -> append a durable lesson to git-tracked docs/MEMORY.md and commit it.
 - Two-strikes: if you tell the human to repeat the same manual workaround twice, STOP and fix the root cause.

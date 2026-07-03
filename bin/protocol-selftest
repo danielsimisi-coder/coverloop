@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# protocol-selftest — ONE command that verifies the whole v2.5 wiring (machine + project).
+# protocol-selftest — ONE command that verifies the whole wiring (machine + project).
 # Mechanizes the §12 install checklist and catches version drift. Read-only; never fixes.
 # Run anywhere for the machine checks; run from a project root to add the project checks.
 # Exit 0 = no FAIL lines (WARNs allowed). Exit 1 = at least one FAIL.
@@ -32,6 +32,7 @@ else
   fail "glm CLIs missing from ~/bin (run install.sh)"
 fi
 if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this user (data_collection:deny, L3-only)"; else ok "M3: parked for this user (fail-closed)"; fi
+if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.6 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
 
 # ---------- machine: hooks installed + wired ----------
 HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
@@ -91,6 +92,11 @@ if [ -f "$PROJ/CLAUDE.md" ] && [ "$PROJ" != "$SRC" ]; then
       *) ok "loop.conf gate: $TC (verify it's cheap)" ;;
     esac
   else warn "no .claude/loop.conf — test-green Stop gate dormant (opt-in)"; fi
+  if [ -f "$PROJ/.coverloop/config.json" ]; then
+    ok "coverloop gate initialized (.coverloop/) — enforce with 'coverloop gate' / required CI check"
+  else
+    warn "coverloop gate not initialized here (run 'coverloop init') — optional, enables fail-closed evidence"
+  fi
   D=$(git -C "$PROJ" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
   ok "project: $PROJ (branch $D)"
 fi
