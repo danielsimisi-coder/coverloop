@@ -1,28 +1,98 @@
 <div align="center">
 
-<img src="assets/coverloop-banner.svg" alt="Coverloop — the multi-agent coding loop that covers every angle" width="100%">
+<img src="assets/coverloop-banner.svg" alt="Coverloop — cover every angle before you ship" width="100%">
 
-<br/>
+<h3>Never let the model that wrote the code be the one that approves it.</h3>
 
-**One model builds. Independent AI models review it from every angle. Tests decide. You hold the final gate.**
-
-Ship AI-written code at full speed — without letting a single bug reach a paying customer.
+**AI writes your production code in minutes — and can ship a production outage just as fast.**
+Coverloop is the **safety layer** that lets founders keep AI's speed without betting the company on it.
 
 <br/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
-[![Protocol](https://img.shields.io/badge/protocol-v2.5-7C7CFF?style=flat-square)](CHANGELOG.md)
+[![For AI-coding founders](https://img.shields.io/badge/for-AI--coding%20founders-7C7CFF?style=flat-square)](#who-its-for)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
-[![Reviewers](https://img.shields.io/badge/reviewers-Codex%20·%20GLM%20·%20M3-22C7E6?style=flat-square)](#the-loop-in-30-seconds)
+[![Reviewers](https://img.shields.io/badge/reviewers-Codex%20·%20GLM%20·%20M3-22C7E6?style=flat-square)](#why-it-works)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-34E0B4?style=flat-square)](#contributing)
 
-[**Quickstart**](#-quickstart) · [**How it works**](#how-it-works) · [**Why**](#why-this-exists) · [**Philosophy**](#design-philosophy)
+[**Install**](#-install-in-60-seconds) · [**See it catch a bug**](#-watch-it-catch-a-bug) · [**Why it works**](#why-it-works) · [**The clever bits**](#-the-clever-bits)
 
 </div>
 
 ---
 
-## The loop in 30 seconds
+## The 3am question
+
+> *"Did the AI just open a security hole, drop a column, or break checkout — and I won't find out until a customer does?"*
+
+You shipped fast because AI wrote most of it. But **one model reviewing its own work is a model grading its own exam.** Coverloop makes a change earn its way to production: one model builds it, **independent** models attack it from every angle, your tests get the deciding vote, and **you** hold the gate on anything that can hurt.
+
+|  | 😬 Without Coverloop | ✅ With Coverloop |
+|---|---|---|
+| **Path to prod** | `AI writes code → deploy → 🤞 hope` | `AI writes → Codex → GLM → tests → you → deploy` |
+| **Who reviews** | the model that wrote it | independent models + your tests + you |
+| **You find bugs** | from an angry customer | before merge |
+| **Secrets** | pasted into calls by accident | blocked at the tool layer |
+| **At 3am** | you're awake | you're asleep |
+
+---
+
+## ⚡ Install in 60 seconds
+
+```bash
+git clone https://github.com/danielsimisi-coder/coverloop.git
+cd coverloop && ./install.sh
+```
+
+✅ **Done.** Add your model key, then verify everything in one command:
+
+```bash
+printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
+~/bin/protocol-selftest
+```
+
+> **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key (a few ¢/review) · [Codex CLI](https://developers.openai.com/codex/cli) recommended. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
+> Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
+
+---
+
+## 🎬 Watch it catch a bug
+
+You ask for a routine change. It touches the database → Coverloop treats it as **dangerous (L3)** and the full loop kicks in:
+
+> **You:** *"Rename the `status` column to `state` and migrate the data."*
+>
+> **🤖 Builder** writes a migration — but it **drops** the old column instead of renaming it.
+>
+> **🔍 Codex:** *"Wait — this migration is destructive and has no rollback."*
+>
+> **🧠 GLM:** *"That rollback is impossible. Once this runs, the data is gone."*
+>
+> **✅ Tests:** ❌ the migration test fails in a prod-like run.
+>
+> **🛑 Coverloop:** stops the loop and asks **you** to approve before anything touches the database.
+>
+> **You:** never even saw the bug — **because it never reached you.**
+
+That's the whole product in one scene: **every bug has to find a gap. Coverloop covers every gap.**
+
+---
+
+## 🐛 Real bugs it caught — in its own code
+
+Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — here are three:
+
+| The bug | Who caught it | What it would've done |
+|---|---|---|
+| The secret-filter's `sk-` pattern also matched innocent words like `task-start` and `risk-based` | **Codex** (diff review) | Flooded you with false "secret detected!" alarms until you stopped trusting it |
+| A model call **sent your data before** the privacy guard's failure-check ran | **Codex** (diff review) | A payload could leave your machine even when it should've been blocked |
+| An exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | Sensitive code quietly routed to a non-ZDR endpoint without you knowing |
+
+*(Have Coverloop caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
+
+---
+
+## Why it works
 
 ```mermaid
 flowchart TD
@@ -44,273 +114,128 @@ flowchart TD
     classDef ship fill:#2a2440,stroke:#F2C94C,color:#ffffff
 ```
 
-**No model is an authority.** Every finding is a *claim* — verified against real code, tests, and runtime before it's allowed to block anything. A bug has to slip past **every reviewer *and* your test suite** to survive. That's the whole idea: cover every angle, so nothing falls through the cracks.
+**No model is an authority.** Every finding is a *claim* — verified against real code, tests, and runtime before it can block anything. Two models agreeing can just mean two models hallucinating the same thing, so **execution beats opinion**: when a test can settle it, you run the test.
 
----
-
-## ✅ Before you start — what you need
-
-Coverloop is a **safety layer on top of the AI coding tools you already use** — not a standalone app, and not something that needs a server.
-
-> **It runs in any normal Mac or Linux dev setup that uses Claude Code — no VPS, no server, no special environment.** On Windows, run it inside [WSL](https://learn.microsoft.com/windows/wsl/install).
-
-| You need | Why | Cost |
-|---|---|---|
-| 🖥️ **Mac or Linux** (Windows → WSL) | the helper scripts are bash | free |
-| 🤖 **[Claude Code](https://claude.com/claude-code)** | Coverloop runs *inside* it (uses its `CLAUDE.md` + hooks) | paid tool |
-| 🐍 **Python 3 + git** | to run the helper scripts | free (usually pre-installed) |
-| 🔑 **An [OpenRouter](https://openrouter.ai) API key** | powers the reviewer models (GLM, M3) — **a few cents per review** | pay-as-you-go |
-| 🧪 **[Codex CLI](https://developers.openai.com/codex/cli)** *(recommended)* | the independent diff-reviewer in the loop | paid tool |
-
-**In one line:** if you already code with Claude Code and have an OpenRouter key, you're ~2 minutes from running it. New to AI coding tools? Get comfortable with one first, then add Coverloop.
-
----
-
-## Why this exists
-
-AI writes code fast. The problem is everything *after* the code:
-
-- 🕳️ **One reviewer misses bugs.** A single model — even a great one — rubber-stamps its own blind spots. Real defects hide in the gaps no single reviewer checks.
-- 🧠 **Long sessions forget the rules.** As the context window fills and compacts, the agent quietly drops the standards you set an hour ago and starts "vibing" past your guardrails.
-- 🔓 **Privacy leaks by accident.** Secrets, `.env` files, and customer data get pasted into model calls with nobody watching.
-- ⚠️ **"It passed" ≠ "it's correct, migrated, deployed, and safe."**
-
-Coverloop turns AI-assisted development into a **disciplined, gated pipeline**: a builder proposes, independent reviewers attack from different angles, your tests get the deciding vote, and *you* hold the gate on anything risky. A change ships only when they agree.
-
-It's **not a framework you install into your app.** It's a protocol + a handful of small scripts that drop into any repo and run inside the AI coding tools you already use.
-
-### Single model vs. Coverloop
-
-| | 🤖 One AI, one pass | 🔁 Coverloop |
-|---|---|---|
-| **Review** | The model checks its own work | Independent models, each a different angle |
-| **Blind spots** | Whatever that model misses, ships | A bug must beat *all* reviewers + tests |
-| **Source of truth** | The model's opinion | Tests & runtime — opinion is just a claim |
-| **Long sessions** | Silently drifts off the rules | Rules re-injected every session & compaction |
-| **Secrets** | "Please be careful" | Blocked at the tool layer, before any send |
-| **Risky changes** | Same treatment as a typo | Escalated to a human gate |
-| **Over time** | Repeats the same mistakes | Saves lessons to memory that travels with the repo |
-
----
-
-## 🎬 What it looks like in practice
-
-You ask your AI to add a **"cancel subscription"** button. It touches money → Coverloop treats it as **L3 (dangerous)**, so the full loop kicks in:
-
-1. 🤖 **The builder** writes the code.
-2. 🔍 **Codex** reviews the diff line-by-line — spots that the refund fires *before* the database transaction commits.
-3. 🧠 **GLM** red-teams the design — flags that a failed refund would leave the user "cancelled but still charged."
-4. ✅ **Tests run** — one fails on that exact race condition. Red → back to the builder to fix.
-5. 🟢 Fixed, green, reviewers satisfied → Coverloop **stops and asks *you* to approve the merge** (money always hits the human gate).
-
-You ship it knowing three independent checks, your test suite, and you **all agreed** — instead of finding out from an angry customer.
-
----
-
-## What you get
-
-| | |
-|---|---|
-| 🧩 **Multi-model review** | A **builder** proposes; independent **reviewers** (line-level + architecture red-team + a second auditor) attack from different angles. Verified against code and tests — never a rubber stamp. |
-| ✅ **Execution is the primary gate** | Tests and typecheck outrank any model opinion. When a test can settle a question, you run the test instead of stacking more LLM guesses. |
-| 🧠 **It stops forgetting** | The rules live **inlined in the auto-loaded instructions** (they survive context compaction) and a `SessionStart` hook re-injects them every session and after every compaction. No more mid-session drift. |
-| 🔒 **Privacy at the tool layer** | Secrets never leave — enforced by a hard filter + zero-data-retention routing + an append-only egress log. Not by prompt-begging. |
-| ♻️ **Self-improving** | Durable lessons are saved to **git-tracked memory** that travels with the repo, so every new session — on any machine — starts smarter than the last. |
-| ⚖️ **Right-sized, not bloated** | Risk tiers (L0–L3) decide how much review a change earns. A typo stays fast; money/auth/migrations get the full treatment. The protocol actively **subtracts** machinery that isn't earning its keep. |
-| 🩺 **One-command health check** | `protocol-selftest` verifies the whole wiring — versions, hooks, tools, privacy routing, memory — in a single command. |
-| 🚀 **Turnkey** | `install.sh` (machine) + `init-project.sh` (repo) and you're wired. Built and hardened on live production apps, not a whiteboard. |
-
----
-
-## Risk tiers decide the rigor
-
-Not every change deserves a committee. Coverloop sizes the review to the blast radius:
+**Right-sized, never bloated.** A typo doesn't get a committee. Coverloop scales the review to the blast radius:
 
 | Risk | Example | What it gets |
 |:---:|---|---|
-| **L0** · trivial | copy, comments, CSS | quick check |
-| **L1** · normal | isolated fix, small refactor | relevant tests + typecheck |
-| **L2** · product flow | onboarding, admin UX, a11y | ➕ a mandatory independent diff review |
-| **L3** · dangerous | money, auth, migrations, deploy, secrets | full suite + red-team + 2nd auditor + **your explicit gate** |
-
-> Default to the lightest safe row. When unsure between two, pick the heavier one.
-
----
-
-## 🚀 Quickstart
-
-**1 — Once per machine.** Installs the helper CLIs, skills, and hooks, and auto-wires them:
-
-```bash
-git clone https://github.com/danielsimisi-coder/coverloop.git
-cd coverloop
-./install.sh
-
-# add your model-provider key to the ONE source of truth (never your shell rc):
-printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
-
-~/bin/protocol-selftest      # verify the whole wiring in one command
-```
-
-**2 — Once per project.** Scaffolds the per-repo files (creates new files only — never touches your existing `CLAUDE.md`):
-
-```bash
-cd /path/to/your-project
-/path/to/coverloop/init-project.sh
-```
-
-**3 — The one manual step that makes it stick.** Inline `docs/OPERATING_CONTRACT.md` at the top of your project's `CLAUDE.md`. That's what loads the loop into the agent's context and keeps it there.
-
-📖 Full copy-paste walkthrough (machine → project → every session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
-
----
-
-## How it works
-
-<details>
-<summary><b>🧠 Anti-drift — why it doesn't forget the rules</b></summary>
-
-<br/>
-
-Long AI sessions "forget" instructions for two mechanical reasons: automatic **context compaction** summarizes away anything read only once, and attention decays as the window fills. Coverloop fixes both:
-
-- The **Operating Contract** (roster + risk gates + session-start ritual) is **inlined in the auto-loaded `CLAUDE.md`**, which the tool re-reads after every compaction — a `docs/` side-file read once does *not* survive.
-- A `SessionStart` hook re-injects the standing rules as fresh, high-attention context at every start **and after every compaction**.
-- A `PreToolUse` hook re-states the gate checklist right before `git push` / `merge` / migration / deploy.
-
-</details>
-
-<details>
-<summary><b>🔒 Privacy — enforced by tools, not by prompting</b></summary>
-
-<br/>
-
-- **Tiered egress:** public → proprietary-non-secret → sensitive identifiers → **secrets/PII (never sent, no exceptions).**
-- The most sensitive packets route **only** to a verified zero-data-retention endpoint; a hard, boundary-aware secret filter blocks `.env` / keys / tokens / DB URLs *before* any send; an append-only **egress log** records a hash of every payload (never the body) for audit.
-- A **slopsquatting gate** (`dep-check`) blocks hallucinated / typosquatted dependencies before they're ever installed.
-
-</details>
-
-<details>
-<summary><b>♻️ Self-improving memory — the way a good engineer does it</b></summary>
-
-<br/>
-
-The loop improves by keeping **notes** and **reusable recipes** — not by retraining a model:
-
-- **Portable memory:** durable lessons live in a **git-tracked `docs/MEMORY.md`** that travels with the repo, so a lesson learned on one machine reaches every session on every machine (kept capped and consolidated, not hoarded).
-- **Skills:** recurring workflows (the multi-model review, reflect-and-save) are captured as reusable `SKILL.md` recipes.
-- **Measurement:** every review logs one line to a ledger. Periodically you read it and **subtract** any reviewer or gate that isn't catching real bugs. "Prove your keep" is mechanical, not a hunch.
-
-</details>
-
-<details>
-<summary><b>🔢 Versioning — decoupled so upgrades are free</b></summary>
-
-<br/>
-
-`PROTOCOL_VERSION` (the doc + tooling) bumps freely; `CONTRACT_VERSION` (the block inlined in each project) bumps only when the contract's *content* changes. So a docs/tooling release costs your projects **zero resyncs** — machines just `git pull && ./install.sh`.
-
-</details>
+| **L0** trivial | copy, CSS | quick check |
+| **L1** normal | isolated fix | tests + typecheck |
+| **L2** product flow | onboarding, admin UX | ➕ mandatory independent review |
+| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + red-team + 2nd auditor + **your gate** |
 
 ---
 
 ## 🧠 The clever bits
 
-The non-obvious decisions — each one born from a real failure — that make Coverloop actually work instead of just sounding good:
+The non-obvious decisions — each born from a real failure — that make Coverloop actually work instead of just sounding good:
 
-- 🎭 **Agreement isn't proof.** Two models agreeing can just mean two models hallucinating the *same* thing. Coverloop treats agreement as a **triage hint, never a verdict** — every finding is checked against real code and tests.
-- 📍 **Every finding must cite `file:line`.** A vague "this looks risky" with no evidence is discarded as noise. This kills the over-reporting that makes solo AI reviewers exhausting to trust.
-- 📒 **A false-positive ledger.** Once a finding is judged wrong, it's logged — and **never re-raised**. Your reviewers stop re-litigating points you already settled.
-- ✂️ **"Split, don't grind."** If the same real issues keep resurfacing past a round cap, that's a signal the change is **too big** — Coverloop tells you to split the PR instead of looping on it forever.
-- 🎨 **Cosmetic carve-out.** A fix that only touches comments/strings/docs (tests provably unaffected) is noted, *not* pushed through a fresh, paid review round. Saves time and money on changes that can't break anything.
-- 🧬 **Batch-merge integration gate.** After you merge a stack of PRs, the combined `main` is a state **no single PR's CI ever tested** — so it runs one cumulative review on the union. Catches bugs that only appear *after* everything's merged.
+- 🎭 **Agreement isn't proof.** Two models agreeing can mean two models hallucinating the *same* thing — so agreement is a triage hint, never a verdict. Findings are checked against real code and tests.
+- 📍 **Every finding must cite `file:line`.** Vague "this looks risky" with no evidence is discarded as noise — killing the over-reporting that makes solo AI reviewers exhausting.
+- 📒 **A false-positive ledger.** Once a finding is judged wrong, it's logged and **never re-raised**. Reviewers stop re-litigating settled points.
+- ✂️ **"Split, don't grind."** If the same real issues keep resurfacing past a round cap, that's a signal the change is **too big** — it tells you to split the PR instead of looping forever.
+- 🎨 **Cosmetic carve-out.** A fix touching only comments/strings/docs (tests provably unaffected) is noted, not pushed through a fresh paid review round.
+- 🧬 **Batch-merge integration gate.** After you merge a stack of PRs, the combined `main` is a state **no single PR's CI ever tested** — so it runs one cumulative review on the union.
 - ✌️ **Two-strikes rule.** If the AI makes you do the same manual workaround twice, it must **stop and fix the root cause** — no death by a thousand papercuts.
-- 🔐 **The agent can't weaken its own safety.** If a sandbox blocks it, it fixes the environment at the root — it's *forbidden* from granting itself a bypass. Safety you can trust precisely because the agent can't switch it off.
-- 🛡️ **Even reading your own database is privacy-bound.** It pulls only the non-personal columns it needs — your customers' data doesn't get swept into a model call "just because it could."
-- 💸 **Cheap work goes to cheap models.** Bulk reads, sweeps, and formatting route to cheaper models; the expensive frontier model is reserved for the hard design and debugging. Lower bill, same quality.
-- 🧩 **Reviewers get full context, not just the diff.** The #1 cause of false alarms is a reviewer judging a 5-line diff with no surrounding code. Coverloop feeds cross-file context so reviewers stop crying wolf.
-- 🔗 **One source of truth, zero drift.** `AGENTS.md` is a *symlink* to `CLAUDE.md`, so Claude Code and Codex read the exact same rules — they can never fall out of sync.
-- 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — you get a provable record of what left your machine without the log itself ever containing your code or secrets.
-- 🆓 **Upgrades are free.** A versioning split means improving the protocol never forces your projects to re-sync — tooling updates cost your repos zero changes.
+- 🔐 **The agent can't weaken its own safety.** If a sandbox blocks it, it fixes the environment at the root — it's *forbidden* from granting itself a bypass.
+- 🛡️ **Even reading your own database is privacy-bound.** It pulls only the non-personal columns it needs — your customers' data doesn't get swept into a model call.
+- 💸 **Cheap work goes to cheap models.** Bulk reads and sweeps route to cheaper models; the frontier model is saved for the hard parts. Lower bill, same quality.
+- 🧩 **Reviewers get full context, not just the diff** — the #1 cause of false alarms is a reviewer judging 5 lines with no surrounding code.
+- 🔗 **One source of truth, zero drift.** `AGENTS.md` is a symlink to `CLAUDE.md`, so every tool reads the exact same rules.
+- 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — a provable record of what left your machine, without the log ever containing your code or secrets.
+- 🆓 **Upgrades are free.** A versioning split means improving Coverloop never forces your projects to re-sync.
+
+---
+
+## ♻️ It stops forgetting — and gets smarter
+
+- **Anti-drift:** the rules are inlined in the auto-loaded `CLAUDE.md` and re-injected by a hook **after every context compaction** — so a long session never quietly abandons your standards.
+- **Self-improving memory:** durable lessons are saved to **git-tracked memory** that travels with the repo, so every new session — on any machine — starts smarter than the last.
+- **Privacy at the tool layer:** secrets, `.env`, and PII are blocked *before* any send; the most sensitive reviews route only to a zero-data-retention endpoint; a slopsquatting gate blocks hallucinated dependencies.
+
+<details>
+<summary><b>See the mechanics (anti-drift, privacy, memory, versioning)</b></summary>
+
+<br/>
+
+**Anti-drift.** Long sessions "forget" instructions because automatic **context compaction** summarizes away anything read once, and attention decays as the window fills. Coverloop inlines the Operating Contract in the auto-loaded `CLAUDE.md` (re-read after every compaction), a `SessionStart` hook re-injects the standing rules at every start and after every compaction, and a `PreToolUse` hook re-states the gate checklist right before `git push` / `merge` / migration / deploy.
+
+**Privacy.** Tiered egress (public → proprietary → sensitive → secrets/PII, never sent). The most sensitive packets route only to a verified zero-data-retention endpoint; a boundary-aware filter blocks `.env`/keys/tokens/DB URLs before any send; an append-only egress log records a hash of every payload (never the body).
+
+**Self-improving memory.** Durable lessons live in a git-tracked `docs/MEMORY.md` (capped and consolidated, not hoarded); recurring workflows are captured as reusable `SKILL.md` recipes; every review logs one line to a ledger so you can **subtract** any reviewer that isn't catching real bugs.
+
+**Versioning.** `PROTOCOL_VERSION` (doc + tooling) bumps freely; `CONTRACT_VERSION` (the block in each project) bumps only when its content changes — so tooling updates cost your repos zero resyncs.
+
+</details>
 
 ---
 
 ## 📦 What's in the box
 
 ```
-CLAUDE.md                 the canonical protocol (drop into any project root)
-docs/
-  OPERATING_CONTRACT.md   the block you inline into a project's CLAUDE.md
-  SESSION_BOOTSTRAP.md    what to install + what to paste, in order
-  MEMORY.example.md       template for git-tracked portable memory
-  RISK_MAP.example.md     per-project risk map (envs, fixtures, helper paths)
-  REVIEW_LEDGER.md        false-positive ledger + review log
-bin/
-  protocol-selftest       one-command wiring + drift check
-  glm-* / m3-*            privacy-routed, secret-filtered advisory reviewers
-  dep-check               slopsquatting / hallucinated-dependency gate
-hooks/                    SessionStart re-injection, PreToolUse gate reminder,
-                          test-green Stop gate, failure auto-capture
-skills/                   reusable recipes (multi-model review, reflect-and-save)
-install.sh                machine setup (auto-wires hooks)
-init-project.sh           per-repo scaffolding
-CHANGELOG.md              the story of how it got here
+CLAUDE.md                 the canonical rules (drop into any project root)
+docs/OPERATING_CONTRACT.md the block you inline into a project's CLAUDE.md
+docs/SESSION_BOOTSTRAP.md   what to install + what to paste, in order
+docs/MEMORY.example.md      template for git-tracked portable memory
+docs/REVIEW_LEDGER.md       false-positive ledger + review log
+bin/protocol-selftest       one-command wiring + drift check
+bin/glm-* / m3-*            privacy-routed, secret-filtered reviewers
+bin/dep-check               slopsquatting / hallucinated-dependency gate
+hooks/                      SessionStart re-injection, pre-push gate, test gate
+skills/                     reusable recipes (multi-model review, reflect-and-save)
+install.sh · init-project.sh  machine + per-repo setup
+CHANGELOG.md                the story of how it got here
 ```
 
 ---
 
 ## Who it's for
 
-- 🧑‍🚀 **Solo founders & indie devs** shipping real products with AI, who can't afford a bug in billing or auth — but also can't afford enterprise ceremony.
+- 🧑‍🚀 **Solo founders shipping real products with AI** — who can't afford a bug in billing or auth, but also can't afford enterprise ceremony.
 - 🎨 **"Vibe coders"** who want the speed of AI coding **without** the "it looked fine, then prod broke" tax.
 - 🔧 Anyone running **more than one AI coding tool** who wants them to check each other instead of each rubber-stamping its own work.
 
 ## Design philosophy
 
 > **No model is an authority.** Findings are claims; code, tests, and runtime are the truth.
->
 > **Execution beats opinion.** Run the test instead of stacking another reviewer.
->
-> **Subtract, don't add.** The dominant risk at this scale is over-engineering. New machinery has to earn its keep — and gets removed when it doesn't.
->
+> **Subtract, don't add.** New machinery has to earn its keep — and gets removed when it doesn't.
 > **Privacy is a property of the tools, not the prompt.**
->
-> **Every rule here was born from a real failure**, not a whiteboard — that's what [`CHANGELOG.md`](CHANGELOG.md) is.
+> **Every rule was born from a real failure**, not a whiteboard — that's what [`CHANGELOG.md`](CHANGELOG.md) is.
 
 ---
 
 ## 🙋 FAQ
 
-<details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one — it's never a requirement.</details>
+<details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one.</details>
 
-<details><summary><b>Does it cost money to run?</b></summary><br/>The tooling is free and open source. The reviewer models (GLM, M3) run through OpenRouter, which is pay-as-you-go — usually a few cents per review. You decide which change tiers trigger the paid reviewers; trivial changes (L0/L1) don't call them at all.</details>
+<details><summary><b>Does it cost money to run?</b></summary><br/>The tooling is free and open source. The reviewer models run through OpenRouter (pay-as-you-go, usually a few cents per review). You decide which change tiers trigger the paid reviewers — trivial changes don't call them at all.</details>
 
-<details><summary><b>Which AI coding tool does it work with?</b></summary><br/>It's built for <b>Claude Code</b> (it relies on the auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
+<details><summary><b>Which AI coding tool does it work with?</b></summary><br/>Built for <b>Claude Code</b> (auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
 
-<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Yes — it's a core design goal. Secrets, <code>.env</code> files, and personal data are blocked at the tool layer <i>before</i> any model call, and the most sensitive reviews route only to a zero-data-retention endpoint. See the Privacy section under <a href="#how-it-works">How it works</a>.</details>
+<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Yes — it's a core design goal. Secrets, <code>.env</code> files, and personal data are blocked at the tool layer <i>before</i> any model call, and the most sensitive reviews route only to a zero-data-retention endpoint.</details>
 
-<details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap GLM/M3 for other models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
+<details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
 
-<details><summary><b>Does it work on Windows?</b></summary><br/>Run it inside <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> (Windows Subsystem for Linux) — the scripts are bash.</details>
-
-<details><summary><b>I'm new to this — is it for me?</b></summary><br/>Coverloop is for people who already code with AI tools and want to ship safely. If you've never used Claude Code or Codex, get comfortable with one of those first, then add Coverloop on top.</details>
+<details><summary><b>Windows?</b></summary><br/>Run it inside <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> — the scripts are bash.</details>
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome — especially new reviewer adapters and risk-map templates for other stacks. Fork it, swap the roster for your own models, and tell me what broke. Attribution appreciated. Licensed under [MIT](LICENSE).
+Issues and PRs welcome — especially new reviewer adapters and risk-map templates for other stacks, and **real bugs Coverloop caught for you** (I'll feature them). Fork it, swap the roster for your own models, and tell me what broke. Licensed under [MIT](LICENSE).
 
 <div align="center">
 <br/>
 
+### Cover every angle before you ship.
+
 *Coverloop started as one founder's answer to a simple question:*
 **how do I let AI write most of my code without letting a single bug reach a paying customer?**
-*This is that answer — hardened over real shipping days.*
 
 <br/>
 
-⭐ **If this is useful, star it** — it helps other builders find it.
+⭐ **If that question keeps you up too, star it** — it helps other builders sleep.
 
 </div>
