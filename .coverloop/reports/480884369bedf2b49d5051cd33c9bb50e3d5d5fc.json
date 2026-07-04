@@ -1,0 +1,25 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "480884369bedf2b49d5051cd33c9bb50e3d5d5fc",
+  "risk_tier": "L2",
+  "created_at": "2026-07-04T16:28:32Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-07-04T16:28:48Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-07-04T16:28:48Z",
+    "source": "captured",
+    "command": "codex exec --sandbox read-only -C . 'Confirm the captured-evidence feature in HEAD has no fail-open in coverloop gate and no verdict clobber. One word: CLEAN or BUGS.' </dev/null 2>&1 | tail -8",
+    "exit_code": 0,
+    "output_file": ".coverloop/reports/480884369bedf2b49d5051cd33c9bb50e3d5d5fc.codex.log",
+    "output_sha256": "22c3b8c7723619aa59609bd17a0ed5e44e4ea4bec9de3a3d423f5ea68c2fc3fe",
+    "output_lines": 8,
+    "ran_at": "2026-07-04T16:29:56Z"
+  },
+  "glm": null,
+  "human_gate": null
+}

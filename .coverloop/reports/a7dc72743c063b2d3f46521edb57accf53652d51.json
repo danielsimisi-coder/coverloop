@@ -1,0 +1,25 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "a7dc72743c063b2d3f46521edb57accf53652d51",
+  "risk_tier": "L2",
+  "created_at": "2026-07-04T16:31:58Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-07-04T16:35:40Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-07-04T16:35:40Z",
+    "source": "captured",
+    "command": "codex exec --sandbox read-only -C . 'Security review of the captured-evidence feature in bin/coverloop at HEAD (git show HEAD). Answer 3 questions, ONE line each WITH file:line evidence: (1) Can attest --codex-run make coverloop gate PASS an L2/L3 without a real pass verdict and 0 findings? (2) Do new .coverloop/reports/<sha>.<name>.log files break only_evidence_changed() or docs_only()? (3) Does entry.update(capture_run(...)) clobber the caller status/findings_open? Then state CLEAN if no real bug.' </dev/null 2>&1 | tail -20",
+    "exit_code": 0,
+    "output_file": ".coverloop/reports/a7dc72743c063b2d3f46521edb57accf53652d51.codex.log",
+    "output_sha256": "8ed46e9fbafb4b448469ca84b5148ce2609720ff7ef138cf3e1ca47084363f12",
+    "output_lines": 20,
+    "ran_at": "2026-07-04T16:37:15Z"
+  },
+  "glm": null,
+  "human_gate": null
+}

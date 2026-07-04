@@ -1,0 +1,8 @@
+README.md:78:> **You:** *"Rename the `status` column to `state` and migrate the data."*
+README.md:182:**Self-improving memory.** Durable lessons live in a git-tracked `docs/MEMORY.md` (capped and consolidated, not hoarded); recurring workflows are captured as reusable `SKILL.md` recipes; every review logs one line to a ledger so you can **subtract** any reviewer that isn't catching real bugs.
+
+codex
+BUGS
+tokens used
+78,334
+BUGS
