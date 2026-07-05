@@ -32,7 +32,7 @@ else
   fail "glm CLIs missing from ~/bin (run install.sh)"
 fi
 if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this user (data_collection:deny, L3-only)"; else ok "M3: parked for this user (fail-closed)"; fi
-if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.6 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
+if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.6.2 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
 
 # ---------- machine: hooks installed + wired ----------
 HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
