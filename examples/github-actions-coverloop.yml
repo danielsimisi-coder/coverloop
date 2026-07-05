@@ -18,12 +18,13 @@ jobs:
         run: |
           # Pin to a RELEASE TAG, never main — don't run live code from an
           # external branch in your CI. Bump the tag deliberately.
-          COVERLOOP_REF=v2.6.2
+          COVERLOOP_REF=v2.7
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
-          # --tier L2   : a RISK FLOOR so a PR can't dodge review by declaring
-          #               a lower tier (L2 = every PR needs an independent review).
+          # --min-tier L2 : a true RISK FLOOR — the effective tier is
+          #                 max(this, the report's self-declared tier), so it can
+          #                 only RAISE requirements, never downgrade an L3 change.
           # --require-captured : reject bare "codex pass" claims — demand a
-          #               committed, hashed reviewer transcript (attest --codex-run).
-          ./coverloop gate --ci --tier L2 --require-captured --base "origin/${{ github.base_ref }}"
+          #                 committed, hashed reviewer transcript (attest --codex-run).
+          ./coverloop gate --ci --min-tier L2 --require-captured --base "origin/${{ github.base_ref }}"

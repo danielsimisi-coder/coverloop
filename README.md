@@ -67,7 +67,7 @@ coverloop gate                                  # exit 0 only if the tier's evid
 
 Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — the gate then labels each verdict `[captured <hash>]` vs `[self-attested]`, so a reviewer can tell a real run from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), pinned to a release tag) and an unreviewed change *physically cannot merge*.
 
-> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — use `--codex-run` to back it with a hashed transcript, and `gate --require-captured` to make CI **reject** anything less. The risk tier is self-declared unless CI pins a floor (`--tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — use `--codex-run` to back it with a hashed transcript, and `gate --require-captured` to make CI **reject** anything less. The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
 
@@ -204,7 +204,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own test suite (39 cases, stdlib only)
+tests/                      the gate's own test suite (51 cases, stdlib only)
 CHANGELOG.md                the story of how it got here
 ```
 

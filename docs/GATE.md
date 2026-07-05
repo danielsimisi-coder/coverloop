@@ -14,7 +14,7 @@ files and git metadata.
 ```bash
 coverloop init                      # once per repo: .coverloop/config.json + reports/
 coverloop attest [...]              # record evidence for the current HEAD commit
-coverloop gate  [--tier L0..L3]     # verify; exit 0 = pass, 1 = missing/failing evidence
+coverloop gate  [--min-tier L0..L3]     # verify; exit 0 = pass, 1 = missing/failing evidence
 ```
 
 ## Recording evidence (`attest`)
@@ -43,10 +43,17 @@ CI policy, can tell them apart. `attest --tests` likewise actually runs the
 `test_command` (same trust model as `package.json` scripts) and records the
 real result, failures included.
 
+**Transcripts are redacted before they touch git.** Before a captured log (or
+the reviewer command string) is written, `capture_run` runs it through the
+shared secret filter and replaces key/token/DB-credential/private-key **values**
+with `[REDACTED:…]`. A **failed** reviewer run (nonzero exit — expired auth, a
+hang) is withheld entirely rather than committing its error/env dump. So the
+evidence a privacy tool commits to your history never carries a secret.
+
 **Enforce captured evidence in CI.** `coverloop gate --require-captured` makes
 L2/L3 **fail** on any reviewer verdict that is merely self-attested — the
 report must carry a captured transcript for Codex (L2+) and GLM (L3). Pair it
-with the risk floor (`--tier L2 --require-captured`) and a bare "codex pass"
+with the risk floor (`--min-tier L2 --require-captured`) and a bare "codex pass"
 no longer merges; only a committed, hashed reviewer run does.
 
 ## What each tier requires
@@ -83,13 +90,21 @@ Fail-closed rules:
   EVERY tier — including L0.**
 - **Missing or corrupt `.coverloop/config.json` fails every non-L0 tier** —
   the gate refuses to run in a repo that never onboarded.
-- The docs-only waiver (L1 only) applies when every changed file is
-  documentation or a report file — **and only when a base is passed on the
-  command line** (`--base origin/<base_ref>`, as the CI workflow does). The
-  base is never read from `.coverloop/config.json`, because that file ships
-  inside the PR and could be set to hide a code change. No trusted base →
-  no waiver → tests required.
+- The docs-only waiver (L1 only) applies when every changed file is **real
+  documentation** (an exact root-level `LICENSE`/`README.md`/`CHANGELOG[.md]`,
+  or a `.md`/`.txt`/`.rst` file *under `docs/`*) or an exact committed report
+  artifact (`<sha>.json` / `<sha>.<reviewer>.log`). Executable code cannot
+  masquerade as docs: a basename collision (`src/CHANGELOG`), an executable
+  under `docs/` (`docs/deploy.sh`), or a non-artifact file under `reports/`
+  (`reports/backdoor.py`) all count as code and require the test gate. The
+  waiver also applies **only when a base is passed on the command line**
+  (`--base origin/<base_ref>`); the base is never read from in-repo config.
 - Changing `.coverloop/config.json` is **never** waived — it alters gate behavior.
+- **`--min-tier` is a floor, not an override:** the effective tier is
+  `max(--min-tier, the report's self-declared tier)`, so a pin can only RAISE
+  requirements, never downgrade an L3 change. `attest` tier is monotonic — it
+  won't silently downgrade an existing report (`--force` to override). The
+  recorded test command must match the project's current `test_command`.
 - `--approve` requires `--approver <name>`: approval must be attributable.
 
 ## Enforce it in CI (GitHub Actions)
@@ -111,13 +126,13 @@ jobs:
           fetch-depth: 0
       - name: Coverloop gate
         run: |
-          COVERLOOP_REF=v2.6.2   # pin to a release tag, never main
+          COVERLOOP_REF=v2.7   # pin to a release tag, never main
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
-          # Pin --tier to a risk FLOOR so a PR can't dodge review by declaring
+          # Pin --min-tier as a risk FLOOR so a PR can't dodge review by declaring
           # a lower tier; drop it only if a human reviews the tier per PR.
-          ./coverloop gate --ci --tier L2 --require-captured --base "origin/${{ github.base_ref }}"
+          ./coverloop gate --ci --min-tier L2 --require-captured --base "origin/${{ github.base_ref }}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
@@ -155,7 +170,7 @@ with a server-side/GitHub-App check (roadmap).
 **Known residuals (by design, until a GitHub App exists):**
 - **Tier is self-declared** unless CI pins it. A PR could label an L3 change L0
   to dodge gates; defense is the committed, reviewable tier field plus a pinned
-  floor — `coverloop gate --ci --tier L2` forces ≥L2 evidence on every PR
+  floor — `coverloop gate --ci --min-tier L2` forces ≥L2 evidence on every PR
   regardless of what the report claims. Pin it to your repo's risk appetite.
 - **Human approval is *named*, not *authenticated*.** `--approver daniel`
   records who approved, but doesn't verify it was really them via a GitHub
