@@ -293,6 +293,161 @@ class GateTestCase(unittest.TestCase):
         r = run(["attest", "--tier", "L2", "--codex-run", "echo hi"], self.repo)
         self.assertEqual(r.returncode, 2)
 
+    def test_require_captured_rejects_self_attested(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)  # self-attested
+        self.assertEqual(self.gate_json()[0], 0)                       # passes normally
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 1)                                      # but not with the flag
+        self.assertIn("SELF-ATTESTED", json.dumps(out))
+
+    def test_require_captured_accepts_captured(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo reviewed"], self.repo)
+        code, _ = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 0)
+
+    def _forge_source_captured(self, sha, sha256="deadbeef"):
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["source"] = "captured"
+        rep["codex"]["output_file"] = f".coverloop/reports/{sha}.codex.log"
+        rep["codex"]["output_sha256"] = sha256
+        with open(p, "w") as f:
+            json.dump(rep, f)
+
+    def test_forged_captured_without_transcript_is_rejected(self):
+        """source:'captured' with no real transcript must FAIL even without
+        --require-captured (Codex v2.6.2 P1: the label must not be a lie)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)  # self-attested
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self._forge_source_captured(sha)  # flip to 'captured', bogus hash, no log
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        r = run(["gate", "--tier", "L2", "--require-captured"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_tampered_transcript_is_rejected(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo original"], self.repo)
+        self.assertEqual(self.gate_json()[0], 0)  # valid capture passes
+        sha = self.git_out(["rev-parse", "HEAD"])
+        log = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")
+        with open(log, "a") as f:
+            f.write("TAMPERED AFTER ATTEST\n")  # bytes change -> hash mismatch
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_captured_path_traversal_is_rejected(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["source"] = "captured"
+        rep["codex"]["output_file"] = "../../../../etc/hosts"  # escape attempt
+        rep["codex"]["output_sha256"] = "0" * 64
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_captured_replay_of_other_commit_log_rejected(self):
+        """A report may only cite THIS commit's transcript — pointing at a real
+        log named for a different commit (replay) is rejected (Codex round-2)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo genuine review"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        rdir = os.path.join(self.repo, ".coverloop", "reports")
+        other = "0123456789abcdef0123456789abcdef01234567"
+        with open(os.path.join(rdir, f"{sha}.codex.log"), "rb") as f:
+            data = f.read()
+        with open(os.path.join(rdir, f"{other}.codex.log"), "wb") as f:
+            f.write(data)  # identical content -> identical hash, only the NAME differs
+        p = os.path.join(rdir, f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["output_file"] = f".coverloop/reports/{other}.codex.log"
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_captured_symlink_escape_rejected(self):
+        """A transcript that is a symlink pointing outside reports/ is rejected
+        even if its target hashes to the recorded digest (Codex round-2)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo real review"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        log = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")
+        outside = os.path.join(self.repo, "outside.txt")
+        with open(log) as f:
+            content = f.read()
+        with open(outside, "w") as f:
+            f.write(content)  # same content -> hash still matches
+        os.remove(log)
+        os.symlink(outside, log)
+        r = run(["gate", "--tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+
+    def test_failed_reviewer_capture_is_rejected(self):
+        """An honest user whose reviewer command FAILS (nonzero exit) must not
+        have that error transcript accepted as evidence (Codex round-4)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo boom; exit 7"], self.repo)
+        self.assertIn("exited 7", r.stderr)  # attest warns
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)  # gate rejects even without --require-captured
+        code, _ = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 1)
+
+    def test_captured_reports_dir_symlink_rejected(self):
+        """If .coverloop/reports itself is a symlink to an external dir, the
+        transcript is off-tree and must be rejected (Codex round-3)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo real review"], self.repo)
+        rdir = os.path.join(self.repo, ".coverloop", "reports")
+        ext = tempfile.mkdtemp()
+        for fn in os.listdir(rdir):
+            with open(os.path.join(rdir, fn), "rb") as f:
+                d = f.read()
+            with open(os.path.join(ext, fn), "wb") as f:
+                f.write(d)
+        for fn in os.listdir(rdir):
+            os.remove(os.path.join(rdir, fn))
+        os.rmdir(rdir)
+        os.symlink(ext, rdir)  # reports/ now points off-tree
+        try:
+            r = run(["gate", "--tier", "L2"], self.repo)
+            self.assertEqual(r.returncode, 1)
+        finally:
+            os.remove(rdir)
+
+    def test_captured_survives_attest_after_evidence_commit(self):
+        """The inheritance re-bind keeps captured evidence valid: capture codex,
+        commit the evidence, attest tests at the new HEAD, gate --require-captured."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-run", "echo reviewed"], self.repo)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)  # inherits codex + re-binds its log
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 0, out)
+
     # docs-only waiver ----------------------------------------------
     def test_L1_docs_only_diff_waives_tests(self):
         self.init_project()

@@ -12,10 +12,14 @@ Design rules (do not weaken):
   * FAIL CLOSED: missing config (non-L0), missing report (non-L0), stale
     evidence, unreadable JSON, unknown tier -> non-zero exit. A malformed,
     forged, or SHA-mismatched report fails EVERY tier, including L0.
-  * The gate NEVER sends code anywhere and NEVER calls a model. It only
-    inspects local files and git metadata. `attest` records results the
-    human/agent obtained via the existing reviewer tools; it does not
-    run reviewers itself (except the project's own test command).
+  * The GATE never sends code anywhere and never calls a model — it only
+    inspects local files and git metadata. `attest` runs the project's own
+    test command and, when given `--codex-run` / `--glm-run`, executes those
+    reviewer commands and captures their hashed transcripts; otherwise a
+    reviewer verdict is self-attested (a recorded claim). The verdict itself
+    is always caller-stated (reviewer output is prose, not a status).
+    `gate --require-captured` makes L2/L3 reject self-attested reviewer
+    verdicts and demand a captured transcript.
   * Evidence binds to a commit SHA. The gate accepts a report bound to an
     ancestor commit ONLY when the diff from that ancestor to HEAD touches
     nothing but files under .coverloop/reports/ — this makes the
@@ -270,6 +274,23 @@ def cmd_attest(args):
         # files (find_report guarantees that), rebound to the current HEAD.
         report = dict(report)
         report["commit"] = sha
+        # Re-bind any captured reviewer transcript to the new commit's filename
+        # so the gate's commit+reviewer binding still recognizes it (the bytes,
+        # and therefore the recorded sha256, are unchanged).
+        for rname in ("codex", "glm"):
+            e = report.get(rname)
+            if not (e and e.get("source") == "captured" and e.get("output_file")):
+                continue
+            new_rel = os.path.join(REPORTS_DIR, f"{sha}.{rname}.log")
+            old_path = os.path.join(root, e["output_file"])
+            new_path = os.path.join(root, new_rel)
+            try:
+                if os.path.realpath(old_path) != os.path.realpath(new_path) and os.path.exists(old_path):
+                    with open(old_path, "rb") as rf, open(new_path, "wb") as wf:
+                        wf.write(rf.read())
+                report[rname] = dict(e, output_file=new_rel)
+            except OSError:
+                pass
     if report is None:
         if not args.tier:
             fail_usage("no report for HEAD yet — pass --tier L0|L1|L2|L3 to create one")
@@ -321,6 +342,10 @@ def cmd_attest(args):
                 entry.update(capture_run(root, sha, name, run_cmd))
                 entry["status"] = verdict
                 entry["findings_open"] = findings if findings is not None else 0
+                if entry.get("exit_code") != 0:
+                    print(f"WARNING: {name} reviewer command exited {entry['exit_code']} — "
+                          f"the capture is an error transcript and the gate will REJECT it. "
+                          f"Fix the command and re-run.", file=sys.stderr)
             report[name] = entry
             did.append(f"{name}={verdict}[{entry['source']}]")
 
@@ -386,7 +411,74 @@ def source_tag(entry):
     return "self-attested"
 
 
-def evaluate(report, tier, files):
+def verify_capture(root, entry, commit, name):
+    """True iff `entry` claims a captured transcript that is genuinely THIS
+    commit's / THIS reviewer's committed log and whose sha256 matches.
+
+    The `source: "captured"` string alone means nothing — a hand-edited report
+    could set it. Real captured evidence must:
+      * name the transcript EXACTLY `.coverloop/reports/<commit>.<name>.log`
+        (no traversal, and no REPLAY of an old/unrelated log under a different
+        commit or reviewer);
+      * resolve — after following any symlinks — to a real file INSIDE the
+        reports dir (a symlink pointing outside is rejected);
+      * hash to the recorded digest (catches tampering).
+    """
+    if entry.get("source") != "captured":
+        return False
+    # The reviewer command must have SUCCEEDED. A nonzero exit means it failed
+    # (expired auth, missing binary, a hang) and the transcript is an error log,
+    # not a review — accepting it would let a failed run pass --require-captured.
+    if entry.get("exit_code") != 0:
+        return False
+    rel = entry.get("output_file") or ""
+    digest = entry.get("output_sha256") or ""
+    expected = os.path.join(REPORTS_DIR, f"{commit}.{name}.log")
+    if not digest or rel != expected:
+        return False
+    path = os.path.join(root, rel)
+    # The ENTIRE reports path must be real: no symlinked `.coverloop` or
+    # `reports/` ancestor (which would relocate the trusted root off-tree) and
+    # the log itself must not be a symlink. Only then can the transcript be
+    # trusted to live in the repo's committed evidence tree.
+    reports_real = os.path.join(os.path.realpath(root), REPORTS_DIR)
+    if os.path.realpath(reports_real) != reports_real:
+        return False  # `.coverloop` or `.coverloop/reports` is a symlink
+    if os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != reports_real:
+        return False
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return False
+    return hashlib.sha256(data).hexdigest() == digest
+
+
+def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit):
+    """Gate check for a reviewer (codex/glm): pass requires status==pass AND
+    zero open findings. A verdict claiming `captured` whose transcript is
+    missing/tampered/replayed is rejected outright (the label must never be a
+    lie); with require_captured, a self-attested verdict also fails."""
+    if not entry:
+        return check(name, False, f"{name}: NO RECORD — {mandatory_msg}")
+    claims_captured = entry.get("source") == "captured"
+    captured_valid = verify_capture(root, entry, commit, name) if claims_captured else False
+    if claims_captured and not captured_valid:
+        return check(name, False,
+                     f"{name}: claims 'captured' but the transcript is invalid "
+                     f"(missing / tampered / wrong commit / reviewer exited nonzero) — "
+                     f"evidence rejected (re-run attest --{name}-run)")
+    ok = entry.get("status") == "pass" and entry.get("findings_open") == 0
+    if ok and require_captured and not captured_valid:
+        return check(name, False,
+                     f"{name}: pass but SELF-ATTESTED — --require-captured needs a "
+                     f"captured transcript (attest --{name}-run \"<cmd>\")")
+    return check(name, ok,
+                 f"{name}: {entry.get('status')}, open findings: "
+                 f"{entry.get('findings_open')} [{source_tag(entry)}]")
+
+
+def evaluate(report, tier, files, require_captured=False, root=None):
     """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout."""
     checks = []
 
@@ -405,23 +497,16 @@ def evaluate(report, tier, files):
         )
         checks.append(check("tests", tests_ok, detail))
 
+    report_commit = (report or {}).get("commit")
     if tier in ("L2", "L3"):
-        codex = report.get("codex") if report else None
-        codex_ok = bool(codex) and codex.get("status") == "pass" and codex.get("findings_open") == 0
-        detail = (
-            f"codex: {codex.get('status')}, open findings: {codex.get('findings_open')} [{source_tag(codex)}]" if codex
-            else "codex: NO RECORD — independent diff review is mandatory at L2/L3"
-        )
-        checks.append(check("codex", codex_ok, detail))
+        checks.append(reviewer_check(
+            "codex", report.get("codex") if report else None,
+            "independent diff review is mandatory at L2/L3", require_captured, root, report_commit))
 
     if tier == "L3":
-        glm = report.get("glm") if report else None
-        glm_ok = bool(glm) and glm.get("status") == "pass" and glm.get("findings_open") == 0
-        detail = (
-            f"glm: {glm.get('status')}, open findings: {glm.get('findings_open')} [{source_tag(glm)}]" if glm
-            else "glm: NO RECORD — red-team/audit is mandatory at L3"
-        )
-        checks.append(check("glm", glm_ok, detail))
+        checks.append(reviewer_check(
+            "glm", report.get("glm") if report else None,
+            "red-team/audit is mandatory at L3", require_captured, root, report_commit))
 
         hg = report.get("human_gate") if report else None
         hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
@@ -476,7 +561,8 @@ def cmd_gate(args):
     # not apply and tests are required (fail closed).
     files = changed_files(root, args.base, sha) if args.base else None
 
-    verdict, checks = evaluate(report, tier, files)
+    verdict, checks = evaluate(report, tier, files,
+                               require_captured=args.require_captured, root=root)
     _emit(args, sha, tier, verdict, checks)
     sys.exit(0 if verdict else 1)
 
@@ -532,6 +618,9 @@ def main(argv=None):
     pg.add_argument("--tier", choices=TIERS, help="risk tier (default: from the HEAD report)")
     pg.add_argument("--base", help="trusted diff base for the L1 docs-only waiver (e.g. origin/main); "
                                    "without it the waiver never applies and tests are required")
+    pg.add_argument("--require-captured", action="store_true",
+                    help="reject self-attested reviewer verdicts at L2/L3 — demand a captured "
+                         "transcript (attest --codex-run/--glm-run)")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)

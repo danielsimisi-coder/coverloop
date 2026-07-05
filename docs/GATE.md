@@ -43,6 +43,12 @@ CI policy, can tell them apart. `attest --tests` likewise actually runs the
 `test_command` (same trust model as `package.json` scripts) and records the
 real result, failures included.
 
+**Enforce captured evidence in CI.** `coverloop gate --require-captured` makes
+L2/L3 **fail** on any reviewer verdict that is merely self-attested — the
+report must carry a captured transcript for Codex (L2+) and GLM (L3). Pair it
+with the risk floor (`--tier L2 --require-captured`) and a bare "codex pass"
+no longer merges; only a committed, hashed reviewer run does.
+
 ## What each tier requires
 
 | Tier | tests pass | Codex pass, 0 open | GLM pass, 0 open | human approval |
@@ -105,13 +111,13 @@ jobs:
           fetch-depth: 0
       - name: Coverloop gate
         run: |
-          COVERLOOP_REF=v2.6.1   # pin to a release tag, never main
+          COVERLOOP_REF=v2.6.2   # pin to a release tag, never main
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
           # Pin --tier to a risk FLOOR so a PR can't dodge review by declaring
           # a lower tier; drop it only if a human reviews the tier per PR.
-          ./coverloop gate --ci --tier L2 --base "origin/${{ github.base_ref }}"
+          ./coverloop gate --ci --tier L2 --require-captured --base "origin/${{ github.base_ref }}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
@@ -134,9 +140,17 @@ accident; it's a choice that leaves a trail.
 **What "captured" does and doesn't buy you.** `--codex-run` upgrades a verdict
 from a bare claim to a hashed transcript committed in the PR — forging it now
 means fabricating a plausible reviewer log *and* running the fake command, and
-the log is right there for a human to read. It does **not** cryptographically
-prove the real reviewer ran; a determined author can still lie. It raises the
-cost and visibility of lying, which is the honest ceiling for a local tool.
+the log is right there for a human to read. `verify_capture()` binds each
+captured verdict to *this* commit's / *this* reviewer's log
+(`.coverloop/reports/<commit>.<reviewer>.log`), rejects replayed, tampered, or
+symlinked transcripts, and checks the sha256 — so `--require-captured` can't be
+satisfied by pointing at an old or off-tree file. It still does **not**
+cryptographically prove the real reviewer ran: a **committer** can always run a
+fake command that emits "CLEAN". Integrity here assumes a non-adversarial
+filesystem and that PR review catches an obviously bogus transcript; defeating
+it requires commit access and leaves a committed, readable trail. That is the
+honest ceiling for a tool that runs on your machine — raise it further only
+with a server-side/GitHub-App check (roadmap).
 
 **Known residuals (by design, until a GitHub App exists):**
 - **Tier is self-declared** unless CI pins it. A PR could label an L3 change L0
