@@ -753,6 +753,222 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(run(["gate", "--min-tier", "L0"], self.repo).returncode, 1)
         self.assertEqual(run(["gate", "--tier", "L2"], self.repo).returncode, 1)
 
+    # attached transcripts (v2.7.1) ----------------------------------
+    def test_attached_log_satisfies_require_captured(self):
+        """v2.7.1: attach an EXISTING reviewer transcript (--codex-log) — no
+        re-run — and --require-captured accepts it (committed + hash-bound)."""
+        self.init_project()
+        self.write("review.txt", "Codex review of app.py:1 — checked callers. CLEAN.\n")
+        r = run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self.assertTrue(os.path.exists(
+            os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")))
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("attached", json.dumps(out))
+
+    def test_attached_log_is_secret_redacted(self):
+        """The privacy rule applies to attached transcripts exactly as to
+        captured ones — secret values never reach a committed file."""
+        self.init_project()
+        key = "sk-" + "or-v1-abcdef0123456789abcdef0123456789"
+        self.write("review.txt", f"reviewer saw OPENROUTER_API_KEY={key}\n")
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")) as f:
+            content = f.read()
+        self.assertNotIn(key, content)
+        self.assertIn("REDACTED", content)
+
+    def test_attached_log_tamper_is_rejected(self):
+        """An attached transcript is hash-bound: editing the committed log after
+        attest invalidates the evidence outright (the label must never lie)."""
+        self.init_project()
+        self.write("review.txt", "CLEAN.\n")
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self.write(f".coverloop/reports/{sha}.codex.log", "totally different\n")
+        self.assertEqual(run(["gate"], self.repo).returncode, 1)
+
+    def test_attach_symlink_source_is_rejected(self):
+        self.init_project()
+        self.write("real.txt", "CLEAN\n")
+        os.symlink(os.path.join(self.repo, "real.txt"),
+                   os.path.join(self.repo, "link.txt"))
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "link.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_attach_requires_a_verdict(self):
+        self.init_project()
+        self.write("review.txt", "CLEAN\n")
+        r = run(["attest", "--tier", "L2",
+                 "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_attach_and_run_are_mutually_exclusive(self):
+        self.init_project()
+        self.write("review.txt", "CLEAN\n")
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo hi",
+                 "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_attach_empty_transcript_is_rejected(self):
+        self.init_project()
+        self.write("review.txt", "   \n")
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_attach_oversized_file_is_rejected(self):
+        self.init_project()
+        self.write("big.txt", "x" * (5 * 1024 * 1024 + 1))
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "big.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_attached_survives_attest_after_evidence_commit(self):
+        """Inheritance re-binds attached logs exactly like captured ones."""
+        self.init_project()
+        self.write("review.txt", "CLEAN per file:line.\n")
+        run(["attest", "--tier", "L2", "--codex", "pass",
+             "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        os.remove(os.path.join(self.repo, "review.txt"))  # keep the diff evidence-only
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)  # inherits codex + re-binds its log
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 0, out)
+
+    def test_attach_refuses_source_inside_reports_dir(self):
+        """Codex v2.7.1 review #1: attaching the gate's own artifacts would
+        launder a withheld failed-run log (or replay an old commit's log) into
+        fresh 'attached' evidence — refuse any source under reports/."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo auth failed; exit 7"], self.repo)
+        self.assertEqual(run(["gate", "--require-captured"], self.repo).returncode, 1)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        r = run(["attest", "--codex", "pass", "--codex-log",
+                 os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")],
+                self.repo)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(run(["gate", "--require-captured"], self.repo).returncode, 1)
+
+    def test_attach_refuses_withheld_placeholder_content(self):
+        """Codex v2.7.1 review #1b: a copy of the withheld failed-run
+        placeholder is not a review transcript, wherever it lives."""
+        self.init_project()
+        self.write("copy.txt", "[codex reviewer command exited 7; transcript "
+                               "withheld — a failed run is not valid evidence]\n")
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "copy.txt")], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_forged_attached_source_with_exit_code_rejected(self):
+        """Codex v2.7.1 review #2: hand-editing a FAILED captured entry's source
+        to 'attached' must not dodge the exit-code check."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo boom; exit 7"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["source"] = "attached"
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        self.assertEqual(run(["gate", "--require-captured"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate"], self.repo).returncode, 1)  # label must never lie
+
+    def test_forged_attached_without_exec_fields_still_rejected(self):
+        """Codex v2.7.1 verify #1: reclassifying a FAILED capture as 'attached'
+        AND deleting exit_code/command/ran_at must still fail — the committed
+        log is the withheld placeholder, and placeholder content is rejected."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo boom; exit 7"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        with open(p) as f:
+            rep = json.load(f)
+        rep["codex"]["source"] = "attached"
+        for k in ("exit_code", "command", "ran_at"):
+            rep["codex"].pop(k, None)
+        with open(p, "w") as f:
+            json.dump(rep, f)
+        self.assertEqual(run(["gate", "--require-captured"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate"], self.repo).returncode, 1)
+
+    def test_attach_reports_dir_case_variant_rejected(self):
+        """Codex v2.7.1 verify #2: on a case-insensitive filesystem (macOS),
+        '.COVERLOOP/REPORTS/<old>.codex.log' must not dodge the reports-dir
+        guard — directory identity, not string prefix, decides."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo clean"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        upper = os.path.join(self.repo, ".COVERLOOP", "REPORTS", f"{sha}.codex.log")
+        if not os.path.isfile(upper):
+            self.skipTest("case-sensitive filesystem — the string guard already covers this")
+        r = run(["attest", "--codex", "pass", "--codex-log", upper], self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_inheritance_rejects_replayed_old_log(self):
+        """Codex v2.7.1 verify #3: a forged ANCESTOR report pointing
+        output_file at an OLD commit's clean log must not be laundered into
+        evidence for the new HEAD by the inheritance re-bind — the transcript
+        must verify against the ancestor itself first."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo clean"], self.repo)
+        c1 = self.git_out(["rev-parse", "HEAD"])
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence for c1"], self.repo)
+        c2 = self.git_out(["rev-parse", "HEAD"])
+        # forge a report for c2 whose codex evidence points at c1's log
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{c1}.codex.log"), "rb") as f:
+            old_hash = hashlib.sha256(f.read()).hexdigest()
+        forged = {
+            "schema": "coverloop-report/v1", "commit": c2, "risk_tier": "L2",
+            "created_at": "2026-01-01T00:00:00Z",
+            "tests": None,
+            "codex": {"status": "pass", "findings_open": 0, "source": "captured",
+                      "exit_code": 0, "recorded_at": "2026-01-01T00:00:00Z",
+                      "output_file": f".coverloop/reports/{c1}.codex.log",
+                      "output_sha256": old_hash},
+            "glm": None, "human_gate": None,
+        }
+        self.write(f".coverloop/reports/{c2}.json", json.dumps(forged))
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "forged evidence"], self.repo)
+        c3 = self.git_out(["rev-parse", "HEAD"])
+        r = run(["attest", "--tests"], self.repo)  # inherits from the forged c2 report
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # the replayed transcript must NOT have been re-bound to c3
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 1, out)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.repo, ".coverloop", "reports", f"{c3}.codex.log")))
+
+    def test_attach_decode_expansion_past_cap_rejected(self):
+        """Codex v2.7.1 review #3: errors='replace' can 3x raw bytes (U+FFFD) —
+        a source at the cap must not commit a 15MB artifact."""
+        self.init_project()
+        with open(os.path.join(self.repo, "bomb.bin"), "wb") as f:
+            f.write(b"\xff" * (4 * 1024 * 1024))
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-log", os.path.join(self.repo, "bomb.bin")], self.repo)
+        self.assertEqual(r.returncode, 2)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self.assertFalse(os.path.exists(
+            os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")))
+
 
 if __name__ == "__main__":
     unittest.main()

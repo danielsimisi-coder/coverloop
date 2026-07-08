@@ -65,9 +65,9 @@ coverloop attest --codex pass                   # record the independent review
 coverloop gate                                  # exit 0 only if the tier's evidence is complete
 ```
 
-Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — the gate then labels each verdict `[captured <hash>]` vs `[self-attested]`, so a reviewer can tell a real run from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), pinned to a release tag) and an unreviewed change *physically cannot merge*.
+Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — or, for the review you **already ran interactively**, `--codex-log <file>` attaches its transcript (redacted, hashed, committed) with **no re-run**. The gate labels each verdict `[captured <hash>]` / `[attached <hash>]` vs `[self-attested]`, so a reviewer can tell a real transcript from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), pinned to a release tag) and an unreviewed change *physically cannot merge*.
 
-> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — use `--codex-run` to back it with a hashed transcript, and `gate --require-captured` to make CI **reject** anything less. The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-captured` makes CI **reject** anything less. The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
 

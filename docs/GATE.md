@@ -27,34 +27,46 @@ coverloop attest --tier L2 --tests            # runs config's test_command, reco
 coverloop attest --codex pass                  # record the diff-review verdict (self-attested)
 coverloop attest --codex pass \                # STRONGER: run the reviewer and capture its
   --codex-run "codex exec --sandbox read-only '...'"   # output (hashed, committed as evidence)
+coverloop attest --codex pass \                # SAME STRENGTH CLASS, ZERO RE-RUN: attach the
+  --codex-log /tmp/codex-review.txt            # transcript of a review you ALREADY ran
 coverloop attest --glm pass --glm-run "glm-audit '...'"
 coverloop attest --approve --approver daniel   # record the human gate (L3)
 ```
 
-**Self-attested vs. captured evidence.** `--codex pass` on its own records a
-*claim* — honest as an audit trail, but nothing ran. Add `--codex-run "<cmd>"`
+**Self-attested vs. captured vs. attached.** `--codex pass` on its own records
+a *claim* — honest as an audit trail, but nothing ran. Add `--codex-run "<cmd>"`
 and the tool executes the reviewer, writes its full output to
 `.coverloop/reports/<sha>.codex.log` (committed with the change), and records
 the log's **sha256** in the report. The verdict is still yours to state
 (reviewer output is prose, not a status), but now it's backed by a hashed,
-inspectable transcript rather than thin air — and `coverloop gate` labels each
-verdict `[captured <hash>]` or `[self-attested]` so a reviewer, or a stricter
-CI policy, can tell them apart. `attest --tests` likewise actually runs the
-`test_command` (same trust model as `package.json` scripts) and records the
-real result, failures included.
+inspectable transcript rather than thin air.
 
-**Transcripts are redacted before they touch git.** Before a captured log (or
-the reviewer command string) is written, `capture_run` runs it through the
-shared secret filter and replaces key/token/DB-credential/private-key **values**
-with `[REDACTED:…]`. A **failed** reviewer run (nonzero exit — expired auth, a
-hang) is withheld entirely rather than committing its error/env dump. So the
-evidence a privacy tool commits to your history never carries a secret.
+In the real workflow the review usually ran *interactively first* — re-running
+it through `--codex-run` doubles the cost, which is exactly how evidence ends
+up self-attested in practice. **`--codex-log <file>` / `--glm-log <file>`
+attach the transcript you already have**: redacted through the same secret
+filter, copied to the canonical `<sha>.<reviewer>.log`, hash-bound, committed.
+Recorded as `source: "attached"` — one honesty notch below `captured` (the
+tool didn't execute the command, so there's no exit-code/execution binding)
+but the same binding, tamper, and replay rules apply. `coverloop gate` labels
+every verdict `[captured <hash>]`, `[attached <hash>]`, or `[self-attested]`
+so a reviewer, or a stricter CI policy, can tell them apart. `attest --tests`
+likewise actually runs the `test_command` (same trust model as `package.json`
+scripts) and records the real result, failures included.
 
-**Enforce captured evidence in CI.** `coverloop gate --require-captured` makes
-L2/L3 **fail** on any reviewer verdict that is merely self-attested — the
-report must carry a captured transcript for Codex (L2+) and GLM (L3). Pair it
-with the risk floor (`--min-tier L2 --require-captured`) and a bare "codex pass"
-no longer merges; only a committed, hashed reviewer run does.
+**Transcripts are redacted before they touch git.** Before a captured or
+attached log (or the reviewer command string) is written, it runs through the
+shared secret filter and key/token/DB-credential/private-key **values** are
+replaced with `[REDACTED:…]`. A **failed** reviewer run (nonzero exit — expired
+auth, a hang) is withheld entirely rather than committing its error/env dump.
+So the evidence a privacy tool commits to your history never carries a secret.
+
+**Enforce transcript-backed evidence in CI.** `coverloop gate
+--require-captured` makes L2/L3 **fail** on any reviewer verdict that is merely
+self-attested — the report must carry a committed transcript (captured OR
+attached) for Codex (L2+) and GLM (L3). Pair it with the risk floor
+(`--min-tier L2 --require-captured`) and a bare "codex pass" no longer merges;
+only a committed, hash-bound reviewer transcript does.
 
 ## What each tier requires
 
@@ -126,7 +138,7 @@ jobs:
           fetch-depth: 0
       - name: Coverloop gate
         run: |
-          COVERLOOP_REF=v2.7   # pin to a release tag, never main
+          COVERLOOP_REF=v2.7.1   # pin to a release tag, never main
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
@@ -166,6 +178,20 @@ filesystem and that PR review catches an obviously bogus transcript; defeating
 it requires commit access and leaves a committed, readable trail. That is the
 honest ceiling for a tool that runs on your machine — raise it further only
 with a server-side/GitHub-App check (roadmap).
+
+**"Attached" is one honesty notch below that.** `--codex-log` skips even the
+"ran the fake command" step — the tool never executed anything, so the
+transcript's provenance is entirely the attester's word. Everything else holds
+(same redaction, same commit+reviewer binding, same tamper/replay rejection,
+same PR-readable log), which is why `--require-captured` accepts it: the
+property that flag actually enforces is *a committed transcript a human can
+audit*, and both sources deliver it. The gate's `[attached]` label keeps the
+distinction visible instead of pretending attachment is execution. The
+mechanical failure modes are closed: `--*-log` refuses sources inside
+`.coverloop/reports/` (no one-command laundering of a withheld failed-run log
+or replay of an old commit's artifact), refuses withheld-placeholder content
+anywhere, and an entry claiming `attached` while carrying a captured run's
+`exit_code` is rejected as inconsistent.
 
 **Known residuals (by design, until a GitHub App exists):**
 - **Tier is self-declared** unless CI pins it. A PR could label an L3 change L0

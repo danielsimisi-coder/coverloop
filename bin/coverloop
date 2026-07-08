@@ -15,8 +15,10 @@ Design rules (do not weaken):
   * The GATE never sends code anywhere and never calls a model — it only
     inspects local files and git metadata. `attest` runs the project's own
     test command and, when given `--codex-run` / `--glm-run`, executes those
-    reviewer commands and captures their hashed transcripts; otherwise a
-    reviewer verdict is self-attested (a recorded claim). The verdict itself
+    reviewer commands and captures their hashed transcripts; `--codex-log` /
+    `--glm-log` instead ATTACH an existing transcript (redacted + hashed, no
+    re-run — source "attached", one honesty notch below "captured"); otherwise
+    a reviewer verdict is self-attested (a recorded claim). The verdict itself
     is always caller-stated (reviewer output is prose, not a status).
     `gate --require-captured` makes L2/L3 reject self-attested reviewer
     verdicts and demand a captured transcript.
@@ -298,6 +300,12 @@ def save_report(root, report):
 
 # ---------------------------------------------------------------- capture
 
+# The exact marker written when a failed run's output is withheld. Checked in
+# attach_log AND verify_capture so the placeholder can never be re-attested as
+# a review transcript (laundering), wherever a copy of it lives.
+WITHHELD_MARKER = "transcript withheld — a failed run is not valid evidence]"
+
+
 def capture_run(root, sha, name, cmd):
     """Run a reviewer command, save its combined output to
     .coverloop/reports/<sha>.<name>.log, and return provenance (command, exit
@@ -329,8 +337,7 @@ def capture_run(root, sha, name, cmd):
         # that routinely carries tokens). It is also NOT valid evidence (the gate
         # rejects exit!=0), so we WITHHOLD the dump rather than commit a secret-
         # bearing error log to git.
-        output = (f"[{name} reviewer command exited {proc.returncode}; transcript "
-                  f"withheld — a failed run is not valid evidence]\n")
+        output = f"[{name} reviewer command exited {proc.returncode}; {WITHHELD_MARKER}\n"
     # Redact secret VALUES before this text is written to a committed file — a
     # privacy tool must never leak keys/tokens/DB creds into git history.
     output = redact_secrets(output)
@@ -347,6 +354,93 @@ def capture_run(root, sha, name, cmd):
     }
 
 
+ATTACH_MAX_BYTES = 5 * 1024 * 1024  # a review transcript, not a build artifact
+
+
+def attach_log(root, sha, name, src_path):
+    """Attach an EXISTING reviewer transcript as evidence: redact secret
+    values, copy it to .coverloop/reports/<sha>.<name>.log, and return
+    provenance with the redacted copy's sha256.
+
+    Field reality (the reason this exists): reviews usually run interactively
+    first (codex exec / glm-review in the terminal), so `--codex-run` would
+    mean paying for the SAME review twice — and in practice evidence stays
+    self-attested. An attached transcript is one honesty notch below captured
+    (the tool didn't execute the command, so there's no exit-code/execution
+    binding) but far above a bare claim: the transcript is committed, readable
+    in the PR, and hash-bound to this commit like any captured log.
+    """
+    if os.path.islink(src_path):
+        fail_usage(f"--{name}-log: {src_path} is a symlink — pass the real transcript file")
+    if not os.path.isfile(src_path):
+        fail_usage(f"--{name}-log: no such file: {src_path}")
+    # Refuse sources inside the reports dir: attaching the gate's own artifacts
+    # would launder a withheld failed-run log, or replay an OLD commit's log,
+    # into fresh "attached" evidence with one command. (Replaying a copy made
+    # elsewhere is the documented attester's-word ceiling — but the tool must
+    # not accept its own rejection/stale artifacts as new evidence.)
+    src_real = os.path.realpath(src_path)
+    reports_real = os.path.join(os.path.realpath(root), REPORTS_DIR)
+    inside_reports = src_real == reports_real or src_real.startswith(reports_real + os.sep)
+    # String compare alone is bypassable on case-insensitive filesystems
+    # (".COVERLOOP/REPORTS/x.log" resolves but keeps its casing) — also walk
+    # the source's ancestor DIRECTORY IDENTITIES (inode compare) against the
+    # reports dir.
+    if not inside_reports:
+        try:
+            rep_stat = os.stat(reports_real)
+        except OSError:
+            rep_stat = None
+        if rep_stat is not None:
+            d = os.path.dirname(src_real)
+            while True:
+                try:
+                    if os.path.samestat(os.stat(d), rep_stat):
+                        inside_reports = True
+                        break
+                except OSError:
+                    pass
+                parent = os.path.dirname(d)
+                if parent == d:
+                    break
+                d = parent
+    if inside_reports:
+        fail_usage(f"--{name}-log: {src_path} is inside {REPORTS_DIR}/ — attaching the gate's "
+                   f"own artifacts would launder or replay existing evidence; pass the "
+                   f"original transcript from outside the reports dir")
+    size = os.path.getsize(src_path)
+    if size > ATTACH_MAX_BYTES:
+        fail_usage(f"--{name}-log: {src_path} is {size} bytes (cap {ATTACH_MAX_BYTES}) — "
+                   f"attach the reviewer transcript, not a build artifact")
+    with open(src_path, "rb") as f:
+        text = f.read().decode("utf-8", errors="replace")
+    if not text.strip():
+        fail_usage(f"--{name}-log: {src_path} is empty — an empty transcript is not evidence")
+    if WITHHELD_MARKER in text:
+        fail_usage(f"--{name}-log: {src_path} is a withheld failed-run placeholder, "
+                   f"not a review transcript — fix the reviewer command and re-run")
+    # Same privacy rule as capture_run: secret VALUES never reach a committed file.
+    text = redact_secrets(text)
+    # Re-check size AFTER decode+redaction: errors="replace" can expand raw
+    # bytes up to 3x (U+FFFD), so a source at the cap could otherwise commit a
+    # 15MB artifact.
+    if len(text.encode("utf-8")) > ATTACH_MAX_BYTES:
+        fail_usage(f"--{name}-log: transcript expands past the {ATTACH_MAX_BYTES}-byte cap "
+                   f"after decoding — attach a plain-text review transcript")
+    log_rel = os.path.join(REPORTS_DIR, f"{sha}.{name}.log")
+    log_path = os.path.join(root, log_rel)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return {
+        "source": "attached",
+        "output_file": log_rel,
+        "output_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "output_lines": text.count("\n"),
+        "attached_at": now_utc(),
+    }
+
+
 # ---------------------------------------------------------------- attest
 
 def cmd_attest(args):
@@ -358,32 +452,30 @@ def cmd_attest(args):
     if report is not None and report["commit"] != sha:
         # Inherit evidence from an ancestor whose only difference is evidence
         # files (find_report guarantees that), rebound to the current HEAD.
+        anc_sha = report["commit"]
         report = dict(report)
         report["commit"] = sha
-        # Re-bind any captured reviewer transcript to the new commit's filename
-        # so the gate's commit+reviewer binding still recognizes it (the bytes,
-        # and therefore the recorded sha256, are unchanged).
+        # Re-bind any reviewer transcript to the new commit's filename so the
+        # gate's commit+reviewer binding still recognizes it. The transcript is
+        # trusted ONLY if it verifies AGAINST THE ANCESTOR first (exact
+        # <ancestor>.<reviewer>.log name, real in-tree file, hash match,
+        # consistent source fields) — otherwise a forged ancestor report could
+        # point output_file at any OLD clean artifact and have attest launder
+        # it into evidence for the new HEAD.
         for rname in ("codex", "glm"):
             e = report.get(rname)
-            if not (e and e.get("source") == "captured" and e.get("output_file")):
+            if not (e and e.get("source") in ("captured", "attached") and e.get("output_file")):
                 continue
-            # Only re-bind a transcript whose source path is a REAL artifact of
-            # the expected name and not a symlink — a forged ancestor report
-            # must not be able to point output_file at an arbitrary file and
-            # have attest copy it into the committed tree.
-            src_rel = e["output_file"]
-            old_path = os.path.join(root, src_rel)
-            reports_real = os.path.join(os.path.realpath(root), REPORTS_DIR)
-            if (not is_report_artifact(src_rel) or os.path.islink(old_path)
-                    or os.path.realpath(reports_real) != reports_real
-                    or (os.path.exists(old_path)
-                        and os.path.dirname(os.path.realpath(old_path)) != reports_real)):
-                # untrusted source -> drop the captured claim (gate will require
-                # a fresh capture) rather than copy an arbitrary/off-tree file.
+            if not verify_capture(root, e, anc_sha, rname):
+                # untrusted/unverifiable transcript -> drop to a self-attested
+                # claim (the gate will demand a fresh transcript) rather than
+                # copy an arbitrary, stale, or off-tree file.
                 report[rname] = dict(e, source="self-attested")
                 report[rname].pop("output_file", None)
                 report[rname].pop("output_sha256", None)
                 continue
+            src_rel = e["output_file"]
+            old_path = os.path.join(root, src_rel)
             new_rel = os.path.join(REPORTS_DIR, f"{sha}.{rname}.log")
             new_path = os.path.join(root, new_rel)
             try:
@@ -438,13 +530,16 @@ def cmd_attest(args):
         report["tests"] = {"command": cmd, "status": status, "ran_at": now_utc()}
         did.append(f"tests={status}")
 
-    for name, verdict, findings, run_cmd in (
-        ("codex", args.codex, args.codex_findings, args.codex_run),
-        ("glm", args.glm, args.glm_findings, args.glm_run),
+    for name, verdict, findings, run_cmd, log_src in (
+        ("codex", args.codex, args.codex_findings, args.codex_run, args.codex_log),
+        ("glm", args.glm, args.glm_findings, args.glm_run, args.glm_log),
     ):
-        if run_cmd and not verdict:
-            fail_usage(f"--{name}-run requires --{name} pass|fail — you state the "
-                       f"verdict for the captured run (its output is prose, not a status)")
+        if run_cmd and log_src:
+            fail_usage(f"--{name}-run and --{name}-log are mutually exclusive — "
+                       f"either run the reviewer fresh or attach its existing transcript")
+        if (run_cmd or log_src) and not verdict:
+            fail_usage(f"--{name}-run/--{name}-log requires --{name} pass|fail — you state the "
+                       f"verdict for the transcript (its content is prose, not a status)")
         if verdict:
             entry = {
                 "status": verdict,
@@ -461,6 +556,11 @@ def cmd_attest(args):
                     print(f"WARNING: {name} reviewer command exited {entry['exit_code']} — "
                           f"the capture is an error transcript and the gate will REJECT it. "
                           f"Fix the command and re-run.", file=sys.stderr)
+            elif log_src:
+                # attach_log sets source="attached" + provenance; keep verdict.
+                entry.update(attach_log(root, sha, name, log_src))
+                entry["status"] = verdict
+                entry["findings_open"] = findings if findings is not None else 0
             report[name] = entry
             did.append(f"{name}={verdict}[{entry['source']}]")
 
@@ -522,8 +622,8 @@ def check(name, ok, detail):
 def source_tag(entry):
     """Human tag for how a reviewer verdict was recorded."""
     src = entry.get("source", "self-attested")
-    if src == "captured":
-        return f"captured {entry.get('output_sha256', '')[:8]}"
+    if src in ("captured", "attached"):
+        return f"{src} {entry.get('output_sha256', '')[:8]}"
     return "self-attested"
 
 
@@ -531,8 +631,12 @@ def verify_capture(root, entry, commit, name):
     """True iff `entry` claims a captured transcript that is genuinely THIS
     commit's / THIS reviewer's committed log and whose sha256 matches.
 
+    Applies to BOTH transcript sources — "captured" (the tool ran the reviewer)
+    and "attached" (an existing transcript was attested via --codex-log/--glm-log;
+    same binding rules, minus the exit-code check the tool can't know).
+
     The `source: "captured"` string alone means nothing — a hand-edited report
-    could set it. Real captured evidence must:
+    could set it. Real transcript evidence must:
       * name the transcript EXACTLY `.coverloop/reports/<commit>.<name>.log`
         (no traversal, and no REPLAY of an old/unrelated log under a different
         commit or reviewer);
@@ -540,12 +644,22 @@ def verify_capture(root, entry, commit, name):
         reports dir (a symlink pointing outside is rejected);
       * hash to the recorded digest (catches tampering).
     """
-    if entry.get("source") != "captured":
+    src = entry.get("source")
+    if src not in ("captured", "attached"):
         return False
-    # The reviewer command must have SUCCEEDED. A nonzero exit means it failed
-    # (expired auth, missing binary, a hang) and the transcript is an error log,
-    # not a review — accepting it would let a failed run pass --require-captured.
-    if entry.get("exit_code") != 0:
+    # A CAPTURED reviewer command must have SUCCEEDED. A nonzero exit means it
+    # failed (expired auth, missing binary, a hang) and the transcript is an
+    # error log, not a review — accepting it would let a failed run pass
+    # --require-captured. Attached transcripts carry no exit code (the tool
+    # executed nothing); their trust rests on the committed, hash-bound,
+    # human-readable log alone.
+    if src == "captured" and entry.get("exit_code") != 0:
+        return False
+    # An ATTACHED entry never records execution fields; any leftover
+    # exit_code/command/ran_at means a captured (possibly FAILED) entry was
+    # hand-reclassified as "attached" to dodge the exit-code check — reject
+    # the inconsistency.
+    if src == "attached" and any(k in entry for k in ("exit_code", "command", "ran_at")):
         return False
     rel = entry.get("output_file") or ""
     digest = entry.get("output_sha256") or ""
@@ -567,28 +681,36 @@ def verify_capture(root, entry, commit, name):
             data = f.read()
     except OSError:
         return False
+    # An attached transcript whose CONTENT is the withheld failed-run
+    # placeholder is a laundered rejection artifact, not a review — reject it
+    # even when the hash matches (the forge that strips execution fields from
+    # a failed capture lands exactly here).
+    if src == "attached" and WITHHELD_MARKER in data.decode("utf-8", errors="replace"):
+        return False
     return hashlib.sha256(data).hexdigest() == digest
 
 
 def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit):
     """Gate check for a reviewer (codex/glm): pass requires status==pass AND
-    zero open findings. A verdict claiming `captured` whose transcript is
-    missing/tampered/replayed is rejected outright (the label must never be a
-    lie); with require_captured, a self-attested verdict also fails."""
+    zero open findings. A verdict claiming `captured`/`attached` whose
+    transcript is missing/tampered/replayed is rejected outright (the label
+    must never be a lie); with require_captured, a self-attested verdict also
+    fails — captured OR attached both satisfy it (each carries a committed,
+    hash-bound transcript; the honest difference is documented in GATE.md)."""
     if not entry:
         return check(name, False, f"{name}: NO RECORD — {mandatory_msg}")
-    claims_captured = entry.get("source") == "captured"
-    captured_valid = verify_capture(root, entry, commit, name) if claims_captured else False
-    if claims_captured and not captured_valid:
+    claims_transcript = entry.get("source") in ("captured", "attached")
+    transcript_valid = verify_capture(root, entry, commit, name) if claims_transcript else False
+    if claims_transcript and not transcript_valid:
         return check(name, False,
-                     f"{name}: claims 'captured' but the transcript is invalid "
-                     f"(missing / tampered / wrong commit / reviewer exited nonzero) — "
-                     f"evidence rejected (re-run attest --{name}-run)")
+                     f"{name}: claims {entry.get('source')!r} but the transcript is invalid "
+                     f"(missing / tampered / wrong commit / failed or inconsistent run) — "
+                     f"evidence rejected (re-run attest --{name}-run or --{name}-log)")
     ok = entry.get("status") == "pass" and entry.get("findings_open") == 0
-    if ok and require_captured and not captured_valid:
+    if ok and require_captured and not transcript_valid:
         return check(name, False,
                      f"{name}: pass but SELF-ATTESTED — --require-captured needs a "
-                     f"captured transcript (attest --{name}-run \"<cmd>\")")
+                     f"transcript (attest --{name}-run \"<cmd>\" or --{name}-log <file>)")
     return check(name, ok,
                  f"{name}: {entry.get('status')}, open findings: "
                  f"{entry.get('findings_open')} [{source_tag(entry)}]")
@@ -669,7 +791,8 @@ def cmd_gate(args):
 
     if not tier:
         print(f"coverloop gate: FAIL — no risk tier: {why or 'no report'}", file=sys.stderr)
-        print("state a floor explicitly: `coverloop gate --min-tier L0|L1|L2|L3`", file=sys.stderr)
+        print("record evidence at HEAD first (`coverloop attest --tier L0|L1|L2|L3 --tests ...`), "
+              "or state the required floor: `coverloop gate --min-tier L0|L1|L2|L3`", file=sys.stderr)
         sys.exit(1)
     if tier not in TIERS:
         fail_usage(f"invalid tier {tier!r} (use L0|L1|L2|L3)")
@@ -742,10 +865,16 @@ def main(argv=None):
     pa.add_argument("--codex-findings", type=int, help="open Codex findings (default 0)")
     pa.add_argument("--codex-run", metavar="CMD", help="run CMD as the Codex reviewer and "
                     "capture its output (hashed, committed) as evidence backing the verdict")
+    pa.add_argument("--codex-log", metavar="FILE", help="attach an EXISTING Codex transcript "
+                    "(a review you already ran interactively): redacted, committed, hashed — "
+                    "no re-run. Weaker than --codex-run (no execution binding), far stronger "
+                    "than a bare self-attested verdict")
     pa.add_argument("--glm", choices=["pass", "fail"], help="record the GLM red-team/audit verdict")
     pa.add_argument("--glm-findings", type=int, help="open GLM findings (default 0)")
     pa.add_argument("--glm-run", metavar="CMD", help="run CMD as the GLM reviewer and "
                     "capture its output (hashed, committed) as evidence backing the verdict")
+    pa.add_argument("--glm-log", metavar="FILE", help="attach an EXISTING GLM transcript "
+                    "(same rules as --codex-log)")
     pa.add_argument("--approve", action="store_true", help="record the human gate approval (L3)")
     pa.add_argument("--approver", help="who approved (required with --approve)")
     pa.set_defaults(fn=cmd_attest)
@@ -759,8 +888,9 @@ def main(argv=None):
     pg.add_argument("--base", help="trusted diff base for the L1 docs-only waiver (e.g. origin/main); "
                                    "without it the waiver never applies and tests are required")
     pg.add_argument("--require-captured", action="store_true",
-                    help="reject self-attested reviewer verdicts at L2/L3 — demand a captured "
-                         "transcript (attest --codex-run/--glm-run)")
+                    help="reject self-attested reviewer verdicts at L2/L3 — demand a committed "
+                         "transcript: captured (attest --codex-run/--glm-run) or attached "
+                         "(--codex-log/--glm-log)")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)
