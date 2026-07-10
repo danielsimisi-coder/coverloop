@@ -56,17 +56,24 @@ scripts) and records the real result, failures included.
 
 **Transcripts are redacted before they touch git.** Before a captured or
 attached log (or the reviewer command string) is written, it runs through the
-shared secret filter and key/token/DB-credential/private-key **values** are
-replaced with `[REDACTED:…]`. A **failed** reviewer run (nonzero exit — expired
-auth, a hang) is withheld entirely rather than committing its error/env dump.
-So the evidence a privacy tool commits to your history never carries a secret.
+shared secret filter: key/token/DB-credential/private-key **values** are
+replaced with `[REDACTED:…]`, and (v2.7.2) so are **PII shapes** — home-dir
+usernames (`/Users/<name>`, `/home/<name>`), email addresses, and UUID-shaped
+session ids. A **failed** reviewer run (nonzero exit — expired auth, a hang) is
+withheld entirely rather than committing its error/env dump, and `attest`
+exits non-zero for it. Honesty note: this is pattern-based redaction — a
+tripwire against the common leaks, not a full DLP pass; unrecognized secrets
+or free-form personal data are not detected.
 
 **Enforce transcript-backed evidence in CI.** `coverloop gate
---require-captured` makes L2/L3 **fail** on any reviewer verdict that is merely
-self-attested — the report must carry a committed transcript (captured OR
-attached) for Codex (L2+) and GLM (L3). Pair it with the risk floor
-(`--min-tier L2 --require-captured`) and a bare "codex pass" no longer merges;
-only a committed, hash-bound reviewer transcript does.
+--require-transcript` makes L2/L3 **fail** on any reviewer verdict that is
+merely self-attested — the report must carry a committed transcript (captured
+OR attached) for Codex (L2+) and GLM (L3). `--require-executed` is stricter:
+the transcript must come from a coverloop-EXECUTED run (`source: "captured"`,
+exit 0) — attached transcripts are rejected. `--require-captured` is kept as a
+deprecated alias of `--require-transcript`. Pair with the risk floor
+(`--min-tier L2 --require-transcript`) and a bare "codex pass" no longer
+merges; only a committed, hash-bound reviewer transcript does.
 
 ## What each tier requires
 
@@ -138,13 +145,13 @@ jobs:
           fetch-depth: 0
       - name: Coverloop gate
         run: |
-          COVERLOOP_REF=v2.7.1   # pin to a release tag, never main
+          COVERLOOP_REF=v2.7.2   # pin to a release tag, never main
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
           # Pin --min-tier as a risk FLOOR so a PR can't dodge review by declaring
           # a lower tier; drop it only if a human reviews the tier per PR.
-          ./coverloop gate --ci --min-tier L2 --require-captured --base "origin/${{ github.base_ref }}"
+          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${{ github.base_ref }}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
@@ -170,7 +177,7 @@ means fabricating a plausible reviewer log *and* running the fake command, and
 the log is right there for a human to read. `verify_capture()` binds each
 captured verdict to *this* commit's / *this* reviewer's log
 (`.coverloop/reports/<commit>.<reviewer>.log`), rejects replayed, tampered, or
-symlinked transcripts, and checks the sha256 — so `--require-captured` can't be
+symlinked transcripts, and checks the sha256 — so `--require-transcript` can't be
 satisfied by pointing at an old or off-tree file. It still does **not**
 cryptographically prove the real reviewer ran: a **committer** can always run a
 fake command that emits "CLEAN". Integrity here assumes a non-adversarial
@@ -183,7 +190,7 @@ with a server-side/GitHub-App check (roadmap).
 "ran the fake command" step — the tool never executed anything, so the
 transcript's provenance is entirely the attester's word. Everything else holds
 (same redaction, same commit+reviewer binding, same tamper/replay rejection,
-same PR-readable log), which is why `--require-captured` accepts it: the
+same PR-readable log), which is why `--require-transcript` accepts it: the
 property that flag actually enforces is *a committed transcript a human can
 audit*, and both sources deliver it. The gate's `[attached]` label keeps the
 distinction visible instead of pretending attachment is execution. The

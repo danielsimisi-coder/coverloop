@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-05b"
+FILTER_VERSION = "2026-07-10a"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -40,6 +40,24 @@ ASSIGN_RE = re.compile(
     r"|service_role|DATABASE_URL|VERCEL_TOKEN|[A-Za-z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD))"
     r"\s*[=:]\s*)(['\"]?)([^\s'\"]{3,})")
 
+# PII shapes (v2.7.2) — redacted from transcripts before they are COMMITTED to
+# git (redact() only). Deliberately NOT part of scan(): scan() is the egress
+# tripwire for secrets, and blocking every email/path-shaped string would break
+# legitimate review packets. This is targeted transcript hygiene — home-dir
+# usernames, emails, UUID-shaped session ids — a tripwire, NOT a full DLP pass.
+PII_PATTERNS = [
+    # Match the WHOLE path component after /Users// /home/ (up to the next
+    # slash or whitespace), so single-char and underscore-leading usernames are
+    # caught and a long name can't leak its tail past a fixed length cap
+    # (Sol v2.7.2 review #2). Slightly over-redacts real dir names like
+    # /Users/Shared — acceptable for transcript hygiene (drop a dir, never leak
+    # a username).
+    ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(/(?:Users|home)/)([^/\s]+)")),
+    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+    ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                             r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
+]
+
 # Back-compat: some callers referenced KEY_RE directly.
 KEY_RE = VALUE_PATTERNS[0][1]
 
@@ -67,4 +85,9 @@ def redact(text):
     for label, rx in VALUE_PATTERNS:
         out = rx.sub(f"[REDACTED:{label}]", out)
     out = ASSIGN_RE.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED:secret-value]", out)
+    # PII pass (committed-transcript hygiene, v2.7.2): keep the path prefix
+    # readable, drop the identifying username; emails/UUIDs replaced whole.
+    out = PII_PATTERNS[0][1].sub(r"\1[REDACTED:user]", out)
+    out = PII_PATTERNS[1][1].sub("[REDACTED:email]", out)
+    out = PII_PATTERNS[2][1].sub("[REDACTED:uuid]", out)
     return out

@@ -76,6 +76,14 @@ def privacy_selftest():
 
 def main():
     args = sys.argv[1:]
+    # Help must work even where M3 is parked — answer BEFORE the enable gate.
+    if "--help" in args or "-h" in args:
+        print("usage: m3-review [--mode ask|audit] [--version] [--privacy-selftest] [--no-git] "
+              "TASK... (optional: pipe text via stdin)\n"
+              "Parked-by-default M3 advisory CLI (data_collection:deny — NOT full ZDR; L3 "
+              "second-auditor only). Enable per machine: ~/.config/openrouter/m3_enabled. "
+              "Never pipe secrets/.env/PII.")
+        sys.exit(0)
     if "--version" in args:
         print(json.dumps({"cli": "m3-review", "cli_version": CLI_VERSION, "filter_version": FILTER_VERSION,
                           "model": MODEL, "provider_policy": "data_collection_deny (NOT full ZDR)",

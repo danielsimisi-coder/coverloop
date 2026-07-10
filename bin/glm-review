@@ -155,6 +155,16 @@ def read_stdin_safely():
 def main():
     args = sys.argv[1:]
 
+    # A real help branch BEFORE task parsing — without it, '--help' was treated
+    # as review text and headed toward a model request (Codex v2.7.2 finding).
+    if "--help" in args or "-h" in args:
+        print("usage: glm-review [--mode ask|scout|tests|audit|redteam|code] [--version] "
+              "[--zdr-selftest] [--no-git] TASK... (optional: pipe text via stdin)\n"
+              "Least-privilege GLM advisory CLI: sends ONLY the explicit task + piped text "
+              "(secret-scanned, fail-closed) to GLM via full-ZDR OpenRouter. No file/shell/repo "
+              "access. Never pipe secrets/.env/PII.")
+        sys.exit(0)
+
     if "--version" in args:
         print(json.dumps({
             "cli": "glm-review",

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin'))
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "coverloop")
 
 
@@ -968,6 +969,125 @@ class GateTestCase(unittest.TestCase):
         sha = self.git_out(["rev-parse", "HEAD"])
         self.assertFalse(os.path.exists(
             os.path.join(self.repo, ".coverloop", "reports", f"{sha}.codex.log")))
+
+
+
+    # v2.7.2 ---------------------------------------------------------
+    def test_failed_reviewer_capture_fails_attest_exit_code(self):
+        """v2.7.2 (Codex parity assessment): a failed --codex-run reviewer
+        already produced rejected evidence, but attest exited 0 — automation
+        read a failed review as a successful attestation. Now exits 1."""
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo boom; exit 7"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self.assertTrue(os.path.exists(
+            os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")))
+
+    def test_pii_is_redacted_in_committed_transcripts(self):
+        """v2.7.2: home-dir usernames, emails, and UUID session ids never
+        reach a committed transcript (a live transcript had committed a real
+        home path — Codex parity-assessment finding)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--codex", "pass", "--codex-run",
+             "echo review by /Users/danielsecret/proj mail alice@example.com "
+             "session 12345678-abcd-4ef0-9876-0123456789ab"], self.repo)
+        content = self._read_log()
+        self.assertNotIn("danielsecret", content)
+        self.assertNotIn("alice@example.com", content)
+        self.assertNotIn("12345678-abcd", content)
+        self.assertIn("[REDACTED:user]", content)
+        self.assertIn("[REDACTED:email]", content)
+        self.assertIn("[REDACTED:uuid]", content)
+
+    def test_pii_user_edge_cases(self):
+        """Sol v2.7.2 review #2: single-char + underscore-leading usernames are
+        caught, and a long username can't leak its tail past a length cap."""
+        import glm_secret_filter as f
+        self.assertEqual(f.redact("/home/x/p"), "/home/[REDACTED:user]/p")
+        self.assertEqual(f.redact("/home/_svc/p"), "/home/[REDACTED:user]/p")
+        long = "/Users/" + "a" * 60 + "/p"
+        out = f.redact(long)
+        self.assertNotIn("a" * 40, out)
+        self.assertEqual(out, "/Users/[REDACTED:user]/p")
+
+    def test_require_transcript_and_deprecated_alias_agree(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass"], self.repo)
+        self.assertEqual(run(["gate", "--require-transcript"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate", "--require-captured"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate"], self.repo).returncode, 0)
+
+    def test_require_executed_rejects_attached_accepts_captured(self):
+        """--require-executed is the strict tier: attached transcripts satisfy
+        --require-transcript but NOT --require-executed; a real captured run
+        satisfies both."""
+        self.init_project()
+        self.write("review.txt", "Reviewed app.py:1 CLEAN.\n")
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        self.assertEqual(run(["gate", "--require-transcript"], self.repo).returncode, 0)
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
+        run(["attest", "--codex", "pass",
+             "--codex-run", "echo verified app.py:1 CLEAN"], self.repo)
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 0)
+
+    def test_require_executed_rejects_relabeled_attached(self):
+        """Sol v2.7.2 review #1: an attached entry hand-relabeled
+        source=captured + exit_code:0 (but lacking capture-only command/ran_at)
+        must NOT satisfy --require-executed."""
+        self.init_project()
+        self.write("review.txt", "Reviewed app.py:1 CLEAN.\n")
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p))
+        rep["codex"]["source"] = "captured"
+        rep["codex"]["exit_code"] = 0
+        json.dump(rep, open(p, "w"))
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate"], self.repo).returncode, 1)  # label now inconsistent
+
+    def test_init_gitignore_defeats_root_log_ignore(self):
+        """Field report 2026-07-10 #3: a repo-root `*.log` rule must not
+        swallow committed evidence — init's negations re-include reports/."""
+        self.write(".gitignore", "*.log\n")
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "ignore logs"], self.repo)
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+                 "--codex-run", "echo reviewed app.py:1 CLEAN"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        chk = subprocess.run(["git", "check-ignore",
+                              f".coverloop/reports/{sha}.codex.log"],
+                             cwd=self.repo, capture_output=True, text=True)
+        self.assertEqual(chk.returncode, 1)  # NOT ignored
+
+    def test_attest_fails_when_evidence_gitignored(self):
+        """Same trap on an OLD install (comment-only .coverloop/.gitignore):
+        attest must fail loudly instead of writing unshippable evidence."""
+        self.write(".gitignore", "*.log\n")
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "ignore logs"], self.repo)
+        self.init_project()
+        self.write(".coverloop/.gitignore", "# old install, no negations\n")
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo reviewed app.py:1 CLEAN"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("IGNORES", r.stderr)
+
+    def test_advisor_clis_answer_help_without_model_call(self):
+        """v2.7.2: --help must print usage and exit 0 BEFORE any parsing —
+        previously glm-review treated '--help' as review text."""
+        for cli in ("glm-review", "m3-review"):
+            path = os.path.join(os.path.dirname(CLI), cli)
+            r = subprocess.run([sys.executable, path, "--help"],
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, f"{cli}: {r.stderr}")
+            self.assertIn("usage:", r.stdout)
 
 
 if __name__ == "__main__":
