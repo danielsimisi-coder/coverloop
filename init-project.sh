@@ -67,6 +67,19 @@ if [ -e "$PROJ/CLAUDE.md" ] && [ ! -e "$PROJ/AGENTS.md" ]; then
   fi
 fi
 
-echo "Done. Per-project v2.3 scaffolding is in place — NEW files only; your CLAUDE.md was NOT modified."
+# 8) Trust THIS repo for the Stop-hook test gate on THIS machine. The allowlist
+#    lives OUTSIDE any repo, so a cloned repo can't trust itself; the Stop hook
+#    refuses to run a repo's TEST_CMD unless its resolved path is listed here.
+TRUST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/coverloop/trusted-repos"
+PROJ_REAL="$(cd "$PROJ" && pwd -P)"
+mkdir -p "$(dirname "$TRUST_FILE")"
+if [ -f "$TRUST_FILE" ] && grep -qxF "$PROJ_REAL" "$TRUST_FILE" 2>/dev/null; then
+  echo "  skip trust marker (already trusted for the Stop-hook gate)"
+else
+  printf '%s\n' "$PROJ_REAL" >> "$TRUST_FILE"
+  echo "  + trusted this repo for the Stop-hook gate ($TRUST_FILE)"
+fi
+
+echo "Done. Per-project scaffolding is in place — NEW files only; your CLAUDE.md was NOT modified."
 echo "MANUAL STEP (yours): inline docs/OPERATING_CONTRACT.md at the TOP of CLAUDE.md so the loop loads into active context. A pointer-only CLAUDE.md = the protocol won't engage."
-echo "Reminder: the Stop hook runs only when .claude/loop.conf exists (it does now) AND the hooks are wired (install.sh)."
+echo "Reminder: the Stop hook runs only when .claude/loop.conf exists (it does now), the hooks are wired (install.sh), AND this repo is trusted (done above)."

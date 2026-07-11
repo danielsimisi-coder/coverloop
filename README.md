@@ -193,7 +193,7 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 
 - **Anti-drift:** the rules are inlined in the auto-loaded `CLAUDE.md` and re-injected by a hook **after every context compaction** — so a long session never quietly abandons your standards.
 - **Self-improving memory:** durable lessons are saved to **git-tracked memory** that travels with the repo, so every new session — on any machine — starts smarter than the last.
-- **Privacy at the tool layer:** secrets, `.env`, and PII are blocked *before* any send; the most sensitive reviews route only to a zero-data-retention endpoint; a slopsquatting gate blocks hallucinated dependencies.
+- **Privacy at the tool layer:** known **secret** shapes (keys, tokens, DB creds, `.env` assignments) are blocked *before* any send; **PII** shapes (home-dir usernames, emails, session ids) are scrubbed from committed transcripts (a redaction tripwire, not egress-blocked); the most sensitive reviews route only to a zero-data-retention endpoint; a slopsquatting gate blocks hallucinated dependencies.
 
 <details>
 <summary><b>See the mechanics (anti-drift, privacy, memory, versioning)</b></summary>
@@ -261,7 +261,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Which AI coding tool does it work with?</b></summary><br/>Built for <b>Claude Code</b> (auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
 
-<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Yes — it's a core design goal. Secrets, <code>.env</code> files, and personal data are blocked at the tool layer <i>before</i> any model call, and the most sensitive reviews route only to a zero-data-retention endpoint.</details>
+<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Privacy is a core design goal, with honest limits. Known <b>secret</b> shapes (keys, tokens, DB credentials, <code>.env</code>-style assignments) are blocked at the tool layer <i>before</i> any model call; <b>personal identifiers</b> (usernames, emails, session ids) are redacted from committed transcripts but are not egress-blocked — it's a pattern-based tripwire, not a full DLP guarantee. The most sensitive reviews route only to a zero-data-retention endpoint. The gate itself never sends code anywhere — it only reads local files and git metadata.</details>
 
 <details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
 

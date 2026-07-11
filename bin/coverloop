@@ -242,6 +242,27 @@ def load_report(root, sha):
         v = data.get(field)
         if v is not None and not isinstance(v, dict):
             return None, f"{path}: field {field!r} must be an object, got {type(v).__name__}"
+    # Strict nested-field validation (Sol grade R2): reject a schema-valid report
+    # whose sub-fields carry wrong-typed values, so a malformed report takes the
+    # clean FAIL path instead of relying on a downstream comparison happening to
+    # be falsy. (Note: bool is an int subclass in Python — reject it explicitly so
+    # `findings_open: true` can't masquerade as a count.)
+    for rk in ("tests", "codex", "glm"):
+        e = data.get(rk)
+        if e is not None and e.get("status") is not None and e.get("status") not in ("pass", "fail"):
+            return None, f"{path}: {rk}.status must be 'pass' or 'fail', got {e.get('status')!r}"
+    for rk in ("codex", "glm"):
+        e = data.get(rk)
+        if e is not None and "findings_open" in e:
+            fo = e["findings_open"]
+            if isinstance(fo, bool) or not isinstance(fo, int) or fo < 0:
+                return None, f"{path}: {rk}.findings_open must be a non-negative integer"
+    hg = data.get("human_gate")
+    if hg is not None:
+        if "approved" in hg and not isinstance(hg["approved"], bool):
+            return None, f"{path}: human_gate.approved must be a boolean"
+        if hg.get("approver") is not None and not isinstance(hg.get("approver"), str):
+            return None, f"{path}: human_gate.approver must be a string"
     return data, None
 
 

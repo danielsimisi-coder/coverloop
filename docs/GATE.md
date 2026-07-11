@@ -168,9 +168,13 @@ jobs:
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
-`coverloop / gate` status check.** From that moment, an L3 change physically
-cannot merge without committed evidence of tests, both reviews, and a named
-human approval.
+`coverloop / gate` status check.** From that moment a change can't merge without
+either the evidence its tier requires (tests, the reviews, a named approval) or
+a maintainer explicitly overriding a required check. Two honest caveats: the
+**tier is self-declared** unless CI pins a floor (so pin `--min-tier` to the
+lowest tier that must always be met — the example uses L2), and branch
+protection's override is a human decision, not something the gate can prevent.
+What the gate removes is *silent* merges of unreviewed code.
 
 (If the repo vendors `bin/coverloop` — which this one does — replace the
 `curl` with `./bin/coverloop`, pinning the gate's version to the repo.)

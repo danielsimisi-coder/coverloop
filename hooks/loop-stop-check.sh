@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# v2.3 test-green completion gate (Stop hook). OPT-IN + change-aware + livelock-guarded.
+# test-green completion gate (Stop hook). OPT-IN + TRUST-GATED + change-aware + livelock-guarded.
 # - No-op unless the repo has .claude/loop.conf with TEST_CMD set (never blocks
-#   a project that hasn't opted in).
+#   a project that hasn't opted in) AND the repo is in the machine's trusted list
+#   (so a cloned untrusted repo can't get its TEST_CMD executed — see TRUST GATE).
 # - CHANGE-AWARE: if the working tree has no changes at all (no tracked diffs
 #   AND no non-ignored untracked files), there is nothing new to verify -> allow
 #   stop instantly with no test run (cheap on clean/chat stops; the gate only
@@ -30,6 +31,29 @@ _mb=$(grep -E '^[[:space:]]*MAX_BLOCKS=' "$CONF" | tail -1)
 _mb=${_mb#*=}; _mb=${_mb//[^0-9]/}
 MAX_BLOCKS="${_mb:-3}"
 [ -n "$TEST_CMD" ] || exit 0
+
+# TRUST GATE (Sol grade R2): this hook is wired at USER scope, so it fires in
+# ANY repo with a .claude/loop.conf. TEST_CMD is a shell command this hook runs,
+# so an untrusted cloned repo shipping its own loop.conf could get code executed
+# merely because a session stopped inside it. Require the operator to have
+# explicitly trusted THIS repo on THIS machine — an allowlist that lives OUTSIDE
+# any repo (so a repo can't trust itself). init-project.sh adds the path; absent
+# it, we no-op instead of running repo-controlled code. Compared by resolved
+# absolute path (pwd -P) so a /tmp->/private/tmp style symlink can't bypass it.
+TRUST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/coverloop/trusted-repos"
+REPO_ROOT=$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" 2>/dev/null && pwd -P)
+_trusted=0
+if [ -n "$REPO_ROOT" ] && [ -f "$TRUST_FILE" ]; then
+  while IFS= read -r _p || [ -n "$_p" ]; do
+    case "$_p" in ""|\#*) continue ;; esac
+    _pr=$(cd "$_p" 2>/dev/null && pwd -P) || continue
+    [ "$_pr" = "$REPO_ROOT" ] && { _trusted=1; break; }
+  done < "$TRUST_FILE"
+fi
+if [ "$_trusted" != 1 ]; then
+  echo "coverloop stop-gate: '$REPO_ROOT' is not trusted on this machine ($TRUST_FILE) — NOT running its TEST_CMD. Run this repo's init-project.sh (or add its path to that file) to enable the test gate." >&2
+  exit 0
+fi
 STATE=".claude/.loop-stop-blocks"
 
 # Change-aware short-circuit: verify when tracked files changed OR a non-ignored

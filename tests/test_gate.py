@@ -1224,5 +1224,81 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(os.listdir(victim), [])  # nothing escaped into the victim dir
 
 
+    # ---- Round-2 schema validation (2026-07-11) ----
+    def _forge_field(self, tier, field, value):
+        self.init_project()
+        run(["attest", "--tier", tier, "--tests"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p))
+        # walk dotted field
+        obj = rep
+        keys = field.split(".")
+        for k in keys[:-1]:
+            obj = obj.setdefault(k, {})
+        obj[keys[-1]] = value
+        json.dump(rep, open(p, "w"))
+        return run(["gate", "--min-tier", tier], self.repo)
+
+    def test_bool_findings_open_is_rejected(self):
+        """Sol R2: bool is an int subclass — findings_open: true must not
+        masquerade as a count; malformed FAIL, no crash."""
+        r = self._forge_field("L2", "codex", {"status": "pass", "findings_open": True})
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_bad_status_string_is_rejected(self):
+        r = self._forge_field("L2", "codex", {"status": "maybe", "findings_open": 0})
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_nonstring_approver_is_rejected(self):
+        r = self._forge_field("L3", "human_gate", {"approved": True, "approver": 123})
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_nonbool_approved_is_rejected(self):
+        r = self._forge_field("L3", "human_gate", {"approved": "yes", "approver": "daniel"})
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+
+    def test_regexes_are_redos_bounded(self):
+        """R2: every matcher on the egress path (scan) and commit path (redact)
+        must run in ~linear time on adversarial input — a DoS here stalls the
+        privacy filter itself. Covers all three known amplification shapes:
+          1. private-key BEGIN marker with no END (the .{0,10000}? bound),
+          2. a 2 MB word-char run before ASSIGN_RE's required suffix (the real
+             ReDoS this test first surfaced: `\\b` + {0,64} make it linear —
+             the unbounded `[A-Za-z0-9_]*` version hung for minutes here),
+          3. word-boundary spam (a boundary every few chars) — worst case for
+             the {0,64} per-boundary bound.
+        Ceiling is generous (2s each) to avoid CI flakiness; the vulnerable
+        forms exceed it by orders of magnitude."""
+        import glm_secret_filter as f, time
+        cases = {
+            "privkey_no_end": "-----BEGIN RSA PRIVATE KEY-----\n" + ("A" * 2_000_000),
+            "word_run_assign": ("A" * 2_000_000) + "=x",
+            "boundary_spam": "KEYX " * 400_000,
+        }
+        for name, blob in cases.items():
+            t0 = time.monotonic()
+            f.scan(blob)
+            f.redact(blob)
+            dt = time.monotonic() - t0
+            self.assertLess(dt, 2.0, "%s scanned in %.2fs (ReDoS?)" % (name, dt))
+
+    def test_assign_redaction_still_correct_after_redos_fix(self):
+        """The `\\b`/{0,64} ReDoS hardening must not narrow what ASSIGN_RE
+        catches: names ending in a secret keyword, mid-line and after
+        punctuation, still redact; MONKEY= (no separator) still does not."""
+        import glm_secret_filter as f
+        for s in ("X_API_KEY=abc", "SECRET_KEY=abc", "DB_PASSWORD=p",
+                  "foo;TOKEN=t", ",API_KEY=k", 'PASSWORD="secret pass phrase"'):
+            self.assertIn("[REDACTED", f.redact(s), "should redact: %r" % s)
+            self.assertTrue(f.scan(s), "should flag: %r" % s)
+        self.assertEqual(f.redact("MONKEY=banana"), "MONKEY=banana")
+
+
 if __name__ == "__main__":
     unittest.main()

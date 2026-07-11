@@ -1,6 +1,6 @@
-# Coverloop's OWN CI — continuously proves the gate's test suite on every push
-# and PR. stdlib-only, so no install step. The gate that enforces evidence for
-# other repos must itself be green on every commit.
+# Coverloop's OWN CI — continuously proves the gate on every push and PR.
+# stdlib-only, so no install step. The gate that enforces evidence for other
+# repos must itself be green on every commit, across supported Python versions.
 name: tests
 on:
   push:
@@ -11,11 +11,17 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11', '3.13']
     steps:
-      # Pinned to a full commit SHA (not a mutable tag) — supply-chain hygiene.
+      # Pinned to full commit SHAs (not mutable tags) — supply-chain hygiene.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.x'
-      - name: Run the gate's own test suite
+          python-version: ${{ matrix.python-version }}
+      - name: Gate test suite
         run: python3 tests/test_gate.py
+      - name: Stop-hook behavioral tests
+        run: bash tests/test_hooks.sh
