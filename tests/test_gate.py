@@ -1090,5 +1090,121 @@ class GateTestCase(unittest.TestCase):
             self.assertIn("usage:", r.stdout)
 
 
+    # ---- full audit 2026-07-11 (v2.7.3) regressions ----
+    def test_laundered_failed_capture_rejected_source_agnostic(self):
+        """P1: a FAILED captured run (log = withheld placeholder) must not pass
+        by hand-editing exit_code 1->0 — the withheld-marker check is now
+        source-agnostic, so a re-hash-free forge is rejected for captured too."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo boom; exit 7"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p))
+        rep["codex"]["exit_code"] = 0            # the single un-hashed edit
+        json.dump(rep, open(p, "w"))
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
+        self.assertEqual(run(["gate"], self.repo).returncode, 1)
+
+    def test_secret_filter_catches_bare_KEY_family(self):
+        """P1: AWS_SECRET_ACCESS_KEY / SECRET_KEY / ENCRYPTION_KEY etc. must be
+        scanned (egress-blocked) and redacted; MONKEY must not over-match."""
+        import glm_secret_filter as f
+        for name in ("AWS_SECRET_ACCESS_KEY", "SECRET_KEY", "ENCRYPTION_KEY",
+                     "SIGNING_KEY", "PRIVATE_KEY"):
+            self.assertTrue(f.scan(f"{name}=supersecretvalue123"), name)
+            self.assertIn("REDACTED", f.redact(f"{name}=supersecretvalue123"), name)
+        self.assertEqual(f.redact("MONKEY=banana"), "MONKEY=banana")
+
+    def test_secret_filter_redacts_quoted_multiword_value(self):
+        """P2: a quoted multi-word secret must redact to the closing quote, not
+        leak its tail into the committed transcript."""
+        import glm_secret_filter as f
+        out = f.redact('PASSWORD="secret pass phrase"')
+        self.assertNotIn("phrase", out)
+        self.assertNotIn("pass ", out)
+        self.assertIn("REDACTED", f.redact("TOKEN=x"))  # short value too
+
+    def test_malformed_nondict_field_fails_closed(self):
+        """P3: a schema-valid report whose codex/tests field is a non-dict must
+        take the clean malformed-evidence FAIL path, not raise."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p))
+        rep["codex"] = "passed"   # string, not an object
+        json.dump(rep, open(p, "w"))
+        r = run(["gate", "--min-tier", "L2"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_require_clean_tree_flag_blocks_uncommitted_code(self):
+        """P2 (opt-in): --require-clean-tree fails on uncommitted non-evidence
+        edits; default gate is unaffected; report artifacts are carved out."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "echo reviewed app.py:1 CLEAN"], self.repo)
+        # default gate passes with the uncommitted report artifact present
+        self.assertEqual(run(["gate", "--min-tier", "L2", "--require-transcript"],
+                             self.repo).returncode, 0)
+        # now dirty the tree with uncommitted CODE
+        self.write("app.py", "print('edited after attest')\n")
+        self.assertEqual(run(["gate", "--min-tier", "L2", "--require-transcript"],
+                             self.repo).returncode, 0)  # default still passes
+        self.assertEqual(run(["gate", "--min-tier", "L2", "--require-transcript",
+                              "--require-clean-tree"], self.repo).returncode, 1)
+
+    def test_tier_floor_folds_all_flags(self):
+        """P2: a coexisting/lower --tier must not discard a higher --min-tier;
+        every floor is folded via tier_max."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)  # report says L1
+        # L1 report + L1 tests would pass at L1, but a coexisting --min-tier L3
+        # must RAISE to L3 (needs codex+glm+human, which are absent) -> FAIL
+        r = run(["gate", "--min-tier", "L3", "--tier", "L0"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        code, out = self.gate_json(["--min-tier", "L3", "--tier", "L0"])
+        self.assertEqual(out["tier"], "L3")
+
+
+    # ---- Sol v2.7.3 verify round-2 regressions ----
+    def test_review_quoting_withheld_marker_still_passes(self):
+        """Sol verify #1: a GENUINE captured review that merely QUOTES the
+        withheld-marker string (e.g. reviewing coverloop's own source) must NOT
+        be false-rejected — only the whole-line placeholder is rejected."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass",
+             "--codex-run", "printf 'Reviewed capture_run: it writes \"transcript withheld "
+             "— a failed run is not valid evidence]\" on failure. app.py:1 CLEAN'"], self.repo)
+        code, out = self.gate_json(["--min-tier", "L2", "--require-executed"])
+        self.assertEqual(code, 0, out)
+
+    def test_open_write_refuses_symlink_destination(self):
+        """Sol verify #2: a pre-planted symlink at the report path must not be
+        written through (portable islink guard, works even without O_NOFOLLOW)."""
+        self.init_project()
+        outside = os.path.join(self.tmp.name, "victim.txt")
+        with open(outside, "w") as f:
+            f.write("original\n")
+        sha = self.git_out(["rev-parse", "HEAD"])
+        os.makedirs(os.path.join(self.repo, ".coverloop", "reports"), exist_ok=True)
+        link = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        os.symlink(outside, link)
+        r = run(["attest", "--tier", "L1", "--tests"], self.repo)
+        self.assertEqual(r.returncode, 2)   # refused
+        with open(outside) as f:
+            self.assertEqual(f.read(), "original\n")  # victim untouched
+
+    def test_quoted_secret_with_inner_apostrophe(self):
+        """Sol verify #3: a double-quoted secret containing an apostrophe must
+        redact to the matching closing quote, not stop at the inner quote."""
+        import glm_secret_filter as f
+        out = f.redact('PASSWORD="correct horse\'s battery staple"')
+        for leak in ("horse", "battery", "staple"):
+            self.assertNotIn(leak, out)
+        self.assertIn("REDACTED", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,9 +57,15 @@ if os.path.exists(p):
         sys.exit(0)
 hooks = d.setdefault("hooks", {})
 changed = False
+def _wired(arr, cmd):
+    # Exact match on the parsed command field — not a substring of serialized
+    # JSON, which would count a `.disabled`/renamed hook (or the path appearing
+    # in any other field) as "already wired" and skip the real one.
+    return any(isinstance(x, dict) and isinstance(h, dict) and h.get("command") == cmd
+               for x in arr for h in (x.get("hooks") or []))
 for ev, cmd, matcher in want:
     arr = hooks.setdefault(ev, [])
-    if not any(cmd in json.dumps(x) for x in arr):
+    if not _wired(arr, cmd):
         entry = {"hooks": [{"type": "command", "command": cmd}]}
         if matcher: entry["matcher"] = matcher
         arr.append(entry)

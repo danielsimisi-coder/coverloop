@@ -233,6 +233,15 @@ def load_report(root, sha):
     # by tier_max() and a pinned --min-tier L0 would gate it as L0 (no evidence).
     if data.get("risk_tier") not in TIERS:
         return None, f"{path}: invalid risk_tier {data.get('risk_tier')!r}"
+    # Shape guard (full audit 2026-07-11): a schema-valid report whose
+    # tests/codex/glm/human_gate field is not an object would raise an uncaught
+    # AttributeError deep in evaluate() (e.g. (tests or {}).get(...)) instead of
+    # the documented clean "malformed evidence" FAIL. Reject it here so it takes
+    # the fail-closed path.
+    for field in ("tests", "codex", "glm", "human_gate"):
+        v = data.get(field)
+        if v is not None and not isinstance(v, dict):
+            return None, f"{path}: field {field!r} must be an object, got {type(v).__name__}"
     return data, None
 
 
@@ -298,10 +307,34 @@ def new_report(sha, tier):
     }
 
 
+def open_write(path):
+    """Open PATH for writing, refusing to follow a symlink at the final path
+    component and disabling newline translation.
+
+    Two audit fixes in one (2026-07-11): (1) every evidence WRITE went through a
+    plain open() that would follow a pre-planted destination symlink and
+    overwrite an arbitrary off-tree file — the read paths guard symlinks but the
+    writers did not. (2) text-mode writes translated '\\n'->'\\r\\n' on Windows
+    while output_sha256 is hashed over the untranslated string, so verify_capture
+    rejected its own untampered evidence there; newline='' keeps on-disk bytes ==
+    hashed bytes on every platform.
+
+    Symlink defense is two-layer so it holds where O_NOFOLLOW is absent (e.g.
+    Windows, where getattr(...,0) would otherwise silently restore following):
+    an explicit pre-check via os.path.islink (portable, catches a static
+    pre-planted symlink) PLUS O_NOFOLLOW (POSIX, also closes the TOCTOU race).
+    (Sol v2.7.3 verify #2)"""
+    if os.path.islink(path):
+        fail_usage(f"refusing to write evidence through a symlink: {path}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w", encoding="utf-8", newline="")
+
+
 def save_report(root, report):
     path = report_path(root, report["commit"])
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open_write(path) as f:
         json.dump(report, f, indent=2)
         f.write("\n")
     return path
@@ -313,6 +346,12 @@ def save_report(root, report):
 # attach_log AND verify_capture so the placeholder can never be re-attested as
 # a review transcript (laundering), wherever a copy of it lives.
 WITHHELD_MARKER = "transcript withheld — a failed run is not valid evidence]"
+# The FULL placeholder line capture_run writes on a failed run (see below). Match
+# the whole line — NOT the substring — so verify_capture rejects a laundered
+# failed capture without false-rejecting a genuine review that merely QUOTES the
+# marker (e.g. a review of coverloop's own source). (Sol v2.7.3 verify #1)
+WITHHELD_RE = re.compile(r"^\[[a-z]+ reviewer command exited -?\d+; "
+                         + re.escape(WITHHELD_MARKER) + r"\s*$")
 
 
 def capture_run(root, sha, name, cmd):
@@ -350,7 +389,7 @@ def capture_run(root, sha, name, cmd):
     # Redact secret VALUES before this text is written to a committed file — a
     # privacy tool must never leak keys/tokens/DB creds into git history.
     output = redact_secrets(output)
-    with open(log_path, "w", encoding="utf-8") as f:
+    with open_write(log_path) as f:
         f.write(output)
     return {
         "source": "captured",
@@ -425,7 +464,7 @@ def attach_log(root, sha, name, src_path):
         text = f.read().decode("utf-8", errors="replace")
     if not text.strip():
         fail_usage(f"--{name}-log: {src_path} is empty — an empty transcript is not evidence")
-    if WITHHELD_MARKER in text:
+    if WITHHELD_RE.match(text.strip()):
         fail_usage(f"--{name}-log: {src_path} is a withheld failed-run placeholder, "
                    f"not a review transcript — fix the reviewer command and re-run")
     # Same privacy rule as capture_run: secret VALUES never reach a committed file.
@@ -439,7 +478,7 @@ def attach_log(root, sha, name, src_path):
     log_rel = os.path.join(REPORTS_DIR, f"{sha}.{name}.log")
     log_path = os.path.join(root, log_rel)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "w", encoding="utf-8") as f:
+    with open_write(log_path) as f:
         f.write(text)
     return {
         "source": "attached",
@@ -493,7 +532,7 @@ def cmd_attest(args):
                         data = rf.read()
                     # redact on copy (defense in depth) and rebind the hash
                     safe = redact_secrets(data.decode("utf-8", errors="replace"))
-                    with open(new_path, "w", encoding="utf-8") as wf:
+                    with open_write(new_path) as wf:
                         wf.write(safe)
                     e = dict(e, output_sha256=hashlib.sha256(safe.encode("utf-8")).hexdigest())
                 report[rname] = dict(e, output_file=new_rel)
@@ -684,11 +723,15 @@ def verify_capture(root, entry, commit, name):
     # executed nothing); their trust rests on the committed, hash-bound,
     # human-readable log alone.
     if src == "captured":
-        # A genuine captured entry ALWAYS carries capture_run's execution
-        # fields. Requiring them (symmetric to the attached rule below) stops
-        # an attached entry from being hand-relabeled `source:"captured"` +
-        # `exit_code:0` to satisfy the stricter --require-executed (Sol v2.7.2
-        # review #1): a relabel keeps only attached fields and now fails here.
+        # A genuine captured entry carries capture_run's execution fields;
+        # requiring them rejects the NAIVE relabel (an attached entry flipped to
+        # source:"captured" that forgets to add them). HONEST LIMIT (full audit
+        # 2026-07-11): command/exit_code/ran_at are unauthenticated attester
+        # JSON and the log bytes+hash are attester-authored, so a committer who
+        # adds all three defeats this — no on-disk field can PROVE coverloop
+        # executed the reviewer. --require-executed is therefore a best-effort
+        # policy filter (rejects honestly-attached evidence), NOT proof of
+        # execution; the honest ceiling is documented in docs/GATE.md.
         if not all(k in entry for k in ("command", "exit_code", "ran_at")):
             return False
         if entry.get("exit_code") != 0:
@@ -719,11 +762,16 @@ def verify_capture(root, entry, commit, name):
             data = f.read()
     except OSError:
         return False
-    # An attached transcript whose CONTENT is the withheld failed-run
-    # placeholder is a laundered rejection artifact, not a review — reject it
-    # even when the hash matches (the forge that strips execution fields from
-    # a failed capture lands exactly here).
-    if src == "attached" and WITHHELD_MARKER in data.decode("utf-8", errors="replace"):
+    # A transcript that IS the withheld failed-run placeholder (whole line) is a
+    # laundered rejection artifact, not a review — reject it for BOTH sources
+    # even when the hash matches. capture_run writes this line only on a nonzero
+    # exit, so a genuine passing capture is never the placeholder; this closes
+    # the forge where a FAILED capture's exit_code is hand-edited 1->0 (exit_code
+    # is not covered by output_sha256, so no re-hash is needed) plus an attached
+    # copy of the placeholder. Matching the WHOLE line (not a substring) means a
+    # real review that merely quotes the marker still passes. (full audit +
+    # Sol verify 2026-07-11 P1)
+    if WITHHELD_RE.match(data.decode("utf-8", errors="replace").strip()):
         return False
     return hashlib.sha256(data).hexdigest() == digest
 
@@ -823,12 +871,16 @@ def cmd_gate(args):
     sha = head_sha(root)
     report, why, malformed = find_report(root, sha)
 
-    # The pinned flag (--min-tier, or legacy --tier) is a FLOOR: the effective
-    # tier is the MAX of the pin and the report's self-declared tier, so a pin
-    # can only ever RAISE the requirement — never downgrade a dangerous change.
-    pinned = getattr(args, "min_tier", None) or args.tier
+    # The pinned flags (--min-tier, or legacy --tier) are FLOORS: the effective
+    # tier is the MAX over EVERY provided floor and the report's self-declared
+    # tier, so a pin can only ever RAISE the requirement — never downgrade a
+    # dangerous change. Both flags are action="append", so tier_max folds all of
+    # them; the old `min_tier or tier` discarded one coexisting floor and
+    # argparse last-wins let a repeated lower value win (full audit 2026-07-11).
+    min_floors = getattr(args, "min_tier", None) or []
+    tier_floors = getattr(args, "tier", None) or []
     report_tier = (report or {}).get("risk_tier")
-    tier = tier_max(pinned, report_tier)
+    tier = tier_max(*min_floors, *tier_floors, report_tier)
 
     # A corrupt/forged/SHA-mismatched report fails EVERY tier, including L0.
     if malformed:
@@ -855,6 +907,31 @@ def cmd_gate(args):
         _emit(args, sha, tier, False,
               [check("config", False, f"{cfg_err} — run `coverloop init` and commit {CONFIG_FILE}")])
         sys.exit(1)
+
+    # OPT-IN: fail closed on a DIRTY non-evidence working tree (full audit
+    # 2026-07-11). Evidence binds to HEAD; find_report/only_evidence_changed
+    # compare commits only, so uncommitted code edited AFTER a passing attest
+    # would gate green while HEAD is unchanged — real drift for the documented
+    # local pre-push/pre-deploy use. It is OPT-IN (--require-clean-tree) because
+    # a legitimate untracked scratch file would otherwise block the gate; CI
+    # (clean checkout) is unaffected either way. Report artifacts are carved out
+    # so "attest, then commit the report" still works; git-unavailable fails
+    # closed. L0 (no evidence required) is exempt.
+    if getattr(args, "require_clean_tree", False) and tier != "L0":
+        tracked = git(["diff", "--no-renames", "--name-only", "HEAD"], cwd=root)
+        untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root)
+        if tracked is None or untracked is None:
+            _emit(args, sha, tier, False,
+                  [check("worktree", False, "git status unavailable — cannot confirm a clean tree")])
+            sys.exit(1)
+        dirty = [p for p in (tracked.splitlines() + untracked.splitlines())
+                 if p.strip() and not is_report_artifact(p.strip())]
+        if dirty:
+            _emit(args, sha, tier, False,
+                  [check("worktree", False,
+                         f"uncommitted non-evidence changes not covered by the evidence bound to HEAD "
+                         f"({', '.join(dirty[:5])}{'…' if len(dirty) > 5 else ''}) — commit and re-attest")])
+            sys.exit(1)
 
     # The docs-only waiver may rely ONLY on a base passed on the command line
     # (CI/operator-controlled — the workflow supplies --base origin/<base_ref>).
@@ -933,10 +1010,11 @@ def main(argv=None):
     pa.set_defaults(fn=cmd_attest)
 
     pg = sub.add_parser("gate", help="verify required evidence for the tier; exit non-zero if missing")
-    pg.add_argument("--min-tier", choices=TIERS,
-                    help="floor: the effective tier is max(this, the report's tier), so a pin "
-                         "can only RAISE requirements, never downgrade a dangerous change")
-    pg.add_argument("--tier", choices=TIERS,
+    pg.add_argument("--min-tier", choices=TIERS, action="append",
+                    help="floor: the effective tier is max(every floor, the report's tier), so a "
+                         "pin can only RAISE requirements, never downgrade a dangerous change "
+                         "(repeatable; all values raise)")
+    pg.add_argument("--tier", choices=TIERS, action="append",
                     help="DEPRECATED alias for --min-tier (also a floor; kept for back-compat)")
     pg.add_argument("--base", help="trusted diff base for the L1 docs-only waiver (e.g. origin/main); "
                                    "without it the waiver never applies and tests are required")
@@ -947,9 +1025,16 @@ def main(argv=None):
     pg.add_argument("--require-captured", action="store_true",
                     help="DEPRECATED alias for --require-transcript (kept for CI back-compat)")
     pg.add_argument("--require-executed", action="store_true",
-                    help="STRICTER than --require-transcript: the transcript must come from a "
-                         "coverloop-EXECUTED reviewer run (source 'captured', exit 0); attached "
-                         "transcripts are rejected")
+                    help="STRICTER than --require-transcript: prefer a coverloop-EXECUTED capture "
+                         "(source 'captured', exit 0) and reject honestly-attached transcripts. "
+                         "BEST-EFFORT policy filter, NOT proof of execution — on-disk fields are "
+                         "attester-controlled, so a committer who controls the tree can still forge "
+                         "a captured-shaped entry (see docs/GATE.md threat model)")
+    pg.add_argument("--require-clean-tree", action="store_true",
+                    help="for LOCAL pre-push/pre-deploy gating: fail if the working tree has "
+                         "uncommitted non-evidence changes (code edited after attest isn't covered "
+                         "by evidence bound to HEAD). Off by default (untracked scratch files "
+                         "would block it); a clean CI checkout doesn't need it")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)

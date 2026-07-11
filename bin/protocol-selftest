@@ -51,7 +51,16 @@ import json,os
 try: d=json.load(open(os.path.expanduser("~/.claude/settings.json")))
 except Exception: print("UNREADABLE"); raise SystemExit
 evs=d.get("hooks",{}); want=["Stop","PostToolUseFailure","SessionStart","PreToolUse"]
-missing=[e for e in want if e not in evs]
+# Validate DEPTH, not just key presence (full audit 2026-07-11): an empty array,
+# a hook with no command, or a PreToolUse block with no Bash matcher used to pass
+# as "wired" — a false green in the tool whose whole job is catching wiring drift.
+def cmds(entries):
+    return [h.get("command","") for m in (entries or []) if isinstance(m,dict)
+            for h in m.get("hooks",[]) if isinstance(h,dict) and h.get("command")]
+missing=[e for e in want if not (isinstance(evs.get(e),list) and cmds(evs.get(e)))]
+pre=evs.get("PreToolUse") or []
+if not any(isinstance(m,dict) and "Bash" in (m.get("matcher") or "") and cmds([m]) for m in pre):
+    missing.append("PreToolUse:Bash-matcher")
 print("OK" if not missing else "MISSING:"+",".join(missing))
 PY
 )
@@ -79,8 +88,11 @@ if [ -f "$PROJ/CLAUDE.md" ] && [ "$PROJ" != "$SRC" ]; then
     fail "CLAUDE.md has NO inlined Operating Contract — the protocol will not load (see docs/SESSION_BOOTSTRAP.md)"
   fi
   [ -f "$PROJ/docs/MEMORY.md" ] && ok "docs/MEMORY.md present" || fail "docs/MEMORY.md missing (portable memory)"
-  N=$(grep -c '^- ' "$PROJ/docs/MEMORY.md" 2>/dev/null || echo 0)
-  [ "$N" -gt 30 ] && warn "MEMORY.md has $N entries — consolidate (cap ~30; merge/retire stale)" || true
+  # grep -c already prints 0 (and exits 1) on zero matches, so `|| echo 0` made
+  # N a two-line "0\n0" and broke the numeric test with a stderr error. Default
+  # the empty/file-missing case instead.
+  N=$(grep -c '^- ' "$PROJ/docs/MEMORY.md" 2>/dev/null); N=${N:-0}
+  [ "$N" -gt 30 ] 2>/dev/null && warn "MEMORY.md has $N entries — consolidate (cap ~30; merge/retire stale)" || true
   [ -f "$PROJ/docs/REVIEW_LEDGER.md" ] && ok "docs/REVIEW_LEDGER.md present" || warn "docs/REVIEW_LEDGER.md missing (false-positive ledger + review log)"
   [ -f "$PROJ/docs/RISK_MAP.md" ] && ok "docs/RISK_MAP.md present" || warn "docs/RISK_MAP.md missing (or kept in Obsidian)"
   if [ -f "$PROJ/.claude/loop.conf" ]; then

@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-10a"
+FILTER_VERSION = "2026-07-11a"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -28,7 +28,10 @@ VALUE_PATTERNS = [
     ("jwt",          re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}")),
     ("bearer",       re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}")),
     ("db-url-cred",  re.compile(r"(?i)\b(?:postgres|postgresql|mysql|mongodb)(?:\+[a-z]+)?://[^\s:/@]+:[^\s@]+@")),
-    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)),
+    # Bounded inter-marker span (.{0,10000}?) — a real PEM body is <~3.2KB, and
+    # an unbounded .*? under DOTALL rescans to EOF from every BEGIN candidate
+    # when no END marker exists (quadratic ReDoS). 10KB caps each start's scan.
+    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.{0,10000}?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)),
 ]
 
 # Assignment of a secret-NAMED variable to ANY value (even an unrecognized
@@ -37,8 +40,15 @@ VALUE_PATTERNS = [
 # just because its value isn't one of the known token shapes above.
 ASSIGN_RE = re.compile(
     r"(?i)((?:OPENROUTER_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|SUPABASE_SERVICE_ROLE"
-    r"|service_role|DATABASE_URL|VERCEL_TOKEN|[A-Za-z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD))"
-    r"\s*[=:]\s*)(['\"]?)([^\s'\"]{3,})")
+    # `[_-]KEY` catches the bare _KEY family (AWS_SECRET_ACCESS_KEY, SECRET_KEY,
+    # ENCRYPTION_KEY, SIGNING_KEY, PRIVATE_KEY) that `API[_-]?KEY` alone missed;
+    # the separator requirement still skips MONKEY=/HOTKEY=.
+    r"|service_role|DATABASE_URL|VERCEL_TOKEN|[A-Za-z0-9_]*(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD))"
+    # value: when QUOTED, span to the MATCHING closing quote (a backreference —
+    # so an inner apostrophe in "horse's staple" doesn't cut it short); when
+    # unquoted, a bare token. No {3,} floor — TOKEN=x must redact too.
+    # (Sol v2.7.3 verify #3)
+    r"\s*[=:]\s*)(?P<q>['\"])?(?P<val>(?(q)[^\r\n]*?(?=(?P=q)|[\r\n]|$)|[^\s'\"]+))")
 
 # PII shapes (v2.7.2) — redacted from transcripts before they are COMMITTED to
 # git (redact() only). Deliberately NOT part of scan(): scan() is the egress
@@ -84,7 +94,7 @@ def redact(text):
     out = text
     for label, rx in VALUE_PATTERNS:
         out = rx.sub(f"[REDACTED:{label}]", out)
-    out = ASSIGN_RE.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED:secret-value]", out)
+    out = ASSIGN_RE.sub(lambda m: m.group(1) + (m.group(2) or "") + "[REDACTED:secret-value]", out)
     # PII pass (committed-transcript hygiene, v2.7.2): keep the path prefix
     # readable, drop the identifying username; emails/UUIDs replaced whole.
     out = PII_PATTERNS[0][1].sub(r"\1[REDACTED:user]", out)

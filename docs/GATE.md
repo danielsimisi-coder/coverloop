@@ -212,6 +212,22 @@ anywhere, and an entry claiming `attached` while carrying a captured run's
   planned `--require-github-approval` lands.
 - **`test_command` and reviewer commands come from in-repo config/flags** — a
   PR that changes them is high-signal and must be reviewed as such.
+- **`--require-executed` is best-effort, not proof of execution.** It prefers a
+  coverloop-*captured* run over an *attached* transcript, but `command`,
+  `exit_code`, and `ran_at` are unauthenticated JSON and the log's bytes+hash
+  are attester-authored, so a committer who controls the working tree can still
+  hand-craft a captured-shaped entry. It filters honestly-attached evidence (a
+  useful policy signal), it does not cryptographically prove coverloop ran the
+  reviewer — the same non-adversarial-filesystem ceiling as the rest of the
+  tool. (A genuine *failed* capture cannot be laundered, though: its log carries
+  a withheld-run marker the gate rejects for both sources.)
+- **Dirty-worktree drift is caught only with `--require-clean-tree`.** Evidence
+  binds to HEAD, so uncommitted code edited *after* a passing attest would gate
+  green while HEAD is unchanged. CI is immune (it checks out the clean PR head
+  SHA); for **local** pre-push/pre-deploy gating pass `--require-clean-tree`,
+  which fails on uncommitted non-evidence changes (report artifacts carved out).
+  It is opt-in because a legitimate untracked scratch file would otherwise block
+  the gate.
 
 `--json` emits a machine-readable verdict on stdout; `--ci` adds GitHub
 error annotations on **stderr** so failures show inline on the PR — the two

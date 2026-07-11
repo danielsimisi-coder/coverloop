@@ -18,7 +18,7 @@ jobs:
         run: |
           # Pin to a RELEASE TAG, never main — don't run live code from an
           # external branch in your CI. Bump the tag deliberately.
-          COVERLOOP_REF=v2.7.2
+          COVERLOOP_REF=v2.7.3
           curl -fsSL -o coverloop \
             "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
           chmod +x coverloop
