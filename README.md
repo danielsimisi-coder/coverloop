@@ -67,6 +67,10 @@ coverloop gate                                  # exit 0 only if the tier's evid
 
 Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — or, for the review you **already ran interactively**, `--codex-log <file>` attaches its transcript (redacted, hashed, committed) with **no re-run**. The gate labels each verdict `[captured <hash>]` / `[attached <hash>]` vs `[self-attested]`, so a reviewer can tell a real transcript from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), pinned to a release tag) and an unreviewed change *physically cannot merge*.
 
+**Here's the whole idea in one real session** — captured verbatim from Coverloop gating its own repo (only long paths elided). The gate blocks an unreviewed change, the loop earns the evidence (real test run + a GPT-5.6 cross-vendor review, hashed), and the same command opens:
+
+<p align="center"><img src="assets/coverloop-gate-demo.svg" width="880" alt="Real coverloop session: gate FAILs an unreviewed change (tests + codex NO RECORD, exit 1) → attest runs the tests and captures a gpt-5.6-sol review → the same gate PASSes with a hashed transcript (exit 0)"></p>
+
 > **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---

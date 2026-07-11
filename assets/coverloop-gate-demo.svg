@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <!-- Real session, captured 2026-07-11: coverloop v2.7.2 gating its own repo.
+       Output is verbatim; only long paths/commands are elided with … -->
+  <rect x="0" y="0" width="880" height="520" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <!-- title bar -->
+  <rect x="0" y="0" width="880" height="36" rx="12" fill="#161b22"/>
+  <rect x="0" y="24" width="880" height="12" fill="#161b22"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f57"/>
+  <circle cx="42" cy="18" r="6" fill="#febc2e"/>
+  <circle cx="62" cy="18" r="6" fill="#28c840"/>
+  <text x="440" y="23" text-anchor="middle" fill="#8b949e" font-size="12">coverloop — real captured session (v2.7.2)</text>
+
+  <!-- ① BLOCKED -->
+  <text x="24" y="64" fill="#8b949e" font-style="italic" font-size="12">① an unreviewed change tries to pass the gate</text>
+  <text x="24" y="88" fill="#7ee787">$ <tspan fill="#e6edf3">coverloop gate --min-tier L2 --require-transcript</tspan></text>
+  <text x="24" y="108" fill="#e6edf3">coverloop gate — commit 174caffefd9e — tier L2</text>
+  <text x="24" y="128" fill="#f85149">  ✘ tests       <tspan fill="#e6edf3">tests: NO RECORD — run `coverloop attest --tests`</tspan></text>
+  <text x="24" y="148" fill="#f85149">  ✘ codex       <tspan fill="#e6edf3">codex: NO RECORD — independent diff review is mandatory at L2/L3</tspan></text>
+  <text x="24" y="170" fill="#f85149" font-weight="bold">VERDICT: FAIL — required evidence missing or failing</text>
+  <text x="620" y="170" fill="#8b949e" font-style="italic" font-size="12">exit 1 → merge blocked</text>
+
+  <line x1="24" y1="192" x2="856" y2="192" stroke="#21262d"/>
+
+  <!-- ② the loop earns the evidence -->
+  <text x="24" y="216" fill="#8b949e" font-style="italic" font-size="12">② so the loop runs for real — tests + a cross-vendor review, captured &amp; hashed</text>
+  <text x="24" y="240" fill="#7ee787">$ <tspan fill="#e6edf3">coverloop attest --tests --codex pass \</tspan></text>
+  <text x="24" y="258" fill="#e6edf3">    --codex-run <tspan fill="#a5d6ff">"codex exec -m gpt-5.6-sol -c model_reasoning_effort=\"high\" --sandbox read-only '…'"</tspan></text>
+  <text x="24" y="280" fill="#e6edf3">running tests: python3 -m unittest discover -s tests   <tspan fill="#7ee787">Ran 81 tests … OK</tspan></text>
+  <text x="24" y="300" fill="#e6edf3">capturing codex reviewer: codex exec -m gpt-5.6-sol …  <tspan fill="#7ee787">CLEAN</tspan> <tspan fill="#8b949e">(46,723 tokens)</tspan></text>
+  <text x="24" y="320" fill="#e6edf3">recorded [tests=pass, codex=pass<tspan fill="#56d4dd">[captured]</tspan>] -&gt; .coverloop/reports/174caffe….json</text>
+  <text x="24" y="340" fill="#e6edf3">commit this report with your change — it is the PR-visible evidence.</text>
+
+  <line x1="24" y1="362" x2="856" y2="362" stroke="#21262d"/>
+
+  <!-- ③ PASS -->
+  <text x="24" y="386" fill="#8b949e" font-style="italic" font-size="12">③ the same command — now the change has earned its merge</text>
+  <text x="24" y="410" fill="#7ee787">$ <tspan fill="#e6edf3">coverloop gate --min-tier L2 --require-transcript</tspan></text>
+  <text x="24" y="430" fill="#e6edf3">coverloop gate — commit 174caffefd9e — tier L2</text>
+  <text x="24" y="450" fill="#3fb950">  ✔ tests       <tspan fill="#e6edf3">tests: pass (python3 -m unittest discover -s tests)</tspan></text>
+  <text x="24" y="470" fill="#3fb950">  ✔ codex       <tspan fill="#e6edf3">codex: pass, open findings: 0 </tspan><tspan fill="#56d4dd">[captured c5ba04dc]</tspan></text>
+  <text x="24" y="494" fill="#3fb950" font-weight="bold">VERDICT: PASS</text>
+  <text x="620" y="494" fill="#8b949e" font-style="italic" font-size="12">exit 0 → merge allowed</text>
+</svg>
