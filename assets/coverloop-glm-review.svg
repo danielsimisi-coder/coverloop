@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="392" viewBox="0 0 880 392" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <!-- Real GLM-5.2 red-team transcript, captured 2026-07-11 on a coverloop gate hunk. Verbatim; elided with … -->
+  <rect x="0" y="0" width="880" height="392" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <rect x="0" y="0" width="880" height="36" rx="12" fill="#161b22"/>
+  <rect x="0" y="24" width="880" height="12" fill="#161b22"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+  <text x="440" y="23" text-anchor="middle" fill="#8b949e" font-size="12">GLM-5.2 · full-ZDR red-team · real transcript</text>
+
+  <text x="24" y="66" fill="#7ee787">$ <tspan fill="#e6edf3">git show HEAD~1:bin/coverloop | sed -n '630,675p' | glm-redteam "…find any bypass…"</tspan></text>
+  <text x="24" y="94" fill="#e6edf3">## Verdict: <tspan fill="#f0883e" font-weight="bold">REQUEST CHANGES</tspan></text>
+
+  <text x="24" y="122" fill="#8b949e">## P1 serious issues</text>
+  <text x="24" y="144" fill="#e6edf3">1. <tspan fill="#a5d6ff">commit</tspan>/<tspan fill="#a5d6ff">name</tspan> are interpolated into <tspan fill="#a5d6ff">expected</tspan> without sanitizing. A <tspan fill="#a5d6ff">name="../…"</tspan></text>
+  <text x="40" y="164" fill="#e6edf3">could satisfy the exact-string check → path-traversal bypass. Validate they're hex/ident.</text>
+  <text x="24" y="186" fill="#e6edf3">2. Confirm the sha256 digest is actually compared (docstring promises it) …</text>
+
+  <text x="24" y="216" fill="#8b949e">## Suggested next action</text>
+  <text x="24" y="238" fill="#e6edf3">Add the missing positive requirement for <tspan fill="#a5d6ff">captured</tspan>:</text>
+  <rect x="24" y="250" width="700" height="72" rx="6" fill="#161b22"/>
+  <text x="38" y="270" fill="#ff7b72">if <tspan fill="#e6edf3">src == </tspan><tspan fill="#a5d6ff">"captured"</tspan><tspan fill="#e6edf3">:</tspan></text>
+  <text x="54" y="290" fill="#ff7b72">if <tspan fill="#e6edf3">not all(k in entry for k in (</tspan><tspan fill="#a5d6ff">"exit_code","command","ran_at"</tspan><tspan fill="#e6edf3">)):</tspan></text>
+  <text x="70" y="310" fill="#ff7b72">return <tspan fill="#79c0ff">False</tspan></text>
+
+  <text x="24" y="352" fill="#3fb950" font-weight="bold">↑ the exact fix GPT-5.6 Sol independently reached on the same code.</text>
+  <text x="24" y="372" fill="#8b949e" font-style="italic">Two different labs (Zhipu · OpenAI), same catch — cross-lineage review, working.</text>
+</svg>

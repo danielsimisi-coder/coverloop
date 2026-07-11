@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="420" viewBox="0 0 880 420" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <!-- Real MiniMax M3 audit transcript, captured 2026-07-11 on a coverloop gate hunk. Verbatim; elided with … -->
+  <rect x="0" y="0" width="880" height="420" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <rect x="0" y="0" width="880" height="36" rx="12" fill="#161b22"/>
+  <rect x="0" y="24" width="880" height="12" fill="#161b22"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+  <text x="440" y="23" text-anchor="middle" fill="#8b949e" font-size="12">MiniMax M3 · data_collection:deny · L3 divergence auditor · real transcript</text>
+
+  <!-- the privacy-refusal moment, real -->
+  <text x="24" y="64" fill="#7ee787">$ <tspan fill="#e6edf3">git show HEAD~1:bin/glm_secret_filter.py | sed -n '33,60p' | m3-audit "…"</tspan></text>
+  <text x="24" y="84" fill="#f85149">ERROR: Refusing to send possible secret-bearing content. Matched: OPENROUTER_API_KEY,</text>
+  <text x="24" y="102" fill="#f85149">  DATABASE_URL, VERCEL_TOKEN, secret-assignment</text>
+  <text x="24" y="122" fill="#8b949e" font-style="italic">↑ the egress tripwire fired — the hunk contained secret NAMES, so nothing was sent. Fail-closed.</text>
+
+  <line x1="24" y1="142" x2="856" y2="142" stroke="#21262d"/>
+
+  <!-- the real audit on a clean hunk -->
+  <text x="24" y="166" fill="#7ee787">$ <tspan fill="#e6edf3">… evaluate() gate hunk (no secret names) | m3-audit "find any tier that can pass without evidence"</tspan></text>
+  <text x="24" y="190" fill="#e6edf3">| Finding | Severity | Why it matters |</text>
+  <text x="24" y="212" fill="#e6edf3">| <tspan fill="#a5d6ff">Unknown/malformed tier falls through</tspan> | <tspan fill="#f85149" font-weight="bold">P0</tspan> | a tier outside L0–L3 skips every</text>
+  <text x="40" y="230" fill="#e6edf3">reviewer check — passes on tests alone, contradicting "fail closed". Normalize + reject. |</text>
+  <text x="24" y="254" fill="#e6edf3">| <tspan fill="#a5d6ff">tests trusted on status string alone</tspan> | <tspan fill="#d29922" font-weight="bold">P2</tspan> | a forged {"status":"pass"} clears if the</text>
+  <text x="40" y="272" fill="#e6edf3">command matches — require exit_code==0 + a log hash. |</text>
+
+  <text x="24" y="312" fill="#8b949e">**Summary:** the code-visible P0 is the unknown-tier fall-through; two more P0s are</text>
+  <text x="24" y="330" fill="#8b949e">"pending — unverifiable from this snippet" and must be checked against the full function.</text>
+
+  <line x1="24" y1="352" x2="856" y2="352" stroke="#21262d"/>
+  <text x="24" y="376" fill="#3fb950" font-weight="bold">M3's job is DIVERGENCE — a 4th-lineage voice that surfaces what to re-verify.</text>
+  <text x="24" y="396" fill="#8b949e" font-style="italic">Every finding is verified against the real code — no model is an authority (the tier guard lives upstream in cmd_gate).</text>
+</svg>

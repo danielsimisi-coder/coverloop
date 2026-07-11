@@ -71,6 +71,21 @@ Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashe
 
 <p align="center"><img src="assets/coverloop-gate-demo.svg" width="880" alt="Real coverloop session: gate FAILs an unreviewed change (tests + codex NO RECORD, exit 1) → attest runs the tests and captures a gpt-5.6-sol review → the same gate PASSes with a hashed transcript (exit 0)"></p>
 
+<details>
+<summary><b>…and the same change, seen by the other two reviewers (also real transcripts)</b></summary>
+
+<br/>
+
+Different training lineages catch different things — that's the whole point of a multi-model loop. Here is the *same code*, red-teamed by **GLM-5.2** (full zero-data-retention) and audited by **MiniMax M3** (a fourth-lineage divergence voice), captured verbatim:
+
+<p align="center"><img src="assets/coverloop-glm-review.svg" width="880" alt="Real GLM-5.2 red-team transcript: REQUEST CHANGES, flags a path-traversal risk, and independently recommends the exact captured-execution-fields fix that GPT-5.6 Sol also reached — two different labs, same catch"></p>
+
+<p align="center"><img src="assets/coverloop-m3-review.svg" width="880" alt="Real MiniMax M3 audit transcript: its egress filter refuses a hunk containing secret names (fail-closed), then on a clean hunk it produces a severity-ranked audit table — divergence findings that are then verified against the full code"></p>
+
+**Two things these show that a single reviewer can't:** GLM independently reached the *exact* fix GPT-5.6 Sol did (cross-lineage convergence is a strong signal a finding is real), and M3's egress filter *refused to send* a hunk containing secret names — the privacy layer failing closed, not on prompt discipline. No model is an authority: every finding is then checked against the real code.
+
+</details>
+
 > **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
