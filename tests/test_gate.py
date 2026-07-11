@@ -1328,6 +1328,69 @@ class GateTestCase(unittest.TestCase):
                              "%d-char-prefix secret leaked" % n)
             self.assertTrue(f.scan(s), "%d-char-prefix secret not flagged" % n)
 
+    # ---- R3: commit-signature provenance (--require-signed-commit) ----
+    def test_signed_commit_not_required_by_default(self):
+        """Opt-in: an unsigned commit still gates PASS without the flag — the
+        provenance check must never change the default path."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_require_signed_commit_fails_on_unsigned(self):
+        """With the flag, an unsigned HEAD fails with a clean 'signature' check —
+        no traceback, and the verdict is FAIL."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("signature", (r.stdout + r.stderr).lower())
+
+    def test_require_signed_commit_exempt_at_L0(self):
+        """L0 needs no evidence; a signature gate on a no-op would be noise, so
+        --require-signed-commit is a no-op at L0 (still PASS while unsigned)."""
+        self.init_project()
+        r = run(["gate", "--min-tier", "L0", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_require_signed_commit_passes_when_ssh_signed(self):
+        """Positive path: an SSH-signed HEAD that git can verify passes the
+        provenance gate. Skips where ssh-keygen or git ssh-signing is absent."""
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        key = os.path.join(self.tmp.name, "id_ed25519")
+        kg = subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
+                            capture_output=True, text=True)
+        if kg.returncode != 0:
+            self.skipTest("ssh-keygen failed: %s" % kg.stderr)
+        pub = open(key + ".pub").read().strip()
+        email = "t@example.com"  # matches setUp's git user.email
+        allowed = os.path.join(self.tmp.name, "allowed_signers")
+        with open(allowed, "w") as fh:
+            fh.write("%s %s\n" % (email, pub))
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key + ".pub"],
+                    ["gpg.ssh.allowedSignersFile", allowed]):
+            sh(["git", "config"] + cfg, self.repo)
+        self.init_project()
+        # a signed code commit becomes HEAD, then attest binds evidence to it
+        self.write("feature.py", "print('signed')\n")
+        sh(["git", "add", "-A"], self.repo)
+        signed = subprocess.run(["git", "commit", "-S", "-qm", "signed change"],
+                                cwd=self.repo, capture_output=True, text=True)
+        if signed.returncode != 0:
+            self.skipTest("git ssh-signing unsupported here: %s" % signed.stderr)
+        # sanity: git itself must verify it, else the environment can't sign
+        vc = subprocess.run(["git", "verify-commit", "HEAD"], cwd=self.repo,
+                            capture_output=True, text=True)
+        if vc.returncode != 0:
+            self.skipTest("git verify-commit not functional here: %s" % vc.stderr)
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("signature", (r.stdout + r.stderr).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,8 @@
 # Coverloop's OWN CI — continuously proves the gate on every push and PR.
 # stdlib-only, so no install step. The gate that enforces evidence for other
-# repos must itself be green on every commit, across supported Python versions.
+# repos must itself be green on every commit, across supported Python versions
+# AND operating systems (evidence writes, newline handling, and the symlink /
+# dir-fd guards are all platform-sensitive — R3 hardening).
 name: tests
 on:
   push:
@@ -10,10 +12,11 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.9', '3.11', '3.13']
     steps:
       # Pinned to full commit SHAs (not mutable tags) — supply-chain hygiene.
@@ -23,5 +26,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Gate test suite
         run: python3 tests/test_gate.py
+      - name: Property / fuzz / concurrency tests
+        run: python3 tests/test_properties.py
+      # The shell hooks are POSIX (bash + pwd -P + git). They ship for Unix; on
+      # Windows they run under Git Bash / WSL, which the hosted windows runner's
+      # default shell is not — so this leg is Unix-only rather than claiming an
+      # unverified Windows pass. The Python gate (above) runs on all three OSes.
       - name: Stop-hook behavioral tests
+        if: runner.os != 'Windows'
         run: bash tests/test_hooks.sh

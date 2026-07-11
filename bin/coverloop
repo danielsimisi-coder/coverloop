@@ -910,6 +910,32 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
     return verdict, checks
 
 
+def verify_commit_signature(root, sha):
+    """(ok, detail) for whether <sha> carries a git-verifiable GPG/SSH signature.
+
+    Provenance (R3): the evidence report is bound to a commit hash, but a hash
+    alone doesn't prove WHO authored it. `git verify-commit` exits 0 only for a
+    good signature from a key git already trusts (gpg keyring, or ssh
+    allowed_signers), so requiring it means unreviewed code can't be laundered
+    onto an unsigned/forged commit and gated green. Opt-in (--require-signed-
+    commit); never changes the default path."""
+    try:
+        out = subprocess.run(["git", "verify-commit", "--raw", sha],
+                             cwd=root, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "git verify-commit unavailable — cannot confirm commit provenance"
+    if out.returncode == 0:
+        signer = ""
+        for line in (out.stderr or "").splitlines():
+            if "GOODSIG" in line:  # gpg: "... GOODSIG <keyid> <name>"; surface the name
+                parts = line.split("GOODSIG", 1)[1].split(None, 1)
+                signer = parts[1].strip() if len(parts) > 1 else parts[0].strip()
+                break
+        return True, "HEAD commit signature verified" + (f" — {signer}" if signer else "")
+    return False, ("HEAD is not signed by a verifiable key (git verify-commit failed) — "
+                   "sign the evidence commit (git commit -S) or drop --require-signed-commit")
+
+
 def cmd_gate(args):
     root = repo_root()
     sha = head_sha(root)
@@ -995,6 +1021,15 @@ def cmd_gate(args):
                                require_captured=require_transcript, root=root,
                                test_command=(cfg or {}).get("test_command"),
                                require_executed=args.require_executed)
+
+    # Provenance (opt-in): also require HEAD to be cryptographically signed, so
+    # the tier's evidence can't be replayed onto an unsigned/forged commit. L0
+    # (no evidence required) is exempt — a signature gate on a no-op is noise.
+    if getattr(args, "require_signed_commit", False) and tier != "L0":
+        sig_ok, sig_detail = verify_commit_signature(root, sha)
+        checks.append(check("signature", sig_ok, sig_detail))
+        verdict = verdict and sig_ok
+
     _emit(args, sha, tier, verdict, checks)
     sys.exit(0 if verdict else 1)
 
@@ -1079,6 +1114,11 @@ def main(argv=None):
                          "uncommitted non-evidence changes (code edited after attest isn't covered "
                          "by evidence bound to HEAD). Off by default (untracked scratch files "
                          "would block it); a clean CI checkout doesn't need it")
+    pg.add_argument("--require-signed-commit", action="store_true",
+                    help="PROVENANCE: also require HEAD to carry a git-verifiable GPG/SSH "
+                         "signature (git verify-commit), so a report can't be replayed onto an "
+                         "unsigned/forged commit. Needs a trusted keyring / ssh allowed_signers. "
+                         "L0 is exempt")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)

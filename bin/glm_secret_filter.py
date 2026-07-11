@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-11c"
+FILTER_VERSION = "2026-07-11d"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -17,21 +17,35 @@ LITERAL_PATTERNS = [
 ]
 
 # VALUE patterns — actual secret SHAPES. Used by BOTH scan() (detect) and
-# redact() (replace). Each is (label, compiled-regex). Boundaries keep ordinary
-# kebab tokens (risk-based, task-start) from matching the sk- rule.
+# redact() (replace). Each is (label, compiled-regex, guard): GUARD is an
+# optional cheap substring that MUST be present for the regex to have any chance
+# of matching; when set, scan()/redact() skip the regex entirely if the guard is
+# absent (an O(1)-per-call `in` check instead of running the engine). This is a
+# ReDoS floor: for the private-key pattern, thousands of `-----BEGIN` markers
+# with NO `-----END` made the engine do a bounded forward scan PER marker
+# (~O(markers x bound)); the guard makes a no-END input skip the pattern
+# outright (R3 fuzz test caught 2.9s on 0.6 MB of bare BEGIN markers).
+# Boundaries keep ordinary kebab tokens (risk-based, task-start) off the sk- rule.
 VALUE_PATTERNS = [
-    ("sk-key",       re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")),
-    ("github-token", re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}")),
-    ("aws-key",      re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
-    ("slack-token",  re.compile(r"(?<![A-Za-z0-9])xox[baprs]-[A-Za-z0-9-]{10,}")),
-    ("google-key",   re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")),
-    ("jwt",          re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}")),
-    ("bearer",       re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}")),
-    ("db-url-cred",  re.compile(r"(?i)\b(?:postgres|postgresql|mysql|mongodb)(?:\+[a-z]+)?://[^\s:/@]+:[^\s@]+@")),
-    # Bounded inter-marker span (.{0,10000}?) — a real PEM body is <~3.2KB, and
-    # an unbounded .*? under DOTALL rescans to EOF from every BEGIN candidate
-    # when no END marker exists (quadratic ReDoS). 10KB caps each start's scan.
-    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.{0,10000}?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)),
+    ("sk-key",       re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"), "sk-"),
+    ("github-token", re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}"), "gh"),
+    ("aws-key",      re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])"), None),
+    ("slack-token",  re.compile(r"(?<![A-Za-z0-9])xox[baprs]-[A-Za-z0-9-]{10,}"), "xox"),
+    ("google-key",   re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"), "AIza"),
+    ("jwt",          re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}"), "eyJ"),
+    ("bearer",       re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"), None),
+    ("db-url-cred",  re.compile(r"(?i)\b(?:postgres|postgresql|mysql|mongodb)(?:\+[a-z]+)?://[^\s:/@]+:[^\s@]+@"), "://"),
+    # Inter-marker span is a TEMPERED dot `(?:(?!-----).)` — any char that does
+    # not begin a `-----` marker run. A real PEM body (base64 + whitespace, plus
+    # `Proc-Type:`/`DEK-Info:` headers on encrypted keys) never contains five
+    # consecutive dashes, so this matches every real key, but a BEGIN can no
+    # longer scan ACROSS the next marker: thousands of bare `-----BEGIN` markers
+    # (with or without a distant END) each fail in O(1) instead of scanning the
+    # bound. The `{0,10000}` bound stays as a backstop (real body <~6.3KB even
+    # for an 8192-bit RSA key) and the "-----END" GUARD skips the pattern
+    # entirely when no END marker exists at all. (R3 fuzz test: 0.6 MB of BEGIN
+    # markers went 2.9s -> instant.)
+    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----).){0,10000}?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "-----END"),
 ]
 
 # Assignment of a secret-NAMED variable to ANY value (even an unrecognized
@@ -84,13 +98,15 @@ PII_PATTERNS = [
 KEY_RE = VALUE_PATTERNS[0][1]
 
 # Kept for --version display / parity reporting (NOT used for matching directly).
-SECRET_PATTERNS = LITERAL_PATTERNS + [label for label, _ in VALUE_PATTERNS]
+SECRET_PATTERNS = LITERAL_PATTERNS + [t[0] for t in VALUE_PATTERNS]
 
 
 def scan(text):
     """Return list of matched secret indicators (empty = clean)."""
     hits = [p for p in LITERAL_PATTERNS if p in text]
-    for label, rx in VALUE_PATTERNS:
+    for label, rx, guard in VALUE_PATTERNS:
+        if guard and guard not in text:
+            continue
         if rx.search(text):
             hits.append(label)
     if ASSIGN_RE.search(text):
@@ -104,7 +120,9 @@ def redact(text):
     assignment is removed regardless of shape (keeping the name). Legitimate
     prose survives — only values are touched, never bare name mentions."""
     out = text
-    for label, rx in VALUE_PATTERNS:
+    for label, rx, guard in VALUE_PATTERNS:
+        if guard and guard not in out:
+            continue
         out = rx.sub(f"[REDACTED:{label}]", out)
     out = ASSIGN_RE.sub(lambda m: m.group(1) + (m.group(2) or "") + "[REDACTED:secret-value]", out)
     # PII pass (committed-transcript hygiene, v2.7.2): keep the path prefix
