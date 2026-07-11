@@ -116,6 +116,8 @@ Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop s
 
 Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — a few:
 
+> **The self-audit that says it best:** on an already-public, 80-test release, a full multi-lineage pass (Claude + GPT-5.6 Sol + GLM-5.2, 42 agents, every finding verified against the code) found **0 critical and 4 real high-severity bugs** — including one where a *failed* review could be laundered into a passing one by editing a single digit. The fixes were then reviewed by GPT-5.6, which caught **3 more bugs in the fixes themselves.** All closed, all regression-locked (90 tests). *This is what "no model is an authority" looks like in practice.*
+
 | The bug | Who caught it | What it would've done |
 |---|---|---|
 | **Two rival labs, one catch:** GPT-5.6 Sol **and** GLM-5.2 *independently* reached the exact same fix on the gate's own evidence code — a forged reviewer entry could otherwise pass the strictest check | **Sol + GLM** (cross-lineage) | The strongest signal a finding is real: convergence across training lineages, not a shared hallucination ([transcripts above](#-watch-it-catch-a-bug)) |
@@ -227,7 +229,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own test suite (81 cases, stdlib only)
+tests/                      the gate's own test suite (90 cases, stdlib only)
 CHANGELOG.md                the story of how it got here
 ```
 
