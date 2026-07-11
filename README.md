@@ -160,6 +160,10 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 - 🧩 **Reviewers get full context, not just the diff** — the #1 cause of false alarms is a reviewer judging 5 lines with no surrounding code.
 - 🔗 **One source of truth, zero drift.** `AGENTS.md` is a symlink to `CLAUDE.md`, so every tool reads the exact same rules.
 - 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — a provable record of what left your machine, without the log ever containing your code or secrets.
+- 🥶 **Reviews are "cold reads" — by design.** The reviewer sees the change as a fresh artifact in a fresh session, never inside the conversation that wrote it. 2026 research measured this as the single strongest anti-bias lever in AI code review (an evaluator's catch-rate rises sharply when the work isn't in its own context) — cross-vendor review adds a second, independent layer on top.
+- 🎚️ **The judge's thinking dial is never left on "low".** Reviewer reasoning effort is routed by risk tier — high for normal changes, extra-high for money/auth/migrations, maximum for deadlock-breaking — and auto-delegating "ultra" modes are banned for gates: a judge doesn't outsource judgment.
+- 🕳️ **Evidence can't silently vanish into `.gitignore`.** If a repo's `*.log` rule would swallow a review transcript, `attest` refuses to record it — and `init` writes the negation rules so it can't happen in the first place.
+- 🧼 **Committed transcripts are scrubbed twice.** Secrets (keys, tokens, DB URLs) *and* personal identifiers (home-directory usernames, emails, session IDs) are redacted before any transcript touches git — honestly documented as a tripwire, not a DLP guarantee.
 - 🆓 **Upgrades are free.** A versioning split means improving Coverloop never forces your projects to re-sync.
 
 ---
@@ -177,7 +181,7 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 
 **Anti-drift.** Long sessions "forget" instructions because automatic **context compaction** summarizes away anything read once, and attention decays as the window fills. Coverloop inlines the Operating Contract in the auto-loaded `CLAUDE.md` (re-read after every compaction), a `SessionStart` hook re-injects the standing rules at every start and after every compaction, and a `PreToolUse` hook re-states the gate checklist right before `git push` / `merge` / migration / deploy.
 
-**Privacy.** Tiered egress (public → proprietary → sensitive → secrets/PII, never sent). The most sensitive packets route only to a verified zero-data-retention endpoint; a boundary-aware filter blocks `.env`/keys/tokens/DB URLs before any send; an append-only egress log records a hash of every payload (never the body).
+**Privacy.** Tiered egress (public → proprietary → sensitive → secrets/PII, never sent). The most sensitive packets route only to a verified zero-data-retention endpoint; a boundary-aware filter blocks `.env`/keys/tokens/DB URLs before any send; an append-only egress log records a hash of every payload (never the body). Review transcripts committed as evidence are additionally scrubbed of PII shapes — home-directory usernames, emails, session UUIDs — before they touch git (a pattern tripwire, not a full DLP pass, and the docs say exactly that).
 
 **Self-improving memory.** Durable lessons live in a git-tracked `docs/MEMORY.md` (capped and consolidated, not hoarded); recurring workflows are captured as reusable `SKILL.md` recipes; every review logs one line to a ledger so you can **subtract** any reviewer that isn't catching real bugs.
 
