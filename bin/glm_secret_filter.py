@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-11d"
+FILTER_VERSION = "2026-07-11e"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -40,12 +40,15 @@ VALUE_PATTERNS = [
     # `Proc-Type:`/`DEK-Info:` headers on encrypted keys) never contains five
     # consecutive dashes, so this matches every real key, but a BEGIN can no
     # longer scan ACROSS the next marker: thousands of bare `-----BEGIN` markers
-    # (with or without a distant END) each fail in O(1) instead of scanning the
-    # bound. The `{0,10000}` bound stays as a backstop (real body <~6.3KB even
-    # for an 8192-bit RSA key) and the "-----END" GUARD skips the pattern
-    # entirely when no END marker exists at all. (R3 fuzz test: 0.6 MB of BEGIN
-    # markers went 2.9s -> instant.)
-    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----).){0,10000}?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "-----END"),
+    # (with or without a distant END) each fail in O(1). Because the tempered dot
+    # ALREADY bounds the scan at the next marker, the span is UNBOUNDED on
+    # purpose — a fixed `{0,N}` cap was a secret-leak cliff (Sol R3 P2: a
+    # 16384-bit RSA key's ~10.5KB body exceeded a 10K cap and stopped redacting),
+    # the same class of regression as the R2 name-prefix bound. Each character is
+    # scanned by at most one BEGIN, so it stays linear. The "-----END" GUARD
+    # skips the pattern entirely when no END marker exists at all. (R3 fuzz test:
+    # 0.6 MB of BEGIN markers went 2.9s -> instant.)
+    ("private-key",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----).)*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "-----END"),
 ]
 
 # Assignment of a secret-NAMED variable to ANY value (even an unrecognized

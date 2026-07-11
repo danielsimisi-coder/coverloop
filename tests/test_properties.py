@@ -237,18 +237,24 @@ class ConcurrencyRaces(unittest.TestCase):
             t.start()
         for t in threads:
             t.join()
-        # invariant 1: no worker tracebacked
+        # every writer completed cleanly (no crash, exit 0)
+        self.assertEqual(len(results), n)
         for r in results:
             self.assertNotIn("Traceback", r.stderr, "attest crashed under concurrency: %s" % r.stderr)
-        # invariant 2: the report on disk is valid JSON (not half-written)
+            self.assertEqual(r.returncode, 0, "attest failed under concurrency: %s" % r.stderr)
+        # the report MUST exist and be a COMPLETE, parseable JSON doc — atomic
+        # writes (temp + os.replace) mean a reader never sees a torn file even
+        # with N racing writers. WHICH field wins is a lost-update question, and
+        # attest is a sequential operation by design, so last-writer-wins is the
+        # accepted contract; the invariant under test is no corruption / no crash.
         path = os.path.join(self.repo, ".coverloop", "reports", self._sha() + ".json")
-        if os.path.exists(path):
-            with open(path) as fh:
-                data = fh.read()
-            try:
-                json.loads(data)
-            except Exception as e:
-                self.fail("report corrupted by concurrent writers: %s\n%r" % (e, data[:200]))
+        self.assertTrue(os.path.exists(path), "no report written by any concurrent attest")
+        with open(path) as fh:
+            doc = json.load(fh)  # raises (and fails the test) if the file is torn
+        self.assertEqual(doc.get("commit"), self._sha(), "report not bound to HEAD")
+        # atomic-write temp files must never leak
+        leftovers = [p for p in os.listdir(os.path.dirname(path)) if ".tmp." in p]
+        self.assertEqual(leftovers, [], "atomic-write temp files leaked: %s" % leftovers)
 
     def test_gate_during_concurrent_attest_never_tracebacks(self):
         """Reading (gate) while writers race must fail-closed or pass — never

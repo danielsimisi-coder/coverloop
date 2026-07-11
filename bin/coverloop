@@ -38,8 +38,10 @@ Exit codes: 0 = all required gates pass; 1 = gate failure (missing/failed
 evidence); 2 = usage or environment error.
 """
 import argparse
+import contextlib
 import datetime
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -328,10 +330,18 @@ def new_report(sha, tier):
     }
 
 
+_TMP_SEQ = itertools.count()
+
+
+@contextlib.contextmanager
 def open_write(root, path):
-    """Open PATH (which MUST live directly inside <root>/.coverloop/reports/) for
-    writing, refusing any symlink anywhere in the reports path, and disabling
-    newline translation.
+    """ATOMICALLY write PATH (which MUST live directly inside
+    <root>/.coverloop/reports/): the caller writes to a private temp file in the
+    same dir, and on clean exit it is fsync'd and os.replace'd over PATH — a
+    reader (gate) never sees a half-written report, and a crash mid-write leaves
+    the previous report intact (Sol R3 P2: a plain open()+dump is not atomic, so
+    a concurrent reader or a killed writer could observe a truncated file). Still
+    refuses any symlink in the reports path and disables newline translation.
 
     Audit fixes (2026-07-11): (1) evidence WRITES used a plain open() that would
     follow a pre-planted destination symlink and overwrite an arbitrary off-tree
@@ -359,20 +369,48 @@ def open_write(root, path):
             or os.path.dirname(os.path.realpath(path)) != reports_real):  # resolves outside the real reports dir
         fail_usage(f"refusing to write evidence outside the real reports dir (symlinked path): {path}")
     o_nofollow = getattr(os, "O_NOFOLLOW", 0)
-    wflags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | o_nofollow
     o_dir = getattr(os, "O_DIRECTORY", 0)
-    if o_dir and o_nofollow and os.open in getattr(os, "supports_dir_fd", set()):
-        # POSIX: pin the reports dir by fd (no-follow), verify identity, openat.
-        dfd = os.open(os.path.join(root, REPORTS_DIR), os.O_RDONLY | o_dir | o_nofollow)
-        try:
+    # O_EXCL: the temp name is private (pid + process-monotonic counter), so a
+    # collision is anomalous — never clobber. We create it, so it is never a
+    # symlink and the write can't be redirected through it.
+    wflags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | o_nofollow
+    base = os.path.basename(path)
+    tmp_base = f".{base}.tmp.{os.getpid()}.{next(_TMP_SEQ)}"
+    tmp_full = os.path.join(os.path.dirname(path), tmp_base)
+    use_dirfd = bool(o_dir and o_nofollow
+                     and os.open in getattr(os, "supports_dir_fd", set())
+                     and os.replace in getattr(os, "supports_dir_fd", set()))
+    dfd = None
+    try:
+        if use_dirfd:
+            # POSIX: pin the reports dir by fd (no-follow), verify identity, then
+            # create + replace WITHIN that pinned fd (immune to a post-check swap).
+            dfd = os.open(os.path.join(root, REPORTS_DIR), os.O_RDONLY | o_dir | o_nofollow)
             if not os.path.samestat(os.fstat(dfd), os.stat(reports_real)):
                 fail_usage(f"refusing to write evidence: reports dir identity changed: {path}")
-            fd = os.open(os.path.basename(path), wflags, 0o644, dir_fd=dfd)
-        finally:
+            fd = os.open(tmp_base, wflags, 0o644, dir_fd=dfd)
+        else:
+            fd = os.open(tmp_full, wflags, 0o644)
+        try:
+            f = os.fdopen(fd, "w", encoding="utf-8", newline="")
+            yield f                       # caller writes the evidence to the temp
+            f.flush()
+            os.fsync(f.fileno())          # durable before the rename
+            f.close()
+            if use_dirfd:                 # atomic publish: reader sees old or new, never partial
+                os.replace(tmp_base, base, src_dir_fd=dfd, dst_dir_fd=dfd)
+            else:
+                os.replace(tmp_full, path)
+        except BaseException:
+            # never leave a stray temp; the prior report (if any) stays intact
+            try:
+                os.unlink(tmp_base, dir_fd=dfd) if use_dirfd else os.unlink(tmp_full)
+            except OSError:
+                pass
+            raise
+    finally:
+        if dfd is not None:
             os.close(dfd)
-    else:
-        fd = os.open(path, wflags, 0o644)
-    return os.fdopen(fd, "w", encoding="utf-8", newline="")
 
 
 def save_report(root, report):
@@ -910,30 +948,44 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
     return verdict, checks
 
 
+# git's %G? signature-status codes. Only "G" (good AND from a key of sufficient
+# validity — gpg owner-trust, or an ssh signer in allowed_signers) proves an
+# AUTHORIZED author. "U" is a good signature whose key validity is UNKNOWN (e.g.
+# a key merely imported into the keyring, or an ssh signer NOT in
+# allowed_signers) — accepting it would let anyone with any importable key pass,
+# so we reject it (Sol R3 P1: `git verify-commit` exit 0 accepts both G and U).
+_SIG_STATUS = {
+    "U": "good signature but UNKNOWN key validity — grant owner-trust / add the signer to allowed_signers",
+    "B": "BAD signature", "E": "signature could not be checked (missing public key)",
+    "N": "no signature", "X": "expired signature", "Y": "expired signing key",
+    "R": "revoked signing key",
+}
+
+
 def verify_commit_signature(root, sha):
-    """(ok, detail) for whether <sha> carries a git-verifiable GPG/SSH signature.
+    """(ok, detail) for whether <sha> is signed by a key git fully TRUSTS.
 
     Provenance (R3): the evidence report is bound to a commit hash, but a hash
-    alone doesn't prove WHO authored it. `git verify-commit` exits 0 only for a
-    good signature from a key git already trusts (gpg keyring, or ssh
-    allowed_signers), so requiring it means unreviewed code can't be laundered
-    onto an unsigned/forged commit and gated green. Opt-in (--require-signed-
-    commit); never changes the default path."""
+    alone doesn't prove WHO authored it. We require `git log %G?` == "G" — a good
+    signature from a trusted key (gpg owner-trust, or ssh allowed_signers) — so
+    unreviewed code can't be laundered onto an unsigned/forged/untrusted-key
+    commit and gated green. Opt-in (--require-signed-commit); never changes the
+    default path. errors='replace' so a non-UTF-8 signer name can't raise a
+    ValueError past the OSError handler (GLM R3 P2-1). Fail-closed."""
     try:
-        out = subprocess.run(["git", "verify-commit", "--raw", sha],
-                             cwd=root, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return False, "git verify-commit unavailable — cannot confirm commit provenance"
-    if out.returncode == 0:
-        signer = ""
-        for line in (out.stderr or "").splitlines():
-            if "GOODSIG" in line:  # gpg: "... GOODSIG <keyid> <name>"; surface the name
-                parts = line.split("GOODSIG", 1)[1].split(None, 1)
-                signer = parts[1].strip() if len(parts) > 1 else parts[0].strip()
-                break
-        return True, "HEAD commit signature verified" + (f" — {signer}" if signer else "")
-    return False, ("HEAD is not signed by a verifiable key (git verify-commit failed) — "
-                   "sign the evidence commit (git commit -S) or drop --require-signed-commit")
+        out = subprocess.run(["git", "log", "-1", "--format=%G?%n%GS", sha],
+                             cwd=root, capture_output=True, text=True,
+                             errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False, "git signature check unavailable — cannot confirm commit provenance"
+    lines = (out.stdout or "").splitlines()
+    status = lines[0].strip() if lines else ""
+    signer = lines[1].strip() if len(lines) > 1 else ""
+    if out.returncode == 0 and status == "G":
+        return True, "HEAD signed by a trusted key" + (f" ({signer})" if signer else "")
+    reason = _SIG_STATUS.get(status, "not verifiable")
+    return False, (f"HEAD provenance FAIL: {reason} — sign with a trusted key "
+                   "or drop --require-signed-commit")
 
 
 def cmd_gate(args):

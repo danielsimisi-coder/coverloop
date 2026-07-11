@@ -1370,7 +1370,9 @@ class GateTestCase(unittest.TestCase):
         allowed = os.path.join(self.tmp.name, "allowed_signers")
         with open(allowed, "w") as fh:
             fh.write("%s %s\n" % (email, pub))
-        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key + ".pub"],
+        # signingkey = PRIVATE key path (universally accepted for ssh signing;
+        # some git versions don't strip a `.pub` — GLM R3 P2-3)
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
                     ["gpg.ssh.allowedSignersFile", allowed]):
             sh(["git", "config"] + cfg, self.repo)
         self.init_project()
@@ -1381,15 +1383,50 @@ class GateTestCase(unittest.TestCase):
                                 cwd=self.repo, capture_output=True, text=True)
         if signed.returncode != 0:
             self.skipTest("git ssh-signing unsupported here: %s" % signed.stderr)
-        # sanity: git itself must verify it, else the environment can't sign
-        vc = subprocess.run(["git", "verify-commit", "HEAD"], cwd=self.repo,
+        # sanity: git must report a GOOD, TRUSTED signature (%G? == G), else the
+        # environment can't produce the trusted state the gate requires
+        gq = subprocess.run(["git", "log", "-1", "--format=%G?", "HEAD"], cwd=self.repo,
                             capture_output=True, text=True)
-        if vc.returncode != 0:
-            self.skipTest("git verify-commit not functional here: %s" % vc.stderr)
+        if gq.stdout.strip() != "G":
+            self.skipTest("git ssh trust not functional here: %G?=%r" % gq.stdout.strip())
         run(["attest", "--tier", "L1", "--tests"], self.repo)
         r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertIn("signature", (r.stdout + r.stderr).lower())
+
+    def test_require_signed_commit_rejects_untrusted_key(self):
+        """Sol R3 P1 / GLM top gap: a commit signed by a key git can't VALIDATE
+        (good signature but signer NOT in allowed_signers -> %G? == 'U') must
+        FAIL the gate. Requiring only exit-0 of `git verify-commit` would wrongly
+        accept it. This is the core promise of the provenance gate."""
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        key = os.path.join(self.tmp.name, "id_ed25519")
+        if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
+                          capture_output=True).returncode != 0:
+            self.skipTest("ssh-keygen failed")
+        # allowed_signers is EMPTY -> the signature is good but the signer is
+        # untrusted (unknown validity)
+        allowed = os.path.join(self.tmp.name, "allowed_signers")
+        open(allowed, "w").close()
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
+                    ["gpg.ssh.allowedSignersFile", allowed]):
+            sh(["git", "config"] + cfg, self.repo)
+        self.init_project()
+        self.write("feature.py", "print('untrusted')\n")
+        sh(["git", "add", "-A"], self.repo)
+        if subprocess.run(["git", "commit", "-S", "-qm", "untrusted-signed"],
+                          cwd=self.repo, capture_output=True).returncode != 0:
+            self.skipTest("git ssh-signing unsupported here")
+        gq = subprocess.run(["git", "log", "-1", "--format=%G?", "HEAD"], cwd=self.repo,
+                            capture_output=True, text=True).stdout.strip()
+        if gq != "U":  # environment didn't produce the untrusted state we need
+            self.skipTest("expected %G?=U for untrusted signer, got %r" % gq)
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 1, "untrusted-key signature must FAIL: " + r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
 
 
 if __name__ == "__main__":
