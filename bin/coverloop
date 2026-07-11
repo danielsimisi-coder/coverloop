@@ -307,34 +307,57 @@ def new_report(sha, tier):
     }
 
 
-def open_write(path):
-    """Open PATH for writing, refusing to follow a symlink at the final path
-    component and disabling newline translation.
+def open_write(root, path):
+    """Open PATH (which MUST live directly inside <root>/.coverloop/reports/) for
+    writing, refusing any symlink anywhere in the reports path, and disabling
+    newline translation.
 
-    Two audit fixes in one (2026-07-11): (1) every evidence WRITE went through a
-    plain open() that would follow a pre-planted destination symlink and
-    overwrite an arbitrary off-tree file — the read paths guard symlinks but the
-    writers did not. (2) text-mode writes translated '\\n'->'\\r\\n' on Windows
-    while output_sha256 is hashed over the untranslated string, so verify_capture
-    rejected its own untampered evidence there; newline='' keeps on-disk bytes ==
-    hashed bytes on every platform.
+    Audit fixes (2026-07-11): (1) evidence WRITES used a plain open() that would
+    follow a pre-planted destination symlink and overwrite an arbitrary off-tree
+    file; the read paths guarded symlinks but the writers did not. (2) text-mode
+    writes translated '\\n'->'\\r\\n' on Windows while output_sha256 is hashed over
+    the untranslated string, so verify_capture rejected its own untampered
+    evidence there; newline='' keeps on-disk bytes == hashed bytes everywhere.
 
-    Symlink defense is two-layer so it holds where O_NOFOLLOW is absent (e.g.
-    Windows, where getattr(...,0) would otherwise silently restore following):
-    an explicit pre-check via os.path.islink (portable, catches a static
-    pre-planted symlink) PLUS O_NOFOLLOW (POSIX, also closes the TOCTOU race).
-    (Sol v2.7.3 verify #2)"""
-    if os.path.islink(path):
-        fail_usage(f"refusing to write evidence through a symlink: {path}")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o644)
+    Symlink defense mirrors the read-side guard and covers the whole PARENT
+    CHAIN, not just the final component (Sol v2.7.3 grade): the file's resolved
+    parent must BE the real reports dir (so a symlinked `.coverloop/` or
+    `reports/` ancestor can't relocate the write off-tree), and the final
+    component must not be a symlink (portable, holds where O_NOFOLLOW is absent).
+
+    Where the platform supports it (POSIX), the actual write additionally goes
+    through a PINNED directory fd (open the reports dir O_DIRECTORY|O_NOFOLLOW,
+    fstat-verify it IS the real reports dir, then openat the basename relative to
+    that fd): once the dir fd is pinned, swapping `reports/` for a symlink AFTER
+    the path check can no longer redirect the write — closing the parent-swap
+    TOCTOU race (Sol Round-1 review). Windows (no dir_fd/O_DIRECTORY) keeps the
+    path-based check + O_NOFOLLOW best-effort."""
+    reports_real = os.path.join(os.path.realpath(root), REPORTS_DIR)
+    if (os.path.realpath(reports_real) != reports_real          # .coverloop or reports/ is a symlink
+            or os.path.islink(path)                             # final component pre-planted as a symlink
+            or os.path.dirname(os.path.realpath(path)) != reports_real):  # resolves outside the real reports dir
+        fail_usage(f"refusing to write evidence outside the real reports dir (symlinked path): {path}")
+    o_nofollow = getattr(os, "O_NOFOLLOW", 0)
+    wflags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | o_nofollow
+    o_dir = getattr(os, "O_DIRECTORY", 0)
+    if o_dir and o_nofollow and os.open in getattr(os, "supports_dir_fd", set()):
+        # POSIX: pin the reports dir by fd (no-follow), verify identity, openat.
+        dfd = os.open(os.path.join(root, REPORTS_DIR), os.O_RDONLY | o_dir | o_nofollow)
+        try:
+            if not os.path.samestat(os.fstat(dfd), os.stat(reports_real)):
+                fail_usage(f"refusing to write evidence: reports dir identity changed: {path}")
+            fd = os.open(os.path.basename(path), wflags, 0o644, dir_fd=dfd)
+        finally:
+            os.close(dfd)
+    else:
+        fd = os.open(path, wflags, 0o644)
     return os.fdopen(fd, "w", encoding="utf-8", newline="")
 
 
 def save_report(root, report):
     path = report_path(root, report["commit"])
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open_write(path) as f:
+    with open_write(root, path) as f:
         json.dump(report, f, indent=2)
         f.write("\n")
     return path
@@ -389,7 +412,7 @@ def capture_run(root, sha, name, cmd):
     # Redact secret VALUES before this text is written to a committed file — a
     # privacy tool must never leak keys/tokens/DB creds into git history.
     output = redact_secrets(output)
-    with open_write(log_path) as f:
+    with open_write(root, log_path) as f:
         f.write(output)
     return {
         "source": "captured",
@@ -478,7 +501,7 @@ def attach_log(root, sha, name, src_path):
     log_rel = os.path.join(REPORTS_DIR, f"{sha}.{name}.log")
     log_path = os.path.join(root, log_rel)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open_write(log_path) as f:
+    with open_write(root, log_path) as f:
         f.write(text)
     return {
         "source": "attached",
@@ -532,7 +555,7 @@ def cmd_attest(args):
                         data = rf.read()
                     # redact on copy (defense in depth) and rebind the hash
                     safe = redact_secrets(data.decode("utf-8", errors="replace"))
-                    with open_write(new_path) as wf:
+                    with open_write(root, new_path) as wf:
                         wf.write(safe)
                     e = dict(e, output_sha256=hashlib.sha256(safe.encode("utf-8")).hexdigest())
                 report[rname] = dict(e, output_file=new_rel)

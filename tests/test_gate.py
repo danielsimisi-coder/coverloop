@@ -1206,5 +1206,23 @@ class GateTestCase(unittest.TestCase):
         self.assertIn("REDACTED", out)
 
 
+    # ---- Round-1 hardening (2026-07-11) regressions ----
+    def test_open_write_refuses_symlinked_reports_dir(self):
+        """Sol grade / security: a symlinked .coverloop/reports PARENT dir must
+        not let an evidence write escape off-tree (parent-chain guard, not just
+        the final component)."""
+        self.init_project()
+        # point .coverloop/reports at an outside dir via symlink
+        victim = os.path.join(self.tmp.name, "outside")
+        os.makedirs(victim, exist_ok=True)
+        reports = os.path.join(self.repo, ".coverloop", "reports")
+        import shutil
+        shutil.rmtree(reports)
+        os.symlink(victim, reports)
+        r = run(["attest", "--tier", "L1", "--tests"], self.repo)
+        self.assertEqual(r.returncode, 2)  # refused, not written off-tree
+        self.assertEqual(os.listdir(victim), [])  # nothing escaped into the victim dir
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,11 +13,24 @@
 set -u
 CONF=".claude/loop.conf"
 [ -f "$CONF" ] || exit 0
-# shellcheck disable=SC1090
-. "$CONF"
-[ -n "${TEST_CMD:-}" ] || exit 0
+# Parse loop.conf as DATA — never `source`/`.` it. This hook is wired globally,
+# so it fires in ANY repo that has a .claude/loop.conf; sourcing would let a
+# cloned untrusted repo run arbitrary code the instant a session stops inside
+# it. We read only the TEST_CMD + MAX_BLOCKS values (bash parameter expansion,
+# no eval at parse time). TEST_CMD itself is still executed below — that is the
+# feature, and the same trust model as a package.json script or Makefile: the
+# repo's own declared test command. (full audit + Sol grade 2026-07-11)
+_line=$(grep -E '^[[:space:]]*TEST_CMD=' "$CONF" | tail -1)
+_line=${_line%$'\r'}                         # strip a trailing CR (Windows/CRLF-authored conf) — M3 review
+TEST_CMD=${_line#*=}
+TEST_CMD=${TEST_CMD%\"}; TEST_CMD=${TEST_CMD#\"}
+TEST_CMD=${TEST_CMD%\'}; TEST_CMD=${TEST_CMD#\'}
+TEST_CMD=${TEST_CMD%$'\r'}                    # and any CR that survived unquoted
+_mb=$(grep -E '^[[:space:]]*MAX_BLOCKS=' "$CONF" | tail -1)
+_mb=${_mb#*=}; _mb=${_mb//[^0-9]/}
+MAX_BLOCKS="${_mb:-3}"
+[ -n "$TEST_CMD" ] || exit 0
 STATE=".claude/.loop-stop-blocks"
-MAX_BLOCKS="${MAX_BLOCKS:-3}"
 
 # Change-aware short-circuit: verify when tracked files changed OR a non-ignored
 # untracked file exists. --exclude-standard honors .gitignore, so state/build

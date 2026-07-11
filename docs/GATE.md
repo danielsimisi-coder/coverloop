@@ -128,30 +128,43 @@ Fail-closed rules:
 
 ## Enforce it in CI (GitHub Actions)
 
+The copy-paste-ready file is [`examples/github-actions-coverloop.yml`](../examples/github-actions-coverloop.yml). It pins everything to **immutable commit SHAs** and **verifies the gate's checksum** before running it — a moved tag or a tampered CDN response can't slip modified gate code into your CI:
+
 ```yaml
 # .github/workflows/coverloop.yml
 name: coverloop
 on: pull_request
+permissions:
+  contents: read              # least-privilege job token
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 (SHA-pinned)
         with:
-          # REQUIRED: check out the real PR head, not GitHub's synthetic
-          # merge commit — evidence reports live on the PR branch, and the
-          # merge commit's first-parent chain walks the BASE branch instead.
+          # the real PR head SHA (a validated commit id, no ref-injection
+          # surface), not GitHub's synthetic merge commit — evidence reports
+          # live on the PR branch, and the merge commit's first-parent chain
+          # walks the BASE branch instead.
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Coverloop gate
+        env:
+          # Bump BOTH together on every upgrade to a release you vetted:
+          COVERLOOP_SHA: 71e0481ab924c3be4bb0f775d67f2b643c9b7369        # release commit (immutable)
+          COVERLOOP_SHA256: a3449495987611444a340952176421ad32130d60aff69608eab6ba1db4fe8a38  # shasum -a 256 bin/coverloop @ that commit
+          # base_ref via env, never interpolated into the shell (a ref name can
+          # carry shell metacharacters).
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          COVERLOOP_REF=v2.7.2   # pin to a release tag, never main
           curl -fsSL -o coverloop \
-            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
+            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_SHA}/bin/coverloop"
+          echo "${COVERLOOP_SHA256}  coverloop" | shasum -a 256 -c - \
+            || { echo "::error::checksum mismatch — refusing unverified gate"; exit 1; }
           chmod +x coverloop
-          # Pin --min-tier as a risk FLOOR so a PR can't dodge review by declaring
-          # a lower tier; drop it only if a human reviews the tier per PR.
-          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${{ github.base_ref }}"
+          # --min-tier is a risk FLOOR so a PR can't dodge review by declaring a
+          # lower tier; drop it only if a human reviews the tier per PR.
+          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${BASE_REF}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the

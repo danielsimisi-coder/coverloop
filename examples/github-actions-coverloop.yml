@@ -3,24 +3,40 @@
 # Full docs: https://github.com/danielsimisi-coder/coverloop/blob/main/docs/GATE.md
 name: coverloop
 on: pull_request
+permissions:
+  contents: read              # least-privilege job token
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a full commit SHA (not a mutable tag) — a tag can be moved to
+      # point at malicious code; a SHA can't.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          # Check out the REAL PR head, not GitHub's synthetic merge commit —
-          # the evidence reports live on the PR branch, and the merge commit's
-          # first-parent chain walks the BASE branch, where they don't exist.
+          # Check out the REAL PR head SHA (a validated commit id, not a branch
+          # name — no ref-injection surface), not GitHub's synthetic merge
+          # commit: the evidence reports live on the PR branch, and the merge
+          # commit's first-parent chain walks the BASE branch, where they don't exist.
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0  # the gate diffs against the PR base
       - name: Coverloop gate
+        env:
+          # Immutable supply-chain pin. BOTH values travel together — bump them
+          # on every upgrade to a release you have vetted:
+          #   COVERLOOP_SHA    = the release commit SHA (immutable, unlike a tag)
+          #   COVERLOOP_SHA256 = shasum -a 256 bin/coverloop  at that commit
+          # Verifying the checksum means a moved tag or a tampered CDN response
+          # can't slip modified gate code into your CI.
+          COVERLOOP_SHA: 71e0481ab924c3be4bb0f775d67f2b643c9b7369        # v2.7.3
+          COVERLOOP_SHA256: a3449495987611444a340952176421ad32130d60aff69608eab6ba1db4fe8a38
+          # base_ref via env, NEVER interpolated straight into the shell — a ref
+          # name can carry shell metacharacters; ${{ }} inline would let it run.
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          # Pin to a RELEASE TAG, never main — don't run live code from an
-          # external branch in your CI. Bump the tag deliberately.
-          COVERLOOP_REF=v2.7.3
           curl -fsSL -o coverloop \
-            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_REF}/bin/coverloop"
+            "https://raw.githubusercontent.com/danielsimisi-coder/coverloop/${COVERLOOP_SHA}/bin/coverloop"
+          echo "${COVERLOOP_SHA256}  coverloop" | shasum -a 256 -c - || {
+            echo "::error title=coverloop::checksum mismatch — refusing to run unverified gate code"; exit 1; }
           chmod +x coverloop
           # --min-tier L2 : a true RISK FLOOR — the effective tier is
           #                 max(this, the report's self-declared tier), so it can
@@ -30,4 +46,4 @@ jobs:
           #                 --codex-run "<cmd>", or --codex-log <file> to attach
           #                 a review that already ran). Use --require-executed
           #                 to additionally reject attached transcripts.
-          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${{ github.base_ref }}"
+          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${BASE_REF}"
