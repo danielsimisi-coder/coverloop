@@ -333,15 +333,40 @@ def new_report(sha, tier):
 _TMP_SEQ = itertools.count()
 
 
+def _fsync_fd(fd):
+    """Best-effort fsync of an already-open fd (used to durably persist a
+    directory's rename entry). Never fatal — durability is a bonus, not a
+    correctness precondition, and some platforms/filesystems reject dir fsync."""
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+
+
+def _fsync_dir(path):
+    """Best-effort fsync of a directory by path (fallback publication path)."""
+    try:
+        d = os.open(path or ".", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        _fsync_fd(d)
+    finally:
+        os.close(d)
+
+
 @contextlib.contextmanager
 def open_write(root, path):
     """ATOMICALLY write PATH (which MUST live directly inside
     <root>/.coverloop/reports/): the caller writes to a private temp file in the
-    same dir, and on clean exit it is fsync'd and os.replace'd over PATH — a
-    reader (gate) never sees a half-written report, and a crash mid-write leaves
-    the previous report intact (Sol R3 P2: a plain open()+dump is not atomic, so
-    a concurrent reader or a killed writer could observe a truncated file). Still
-    refuses any symlink in the reports path and disables newline translation.
+    same dir; on clean exit the temp is fsync'd and os.replace'd over PATH, so a
+    reader (gate) sees either the OLD file or the fully-written NEW one, never a
+    torn/partial report (Sol R3: a plain open()+dump is not atomic, so a
+    concurrent reader or a killed writer could observe a truncated file). On
+    POSIX the containing directory is also fsync'd so the rename survives a crash;
+    on platforms without dir-fd support this degrades to a path-based replace
+    (atomic on the OS, best-effort directory durability). Still refuses any
+    symlink in the reports path and disables newline translation.
 
     Audit fixes (2026-07-11): (1) evidence WRITES used a plain open() that would
     follow a pre-planted destination symlink and overwrite an arbitrary off-tree
@@ -391,18 +416,28 @@ def open_write(root, path):
             fd = os.open(tmp_base, wflags, 0o644, dir_fd=dfd)
         else:
             fd = os.open(tmp_full, wflags, 0o644)
+        f = None
         try:
             f = os.fdopen(fd, "w", encoding="utf-8", newline="")
             yield f                       # caller writes the evidence to the temp
             f.flush()
-            os.fsync(f.fileno())          # durable before the rename
-            f.close()
+            os.fsync(f.fileno())          # file data durable before the rename
+            f.close(); f = None
             if use_dirfd:                 # atomic publish: reader sees old or new, never partial
                 os.replace(tmp_base, base, src_dir_fd=dfd, dst_dir_fd=dfd)
+                _fsync_fd(dfd)            # make the rename itself crash-durable (POSIX dir fsync)
             else:
                 os.replace(tmp_full, path)
+                _fsync_dir(os.path.dirname(path))
         except BaseException:
-            # never leave a stray temp; the prior report (if any) stays intact
+            # Close the handle BEFORE unlinking — Windows can't unlink an open
+            # file (Sol R3 grade), so a leaked-open temp would otherwise survive.
+            # The prior report (if any) is untouched: we only ever wrote the temp.
+            if f is not None:
+                try:
+                    f.close()
+                except OSError:
+                    pass
             try:
                 os.unlink(tmp_base, dir_fd=dfd) if use_dirfd else os.unlink(tmp_full)
             except OSError:
