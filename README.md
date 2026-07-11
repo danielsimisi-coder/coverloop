@@ -114,14 +114,14 @@ Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop s
 
 ## 🐛 Real bugs it caught — in its own code
 
-Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — here are three:
+Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — a few:
 
 | The bug | Who caught it | What it would've done |
 |---|---|---|
-| The secret-filter's `sk-` pattern also matched innocent words like `task-start` and `risk-based` | **Codex** (diff review) | Flooded you with false "secret detected!" alarms until you stopped trusting it |
-| A model call **sent your data before** the privacy guard's failure-check ran | **Codex** (diff review) | A payload could leave your machine even when it should've been blocked |
-| An exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | Sensitive code quietly routed to a non-ZDR endpoint without you knowing |
+| **Two rival labs, one catch:** GPT-5.6 Sol **and** GLM-5.2 *independently* reached the exact same fix on the gate's own evidence code — a forged reviewer entry could otherwise pass the strictest check | **Sol + GLM** (cross-lineage) | The strongest signal a finding is real: convergence across training lineages, not a shared hallucination ([transcripts above](#-watch-it-catch-a-bug)) |
+| The privacy tool was **committing your home-directory username** (and emails, session IDs) into review transcripts in git — secrets were redacted, personal identifiers weren't | **Codex/Sol** (parity audit) | A "privacy" tool quietly leaking PII into your public history |
 | **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **All 17 tests that existed then were green.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
+| A model call **sent your data before** the privacy guard's failure-check ran; and an exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | A payload leaving your machine even when it should've been blocked — routed to a non-ZDR endpoint without you knowing |
 
 *(Have Coverloop caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
 
@@ -227,7 +227,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own test suite (51 cases, stdlib only)
+tests/                      the gate's own test suite (81 cases, stdlib only)
 CHANGELOG.md                the story of how it got here
 ```
 
