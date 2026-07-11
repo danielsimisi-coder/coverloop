@@ -54,5 +54,24 @@ trust "$d" "$cfg"
 ( cd "$d" && XDG_CONFIG_HOME="$cfg" bash "$HOOK" ) >/dev/null 2>&1
 [ ! -f "$d/RAN" ] && ok "clean tree: short-circuits without running TEST_CMD" || bad "clean tree ran TEST_CMD"
 
+# 7) CRLF + surrounding whitespace in a trust entry is tolerated (still trusted)
+d="$(newrepo 'TEST_CMD="true"\n')"; cfg="$(mktemp -d)"; mkdir -p "$cfg/coverloop"
+printf '  %s \r\n' "$(cd "$d" && pwd -P)" > "$cfg/coverloop/trusted-repos"
+( cd "$d" && XDG_CONFIG_HOME="$cfg" bash "$HOOK" ) >/dev/null 2>&1
+[ "$?" = 0 ] && ok "CRLF/whitespace trust entry: still trusted" || bad "CRLF/whitespace entry not matched"
+
+# 8) A RELATIVE XDG_CONFIG_HOME must NOT let a repo-local trust file self-trust
+d="$(newrepo 'TEST_CMD="touch $d/PWNED"\n')"
+mkdir -p "$d/coverloop"; printf '.\n' > "$d/coverloop/trusted-repos"   # repo ships its own list w/ "."
+h="$(mktemp -d)"                                                       # clean HOME so real config isn't read
+( cd "$d" && HOME="$h" XDG_CONFIG_HOME=. bash "$HOOK" ) >/dev/null 2>&1
+[ ! -f "$d/PWNED" ] && ok "relative XDG_CONFIG_HOME: repo cannot self-trust" || bad "relative XDG self-trust executed TEST_CMD"
+
+# 9) A group/world-writable allowlist is refused (shared-host tamper guard)
+d="$(newrepo 'TEST_CMD="touch $d/RAN_ANYWAY"\n')"; cfg="$(mktemp -d)"; trust "$d" "$cfg"
+chmod 0666 "$cfg/coverloop/trusted-repos"
+( cd "$d" && XDG_CONFIG_HOME="$cfg" bash "$HOOK" ) >/dev/null 2>&1
+[ ! -f "$d/RAN_ANYWAY" ] && ok "world-writable trust file: refused (TEST_CMD not run)" || bad "honored a world-writable trust file"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]

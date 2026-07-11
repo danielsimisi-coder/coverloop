@@ -70,8 +70,19 @@ fi
 # 8) Trust THIS repo for the Stop-hook test gate on THIS machine. The allowlist
 #    lives OUTSIDE any repo, so a cloned repo can't trust itself; the Stop hook
 #    refuses to run a repo's TEST_CMD unless its resolved path is listed here.
-TRUST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/coverloop/trusted-repos"
-PROJ_REAL="$(cd "$PROJ" && pwd -P)"
+# Resolve the allowlist at an ABSOLUTE path, identical to the Stop hook: a
+# relative $XDG_CONFIG_HOME is ignored (per the XDG spec) so init never writes
+# the list inside a repo and always writes the file the hook actually reads.
+case "${XDG_CONFIG_HOME:-}" in
+  /*) _xdg="$XDG_CONFIG_HOME" ;;
+  *)  _xdg="$HOME/.config" ;;
+esac
+TRUST_FILE="$_xdg/coverloop/trusted-repos"
+# Record the SAME path the Stop hook resolves (git top-level via pwd -P), not
+# raw CWD: running init from a subdir would otherwise record the subdir while
+# the hook checks the git root — a permanent trust mismatch (M3 R2). Falls back
+# to the resolved CWD when the project isn't a git repo.
+PROJ_REAL="$(cd "$PROJ" && cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" 2>/dev/null && pwd -P)"
 mkdir -p "$(dirname "$TRUST_FILE")"
 if [ -f "$TRUST_FILE" ] && grep -qxF "$PROJ_REAL" "$TRUST_FILE" 2>/dev/null; then
   echo "  skip trust marker (already trusted for the Stop-hook gate)"

@@ -40,16 +40,37 @@ MAX_BLOCKS="${_mb:-3}"
 # any repo (so a repo can't trust itself). init-project.sh adds the path; absent
 # it, we no-op instead of running repo-controlled code. Compared by resolved
 # absolute path (pwd -P) so a /tmp->/private/tmp style symlink can't bypass it.
-TRUST_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/coverloop/trusted-repos"
+# The allowlist must live at an ABSOLUTE path outside any repo. A relative
+# $XDG_CONFIG_HOME (e.g. ".") would resolve TRUST_FILE against CWD = the repo,
+# letting a repo ship its own coverloop/trusted-repos and self-trust (Sol R2).
+# The XDG spec says a relative XDG_CONFIG_HOME MUST be ignored — so we do.
+case "${XDG_CONFIG_HOME:-}" in
+  /*) _xdg="$XDG_CONFIG_HOME" ;;
+  *)  _xdg="$HOME/.config" ;;
+esac
+TRUST_FILE="$_xdg/coverloop/trusted-repos"
 REPO_ROOT=$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" 2>/dev/null && pwd -P)
 _trusted=0
-if [ -n "$REPO_ROOT" ] && [ -f "$TRUST_FILE" ]; then
+# Refuse a group- or world-writable allowlist: if anyone but the owner can
+# append to it, it can't gate trust — on a shared host another user could add
+# their own repo (Sol + M3 R2 path-trust hardening).
+if [ -f "$TRUST_FILE" ] && [ -n "$(find "$TRUST_FILE" \( -perm -0002 -o -perm -0020 \) 2>/dev/null)" ]; then
+  echo "coverloop stop-gate: $TRUST_FILE is group/world-writable — refusing to honor it (chmod go-w it)." >&2
+elif [ -n "$REPO_ROOT" ] && [ -f "$TRUST_FILE" ]; then
   while IFS= read -r _p || [ -n "$_p" ]; do
+    _p=${_p%$'\r'}                              # strip trailing CR (CRLF-edited list)
+    _p=${_p#"${_p%%[![:space:]]*}"}             # trim leading whitespace
+    _p=${_p%"${_p##*[![:space:]]}"}             # trim trailing whitespace
     case "$_p" in ""|\#*) continue ;; esac
     _pr=$(cd "$_p" 2>/dev/null && pwd -P) || continue
     [ "$_pr" = "$REPO_ROOT" ] && { _trusted=1; break; }
   done < "$TRUST_FILE"
 fi
+# NOTE on the trust model (Sol R2): trust is bound to a resolved PATH, not to
+# repo content. If an attacker can replace the tree at a path you already
+# trusted (e.g. a world-writable /tmp checkout), the new tree inherits trust —
+# the same exposure as them editing your Makefile/package.json test script.
+# Trust repos in locations only you can write; init-project.sh records the path.
 if [ "$_trusted" != 1 ]; then
   echo "coverloop stop-gate: '$REPO_ROOT' is not trusted on this machine ($TRUST_FILE) — NOT running its TEST_CMD. Run this repo's init-project.sh (or add its path to that file) to enable the test gate." >&2
   exit 0

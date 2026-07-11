@@ -1262,6 +1262,22 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("Traceback", r.stderr)
 
+    def test_string_human_gate_fails_clean(self):
+        """GLM R2 §4.3: the nested `"approved" in hg` check would be a SUBSTRING
+        test if hg were a string ("approved_by_bob" -> True -> hg["approved"]
+        TypeError). The shape guard (human_gate must be an object) must catch it
+        FIRST -> clean malformed FAIL, never a traceback. Locks that guarantee."""
+        r = self._forge_field("L3", "human_gate", "approved_by_bob")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_list_human_gate_fails_clean(self):
+        """Same guard for a list containing 'approved' (membership True, then
+        hg['approved'] TypeError without the shape guard)."""
+        r = self._forge_field("L3", "human_gate", ["approved"])
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
 
     def test_regexes_are_redos_bounded(self):
         """R2: every matcher on the egress path (scan) and commit path (redact)
@@ -1289,15 +1305,28 @@ class GateTestCase(unittest.TestCase):
             self.assertLess(dt, 2.0, "%s scanned in %.2fs (ReDoS?)" % (name, dt))
 
     def test_assign_redaction_still_correct_after_redos_fix(self):
-        """The `\\b`/{0,64} ReDoS hardening must not narrow what ASSIGN_RE
-        catches: names ending in a secret keyword, mid-line and after
-        punctuation, still redact; MONKEY= (no separator) still does not."""
+        """The `\\b` ReDoS hardening must not narrow what ASSIGN_RE catches:
+        names ending in a secret keyword, mid-line and after punctuation, still
+        redact; MONKEY= (no separator) still does not."""
         import glm_secret_filter as f
         for s in ("X_API_KEY=abc", "SECRET_KEY=abc", "DB_PASSWORD=p",
                   "foo;TOKEN=t", ",API_KEY=k", 'PASSWORD="secret pass phrase"'):
             self.assertIn("[REDACTED", f.redact(s), "should redact: %r" % s)
             self.assertTrue(f.scan(s), "should flag: %r" % s)
         self.assertEqual(f.redact("MONKEY=banana"), "MONKEY=banana")
+
+    def test_long_prefix_name_still_redacts(self):
+        """Regression (Sol/GLM R2): a bounded `{0,64}` prefix silently STOPPED
+        redacting a secret whose name has 65+ word chars before the keyword
+        (the `\\b` anchor blocks restarting mid-identifier), leaking it into
+        committed transcripts. The prefix is unbounded on purpose — `\\b` alone
+        keeps it linear. Names far longer than any real one must still redact."""
+        import glm_secret_filter as f
+        for n in (65, 200, 5000):
+            s = ("A" * n) + "_KEY=hunter2"
+            self.assertNotIn("hunter2", f.redact(s),
+                             "%d-char-prefix secret leaked" % n)
+            self.assertTrue(f.scan(s), "%d-char-prefix secret not flagged" % n)
 
 
 if __name__ == "__main__":

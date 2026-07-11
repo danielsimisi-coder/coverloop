@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-11b"
+FILTER_VERSION = "2026-07-11c"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -39,19 +39,23 @@ VALUE_PATTERNS = [
 # strips the value but keeps the name, so a config/env dump can't leak a secret
 # just because its value isn't one of the known token shapes above.
 ASSIGN_RE = re.compile(
-    # Leading `\b` is the ReDoS guard: a secret name starts at a word boundary,
-    # and a long word-char run (the attack input) has NO interior boundaries, so
-    # the engine skips those millions of offsets in O(1) instead of re-expanding
-    # the variable prefix at every one. The `{0,64}` bound (env var names are
-    # short) caps per-boundary work as defense-in-depth. Without `\b`, an
-    # unbounded `[A-Za-z0-9_]*` before a required suffix backtracks O(n^2) and
-    # hangs scan() — the egress path — on a pathological input (ReDoS; found by
-    # the R2 timing test).
+    # Leading `\b` is the ReDoS guard AND the whole guarantee: a secret name
+    # starts at a word boundary, and a long word-char run (the attack input) has
+    # NO interior boundaries, so re.search skips those millions of offsets in
+    # O(1) instead of re-expanding the variable prefix at each. With `\b` in
+    # place the prefix `*` backtracks only at the O(1) run-start boundaries, so
+    # the pattern is linear even UNBOUNDED (measured: 2 MB adversarial input
+    # ~0.1s). The prefix is therefore left unbounded on purpose: a `{0,N}` cap
+    # would silently stop redacting a name whose prefix exceeds N (Sol/GLM R2
+    # caught `A*65 + _KEY=secret` leaking under a {0,64} cap) — a real
+    # secret-leak regression — while buying no ReDoS safety `\b` doesn't already
+    # give. Without `\b`, unbounded `*` before a required suffix is O(n^2) and
+    # hangs scan() (the egress path) on a pathological input.
     r"(?i)(\b(?:OPENROUTER_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|SUPABASE_SERVICE_ROLE"
     # `[_-]KEY` catches the bare _KEY family (AWS_SECRET_ACCESS_KEY, SECRET_KEY,
     # ENCRYPTION_KEY, SIGNING_KEY, PRIVATE_KEY) that `API[_-]?KEY` alone missed;
     # the separator requirement still skips MONKEY=/HOTKEY=.
-    r"|service_role|DATABASE_URL|VERCEL_TOKEN|[A-Za-z0-9_]{0,64}(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD))"
+    r"|service_role|DATABASE_URL|VERCEL_TOKEN|[A-Za-z0-9_]*(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD))"
     # value: when QUOTED, span to the MATCHING closing quote (a backreference —
     # so an inner apostrophe in "horse's staple" doesn't cut it short); when
     # unquoted, a bare token. No {3,} floor — TOKEN=x must redact too.
