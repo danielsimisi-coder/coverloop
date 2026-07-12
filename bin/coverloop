@@ -1298,6 +1298,15 @@ def _emit(args, sha, tier, verdict, checks):
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
+    # Windows defaults stdout/stderr to cp1252, which can't encode the gate's
+    # ✔/✘/…/— glyphs — the gate would crash with UnicodeEncodeError on every
+    # verdict print. Force UTF-8 (best-effort; a no-op on POSIX where it already
+    # is) so output is portable across platforms.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(prog="coverloop", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
