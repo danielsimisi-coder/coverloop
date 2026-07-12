@@ -252,6 +252,12 @@ class ConcurrencyRaces(unittest.TestCase):
         with open(path) as fh:
             doc = json.load(fh)  # raises (and fails the test) if the file is torn
         self.assertEqual(doc.get("commit"), self._sha(), "report not bound to HEAD")
+        # NO LOST UPDATE (R4): the workers record a MIX of --tests and --codex on
+        # the same report. Under the attest lock the read-modify-write cycles
+        # serialize, so BOTH fields must survive — an unlocked last-writer-wins
+        # would drop one. This is the assertion the R4 lock earns.
+        self.assertIsNotNone(doc.get("tests"), "lost update: 'tests' dropped by a concurrent attest")
+        self.assertIsNotNone(doc.get("codex"), "lost update: 'codex' dropped by a concurrent attest")
         # atomic-write temp files must never leak
         leftovers = [p for p in os.listdir(os.path.dirname(path)) if ".tmp." in p]
         self.assertEqual(leftovers, [], "atomic-write temp files leaked: %s" % leftovers)

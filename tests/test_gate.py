@@ -1428,6 +1428,45 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 1, "untrusted-key signature must FAIL: " + r.stdout + r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
+    def test_require_signed_commit_uses_project_signers(self):
+        """R4 (Sol gap #2): a repo-committed .coverloop/allowed_signers defines
+        WHO may sign, independent of the machine's ambient git trust. With the
+        machine allowed_signers EMPTY (ambient would be 'U'), a signer listed in
+        the PROJECT file must still pass — the gate auto-detects that file."""
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        key = os.path.join(self.tmp.name, "id_ed25519")
+        if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
+                          capture_output=True).returncode != 0:
+            self.skipTest("ssh-keygen failed")
+        pub = open(key + ".pub").read().strip()
+        machine_allowed = os.path.join(self.tmp.name, "machine_allowed")  # EMPTY -> ambient 'U'
+        open(machine_allowed, "w").close()
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
+                    ["gpg.ssh.allowedSignersFile", machine_allowed]):
+            sh(["git", "config"] + cfg, self.repo)
+        self.init_project()
+        proj_signers = os.path.join(self.repo, ".coverloop", "allowed_signers")
+        with open(proj_signers, "w") as fh:
+            fh.write("t@example.com %s\n" % pub)
+        self.write("feature.py", "print('proj-signed')\n")
+        sh(["git", "add", "-A"], self.repo)
+        if subprocess.run(["git", "commit", "-S", "-qm", "proj signed"],
+                          cwd=self.repo, capture_output=True).returncode != 0:
+            self.skipTest("git ssh-signing unsupported here")
+        amb = subprocess.run(["git", "log", "-1", "--format=%G?", "HEAD"], cwd=self.repo,
+                             capture_output=True, text=True).stdout.strip()
+        proj = subprocess.run(["git", "-c", "gpg.ssh.allowedSignersFile=" + proj_signers,
+                               "log", "-1", "--format=%G?", "HEAD"], cwd=self.repo,
+                              capture_output=True, text=True).stdout.strip()
+        if not (amb == "U" and proj == "G"):
+            self.skipTest("env didn't produce ambient=U / project=G (got %r / %r)" % (amb, proj))
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 0, "project-signer gate should PASS: " + r.stdout + r.stderr)
+        self.assertIn("project signer policy", (r.stdout + r.stderr).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

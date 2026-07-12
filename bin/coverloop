@@ -608,8 +608,48 @@ def attach_log(root, sha, name, src_path):
 
 # ---------------------------------------------------------------- attest
 
+@contextlib.contextmanager
+def _attest_lock(root):
+    """Serialize concurrent `attest` read-modify-write cycles (find_report …
+    save_report) so two attests recording DIFFERENT fields of the same commit's
+    report can't lost-update each other (R4 / Sol gap #1 — atomic writes stop
+    torn files but last-writer-wins still dropped a field). Advisory flock held
+    for the whole cycle; auto-released on process exit, so a crashed attest never
+    leaves a stale lock. The lock lives in the git dir (machine-local state,
+    never committed). No-op where flock is unavailable (native Windows), where
+    concurrent attest is not a supported workflow."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    gitdir = git(["rev-parse", "--git-dir"], cwd=root)
+    lock_dir = os.path.join(root, gitdir) if gitdir else os.path.join(root, REPORTS_DIR)
+    try:
+        os.makedirs(lock_dir, exist_ok=True)
+        fd = os.open(os.path.join(lock_dir, "coverloop-attest.lock"),
+                     os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        yield  # can't create a lock file → proceed unlocked rather than block work
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def cmd_attest(args):
     root = repo_root()
+    with _attest_lock(root):
+        return _cmd_attest_locked(args, root)
+
+
+def _cmd_attest_locked(args, root):
     sha = head_sha(root)
     report, why, malformed = find_report(root, sha)
     if malformed:
@@ -997,7 +1037,7 @@ _SIG_STATUS = {
 }
 
 
-def verify_commit_signature(root, sha):
+def verify_commit_signature(root, sha, signers_file=None):
     """(ok, detail) for whether <sha> is signed by a key git fully TRUSTS.
 
     Provenance (R3): the evidence report is bound to a commit hash, but a hash
@@ -1006,9 +1046,19 @@ def verify_commit_signature(root, sha):
     unreviewed code can't be laundered onto an unsigned/forged/untrusted-key
     commit and gated green. Opt-in (--require-signed-commit); never changes the
     default path. errors='replace' so a non-UTF-8 signer name can't raise a
-    ValueError past the OSError handler (GLM R3 P2-1). Fail-closed."""
+    ValueError past the OSError handler (GLM R3 P2-1). Fail-closed.
+
+    signers_file (R4 / Sol gap #2): when given, verify against a REPO-COMMITTED
+    ssh allowed_signers policy (via -c gpg.ssh.allowedSignersFile) instead of
+    each machine's ambient git trust — so a project defines WHO may sign,
+    uniformly across machines and CI. Commit the file so it's authoritative in a
+    clean checkout (same trust model as the rest of .coverloop)."""
+    cfg = []
+    if signers_file:
+        sf = signers_file if os.path.isabs(signers_file) else os.path.join(root, signers_file)
+        cfg = ["-c", "gpg.ssh.allowedSignersFile=" + sf]
     try:
-        out = subprocess.run(["git", "log", "-1", "--format=%G?%n%GS", sha],
+        out = subprocess.run(["git"] + cfg + ["log", "-1", "--format=%G?%n%GS", sha],
                              cwd=root, capture_output=True, text=True,
                              errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -1113,7 +1163,14 @@ def cmd_gate(args):
     # the tier's evidence can't be replayed onto an unsigned/forged commit. L0
     # (no evidence required) is exempt — a signature gate on a no-op is noise.
     if getattr(args, "require_signed_commit", False) and tier != "L0":
-        sig_ok, sig_detail = verify_commit_signature(root, sha)
+        signers = getattr(args, "signers", None)
+        if not signers:  # auto-detect a repo-committed signer policy
+            default_sf = os.path.join(root, ".coverloop", "allowed_signers")
+            if os.path.exists(default_sf):
+                signers = default_sf
+        sig_ok, sig_detail = verify_commit_signature(root, sha, signers_file=signers)
+        if signers:
+            sig_detail += " [project signer policy]"
         checks.append(check("signature", sig_ok, sig_detail))
         verdict = verdict and sig_ok
 
@@ -1203,9 +1260,12 @@ def main(argv=None):
                          "would block it); a clean CI checkout doesn't need it")
     pg.add_argument("--require-signed-commit", action="store_true",
                     help="PROVENANCE: also require HEAD to carry a git-verifiable GPG/SSH "
-                         "signature (git verify-commit), so a report can't be replayed onto an "
-                         "unsigned/forged commit. Needs a trusted keyring / ssh allowed_signers. "
-                         "L0 is exempt")
+                         "signature from a TRUSTED key (git status %%G? == 'G'), so a report "
+                         "can't be replayed onto an unsigned/forged/untrusted commit. L0 is exempt")
+    pg.add_argument("--signers", metavar="FILE",
+                    help="verify --require-signed-commit against this ssh allowed_signers file — a "
+                         "REPO-COMMITTED signer policy, uniform across machines/CI — instead of each "
+                         "machine's ambient git trust. Defaults to .coverloop/allowed_signers if present")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)
