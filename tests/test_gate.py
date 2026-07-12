@@ -48,6 +48,15 @@ class GateTestCase(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
+    def _symlink(self, src, dst):
+        """os.symlink, but skip the test where symlinks aren't permitted —
+        Windows needs admin/Developer-Mode, so a symlink-refusal test can't run
+        there (the POSIX dir-fd/O_NOFOLLOW guard it exercises is POSIX-only)."""
+        try:
+            os.symlink(src, dst)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest("symlinks not permitted on this platform: %s" % e)
+
     def commit(self, rel, content, msg="change"):
         self.write(rel, content)
         sh(["git", "add", "-A"], self.repo)
@@ -397,7 +406,7 @@ class GateTestCase(unittest.TestCase):
         with open(outside, "w") as f:
             f.write(content)  # same content -> hash still matches
         os.remove(log)
-        os.symlink(outside, log)
+        self._symlink(outside, log)
         r = run(["gate", "--tier", "L2"], self.repo)
         self.assertEqual(r.returncode, 1)
 
@@ -430,7 +439,7 @@ class GateTestCase(unittest.TestCase):
         for fn in os.listdir(rdir):
             os.remove(os.path.join(rdir, fn))
         os.rmdir(rdir)
-        os.symlink(ext, rdir)  # reports/ now points off-tree
+        self._symlink(ext, rdir)  # reports/ now points off-tree
         try:
             r = run(["gate", "--tier", "L2"], self.repo)
             self.assertEqual(r.returncode, 1)
@@ -679,7 +688,7 @@ class GateTestCase(unittest.TestCase):
         rp = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
         ext = os.path.join(self.repo, "offtree.json")
         os.rename(rp, ext)
-        os.symlink(ext, rp)  # report is now a symlink
+        self._symlink(ext, rp)  # report is now a symlink
         r = run(["gate", "--tier", "L2"], self.repo)
         self.assertEqual(r.returncode, 1)
 
@@ -798,7 +807,7 @@ class GateTestCase(unittest.TestCase):
     def test_attach_symlink_source_is_rejected(self):
         self.init_project()
         self.write("real.txt", "CLEAN\n")
-        os.symlink(os.path.join(self.repo, "real.txt"),
+        self._symlink(os.path.join(self.repo, "real.txt"),
                    os.path.join(self.repo, "link.txt"))
         r = run(["attest", "--tier", "L2", "--codex", "pass",
                  "--codex-log", os.path.join(self.repo, "link.txt")], self.repo)
@@ -1043,10 +1052,12 @@ class GateTestCase(unittest.TestCase):
              "--codex-log", os.path.join(self.repo, "review.txt")], self.repo)
         sha = self.git_out(["rev-parse", "HEAD"])
         p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
-        rep = json.load(open(p))
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
         rep["codex"]["source"] = "captured"
         rep["codex"]["exit_code"] = 0
-        json.dump(rep, open(p, "w"))
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
         self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
         self.assertEqual(run(["gate"], self.repo).returncode, 1)  # label now inconsistent
 
@@ -1100,9 +1111,11 @@ class GateTestCase(unittest.TestCase):
              "--codex-run", "echo boom; exit 7"], self.repo)
         sha = self.git_out(["rev-parse", "HEAD"])
         p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
-        rep = json.load(open(p))
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
         rep["codex"]["exit_code"] = 0            # the single un-hashed edit
-        json.dump(rep, open(p, "w"))
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
         self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
         self.assertEqual(run(["gate"], self.repo).returncode, 1)
 
@@ -1132,9 +1145,11 @@ class GateTestCase(unittest.TestCase):
         run(["attest", "--tier", "L2", "--tests"], self.repo)
         sha = self.git_out(["rev-parse", "HEAD"])
         p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
-        rep = json.load(open(p))
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
         rep["codex"] = "passed"   # string, not an object
-        json.dump(rep, open(p, "w"))
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
         r = run(["gate", "--min-tier", "L2"], self.repo)
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("Traceback", r.stderr)
@@ -1190,7 +1205,7 @@ class GateTestCase(unittest.TestCase):
         sha = self.git_out(["rev-parse", "HEAD"])
         os.makedirs(os.path.join(self.repo, ".coverloop", "reports"), exist_ok=True)
         link = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
-        os.symlink(outside, link)
+        self._symlink(outside, link)
         r = run(["attest", "--tier", "L1", "--tests"], self.repo)
         self.assertEqual(r.returncode, 2)   # refused
         with open(outside) as f:
@@ -1218,7 +1233,7 @@ class GateTestCase(unittest.TestCase):
         reports = os.path.join(self.repo, ".coverloop", "reports")
         import shutil
         shutil.rmtree(reports)
-        os.symlink(victim, reports)
+        self._symlink(victim, reports)
         r = run(["attest", "--tier", "L1", "--tests"], self.repo)
         self.assertEqual(r.returncode, 2)  # refused, not written off-tree
         self.assertEqual(os.listdir(victim), [])  # nothing escaped into the victim dir
@@ -1230,14 +1245,16 @@ class GateTestCase(unittest.TestCase):
         run(["attest", "--tier", tier, "--tests"], self.repo)
         sha = self.git_out(["rev-parse", "HEAD"])
         p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
-        rep = json.load(open(p))
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
         # walk dotted field
         obj = rep
         keys = field.split(".")
         for k in keys[:-1]:
             obj = obj.setdefault(k, {})
         obj[keys[-1]] = value
-        json.dump(rep, open(p, "w"))
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
         return run(["gate", "--min-tier", tier], self.repo)
 
     def test_bool_findings_open_is_rejected(self):
@@ -1365,7 +1382,8 @@ class GateTestCase(unittest.TestCase):
                             capture_output=True, text=True)
         if kg.returncode != 0:
             self.skipTest("ssh-keygen failed: %s" % kg.stderr)
-        pub = open(key + ".pub").read().strip()
+        with open(key + ".pub", encoding="utf-8") as _fh:
+            pub = _fh.read().strip()
         email = "t@example.com"  # matches setUp's git user.email
         allowed = os.path.join(self.tmp.name, "allowed_signers")
         with open(allowed, "w") as fh:
@@ -1440,7 +1458,8 @@ class GateTestCase(unittest.TestCase):
         if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
                           capture_output=True).returncode != 0:
             self.skipTest("ssh-keygen failed")
-        pub = open(key + ".pub").read().strip()
+        with open(key + ".pub", encoding="utf-8") as _fh:
+            pub = _fh.read().strip()
         machine_allowed = os.path.join(self.tmp.name, "machine_allowed")  # EMPTY -> ambient 'U'
         open(machine_allowed, "w").close()
         for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
@@ -1478,7 +1497,8 @@ class GateTestCase(unittest.TestCase):
         if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
                           capture_output=True).returncode != 0:
             self.skipTest("ssh-keygen failed")
-        pub = open(key + ".pub").read().strip()
+        with open(key + ".pub", encoding="utf-8") as _fh:
+            pub = _fh.read().strip()
         machine_allowed = os.path.join(self.tmp.name, "machine_allowed")
         open(machine_allowed, "w").close()  # ambient trust = 'U'
         for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
