@@ -163,7 +163,7 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 - 🧩 **Reviewers get full context, not just the diff** — the #1 cause of false alarms is a reviewer judging 5 lines with no surrounding code.
 - 🔗 **One source of truth, zero drift.** `AGENTS.md` is a symlink to `CLAUDE.md`, so every tool reads the exact same rules.
 - 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — a provable record of what left your machine, without the log ever containing your code or secrets.
-- 🔏 **Provenance, not just claims.** `gate --require-signed-commit` binds the evidence to a git-verifiable signature from a *trusted* key — your git trust, or a **repo-committed signer policy read from the committed tree** — so a report can't be replayed onto a forged or unsigned commit.
+- 🔏 **Provenance, not just claims.** `gate --require-signed-commit` binds the evidence to a git-verifiable signature from a *trusted* key — your git trust, or a **repo-committed signer policy** (read from the committed tree, or with `--signers-ref origin/main` from a **protected ref a PR can't rewrite** — so it can't add its own key and self-authorize) — so a report can't be replayed onto a forged or unsigned commit.
 - ⚛️ **Evidence writes are atomic and race-safe.** Reports are written to a temp file and atomically renamed into place, and concurrent `attest`s are serialized by a lock — so a gate reading mid-write never sees a torn report, and two attests never silently lose each other's evidence.
 - 🧪 **The privacy filter is fuzz-tested against itself.** Property tests and adversarial corpora hammer the secret/PII filter across thousands of seeded inputs — they've already caught real catastrophic-backtracking (ReDoS) holes in the egress path *before* they shipped.
 - 🥶 **Reviews are "cold reads" — by design.** The reviewer sees the change as a fresh artifact in a fresh session, never inside the conversation that wrote it. 2026 research measured this as the single strongest anti-bias lever in AI code review (an evaluator's catch-rate rises sharply when the work isn't in its own context) — cross-vendor review adds a second, independent layer on top.
@@ -214,7 +214,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 128 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
+tests/                      the gate's own suite — 130 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
 
