@@ -1486,6 +1486,64 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "project-signer gate should PASS: " + r.stdout + r.stderr)
         self.assertIn("project signer policy", (r.stdout + r.stderr).lower())
 
+    def test_signers_ref_defeats_self_authorization(self):
+        """R5 / GPT #2: a commit that adds its OWN key to HEAD's allowed_signers
+        and signs with it PASSES the HEAD auto-detect (the bootstrapping gap),
+        but --signers-ref pointing at a PROTECTED ref that lacks that key rejects
+        it — the policy comes from a tree the PR can't rewrite."""
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        key = os.path.join(self.tmp.name, "id_ed25519")
+        if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
+                          capture_output=True).returncode != 0:
+            self.skipTest("ssh-keygen failed")
+        with open(key + ".pub", encoding="utf-8") as _fh:
+            pub = _fh.read().strip()
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key]):
+            sh(["git", "config"] + cfg, self.repo)
+        self.init_project()
+        # protected baseline: an allowed_signers with NO trusted keys, on `base`
+        with open(os.path.join(self.repo, ".coverloop", "allowed_signers"), "w") as fh:
+            fh.write("# no trusted signers\n")
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "baseline signer policy (empty)"], self.repo)
+        sh(["git", "branch", "base"], self.repo)
+        # malicious PR: add attacker's own key to the policy + sign with it
+        with open(os.path.join(self.repo, ".coverloop", "allowed_signers"), "w") as fh:
+            fh.write("t@example.com %s\n" % pub)
+        self.write("feature.py", "print('self-authorized')\n")
+        sh(["git", "add", "-A"], self.repo)
+        if subprocess.run(["git", "commit", "-S", "-qm", "add my own key + code"],
+                          cwd=self.repo, capture_output=True).returncode != 0:
+            self.skipTest("git ssh-signing unsupported here")
+        # env sanity: HEAD policy trusts the key (G); base policy doesn't (not G)
+        head_ok = subprocess.run(["git", "-c", "gpg.ssh.allowedSignersFile=" +
+                                  os.path.join(self.repo, ".coverloop", "allowed_signers"),
+                                  "log", "-1", "--format=%G?", "HEAD"], cwd=self.repo,
+                                 capture_output=True, text=True).stdout.strip()
+        if head_ok != "G":
+            self.skipTest("env didn't produce a trusted HEAD signature (%r)" % head_ok)
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        # auto-detect (HEAD policy) self-authorizes -> PASS (demonstrates the gap)
+        r_head = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r_head.returncode, 0, "HEAD-policy self-auth should pass (the gap): "
+                         + r_head.stdout + r_head.stderr)
+        # protected ref (base) lacks the key -> the self-authorization is DEFEATED
+        r_ref = run(["gate", "--min-tier", "L1", "--require-signed-commit", "--signers-ref", "base"],
+                    self.repo)
+        self.assertEqual(r_ref.returncode, 1, "--signers-ref must reject the self-authorized key: "
+                         + r_ref.stdout + r_ref.stderr)
+        self.assertNotIn("Traceback", r_ref.stderr)
+
+    def test_signers_ref_and_signers_are_mutually_exclusive(self):
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit",
+                 "--signers", "/x", "--signers-ref", "origin/main"], self.repo)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("mutually exclusive", (r.stdout + r.stderr).lower())
+
     def test_dirty_untracked_signers_file_does_not_self_authorize(self):
         """Sol/M3/GLM R4 P1: an UNTRACKED working-tree .coverloop/allowed_signers
         must be ignored — the policy is read from the committed blob at the gated

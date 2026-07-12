@@ -652,12 +652,17 @@ def _attest_lock(root):
         yield
         return
     try:
-        # Bounded wait (GLM R4 P2-4): poll non-blocking so a stuck holder can't
-        # hang every future attest forever; after a timeout, proceed unlocked
-        # with a warning rather than block a CLI indefinitely. NOTE: flock is a
-        # LOCAL-concurrency guard only — it is unreliable over NFS/shared FS
-        # (GLM R4 P2-3); cross-machine attest is not a supported workflow.
-        deadline = time.monotonic() + 30.0
+        # Bounded wait, then FAIL CLOSED (GPT/Sol R5): poll non-blocking so a
+        # stuck holder can't hang every future attest forever (GLM R4 P2-4), but
+        # on timeout REFUSE to proceed unlocked — exit non-zero and write nothing
+        # — rather than risk a lost update. Proceeding unlocked was the hole that
+        # made the "two attests never lose each other's evidence" guarantee false.
+        # The window is generous (300s) because the lock currently spans the whole
+        # attest, and a reviewer capture (`--codex-run`) can legitimately run for
+        # minutes; a genuinely stuck lock still fails within 5 min, not forever.
+        # NOTE: flock is a LOCAL guard only — unreliable over NFS/shared FS (GLM
+        # R4 P2-3); cross-machine attest is not a supported workflow.
+        deadline = time.monotonic() + 300.0
         warned = False
         while True:
             try:
@@ -665,9 +670,12 @@ def _attest_lock(root):
                 break
             except OSError:
                 if time.monotonic() >= deadline:
-                    sys.stderr.write("coverloop: WARNING — attest lock held >30s; proceeding "
-                                     "UNLOCKED (a concurrent attest may lose updates).\n")
-                    break
+                    # fail closed; the `finally` below releases + closes the fd.
+                    sys.stderr.write(
+                        "coverloop: another `attest` has held the lock for >5min. Refusing to "
+                        "proceed UNLOCKED (it could lose evidence) — NOTHING was written. Re-run "
+                        "once the other attest finishes, or investigate a stuck process.\n")
+                    sys.exit(2)
                 if not warned:
                     sys.stderr.write("coverloop: waiting for a concurrent attest to finish…\n")
                     warned = True
@@ -1075,15 +1083,18 @@ _SIG_STATUS = {
 }
 
 
-def _project_signers_file(root, sha, tmpdir):
-    """Materialize .coverloop/allowed_signers AS COMMITTED at <sha> into a temp
+def _project_signers_file(root, ref, tmpdir):
+    """Materialize .coverloop/allowed_signers AS COMMITTED at <ref> into a temp
     file, IGNORING the working tree — a dirty/untracked policy file must never
     self-authorize (Sol+M3+GLM R4 P1), and reading the committed blob also closes
     the check-then-read TOCTOU/symlink window (no working-tree path is handed to
-    git). Returns the temp path, or None if the committed tree has no such file.
-    CAVEAT: a commit can still introduce its OWN signer file, so CHANGING the
-    signer policy is itself gated evidence — review it like any code change."""
-    content = git(["show", f"{sha}:.coverloop/allowed_signers"], cwd=root)
+    git). Returns the temp path, or None if that tree has no such file.
+
+    <ref> is HEAD by default (the bootstrapping caveat: a commit can introduce
+    its OWN signer file, so a change to the policy is itself gated evidence —
+    review it like any code change). Pass a PROTECTED ref (`--signers-ref
+    origin/main`) that a PR can't rewrite to remove even the bootstrap gap (R5)."""
+    content = git(["show", f"{ref}:.coverloop/allowed_signers"], cwd=root)
     if content is None:
         return None
     p = os.path.join(tmpdir, "allowed_signers")
@@ -1241,17 +1252,28 @@ def cmd_gate(args):
     # (no evidence required) is exempt — a signature gate on a no-op is noise.
     if getattr(args, "require_signed_commit", False) and tier != "L0":
         signers = getattr(args, "signers", None)
+        signers_ref = getattr(args, "signers_ref", None)
+        if signers and signers_ref:
+            fail_usage("--signers (a file path) and --signers-ref (a git ref) are mutually exclusive")
         if signers is not None and not signers.strip():
             fail_usage("--signers path is empty")  # don't silently fall through (GLM R4 P2-5)
         _sig_tmp = None
         project_policy = bool(signers)
+        policy_src = "file" if signers else None
         if not signers:
-            # auto-detect a repo-COMMITTED signer policy: the committed blob at
-            # the gated sha, NOT the working tree (a dirty/untracked file must not
-            # self-authorize — Sol/M3/GLM R4 P1)
+            # Resolve the signer policy from a COMMITTED tree, NOT the working
+            # tree (a dirty/untracked file must not self-authorize — R4 P1). With
+            # --signers-ref, read it from a PROTECTED ref (e.g. origin/main) a PR
+            # can't rewrite — closing the self-authorization gap where a commit
+            # introduces its own signer key (R5). Default is HEAD (bootstrapping).
+            policy_ref = signers_ref or sha
             _sig_tmp = tempfile.mkdtemp(prefix="coverloop-signers-")
-            signers = _project_signers_file(root, sha, _sig_tmp)
+            signers = _project_signers_file(root, policy_ref, _sig_tmp)
+            if signers_ref and signers is None:
+                fail_usage(f"--signers-ref {signers_ref!r} has no committed "
+                           f".coverloop/allowed_signers (fetch it, e.g. `git fetch origin`)")
             project_policy = signers is not None
+            policy_src = ("protected ref %s" % signers_ref) if (signers and signers_ref) else "HEAD"
         try:
             if project_policy and not _is_ssh_signed(root, sha):
                 # the policy is an ssh allowed_signers file; a GPG signature would
@@ -1262,7 +1284,7 @@ def cmd_gate(args):
             else:
                 sig_ok, sig_detail = verify_commit_signature(root, sha, signers_file=signers)
                 if project_policy:
-                    sig_detail += " [project signer policy]"
+                    sig_detail += " [project signer policy @ %s]" % policy_src
         finally:
             if _sig_tmp:
                 shutil.rmtree(_sig_tmp, ignore_errors=True)
@@ -1371,6 +1393,10 @@ def main(argv=None):
                          "(an operator-provided path) instead of the machine's ambient git trust. "
                          "With no --signers, auto-detects the repo-committed .coverloop/allowed_signers "
                          "— read from the COMMITTED blob at HEAD, not the working tree. SSH sigs only")
+    pg.add_argument("--signers-ref", metavar="REF",
+                    help="read the .coverloop/allowed_signers policy from a TRUSTED git ref "
+                         "(e.g. origin/main) instead of HEAD — so a PR can't add its own key to the "
+                         "policy and self-authorize. Needs the ref fetched. Mutually exclusive with --signers")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)
