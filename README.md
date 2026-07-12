@@ -86,7 +86,7 @@ Different training lineages catch different things — that's the whole point of
 
 </details>
 
-> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap). Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap) — but `gate --require-signed-commit` adds **cryptographic provenance**: it demands HEAD carry a git-verifiable signature from a *trusted* key (checked against your git trust, or a **repo-committed signer policy** read from the committed tree), so evidence can't be replayed onto a forged or unsigned commit. Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
 
@@ -131,25 +131,7 @@ Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its o
 
 ## Why it works
 
-```mermaid
-flowchart TD
-    U(["🧑‍💻 You — the task"]):::you --> B["🤖 Builder — proposes a diff"]:::build
-    B --> C["Codex<br/>line-level correctness"]:::rev
-    B --> G["GLM-5.2 · ZDR<br/>architecture red-team + audit"]:::rev
-    B --> M["MiniMax M3<br/>optional 2nd auditor"]:::rev
-    C --> T{"✅ Tests<br/>execution beats opinion"}:::test
-    G --> T
-    M --> T
-    T -->|"red / findings → fix"| B
-    T -->|"green + reviewers satisfied"| GATE(["⚖️ You — final gate"]):::you
-    GATE --> S(["🚀 Shipped"]):::ship
-
-    classDef you fill:#1f2a44,stroke:#34E0B4,color:#ffffff,stroke-width:2px
-    classDef build fill:#242f4d,stroke:#7C7CFF,color:#ffffff
-    classDef rev fill:#1a2238,stroke:#22C7E6,color:#cfe8ff
-    classDef test fill:#123021,stroke:#34E0B4,color:#eafff5,stroke-width:2px
-    classDef ship fill:#2a2440,stroke:#F2C94C,color:#ffffff
-```
+<p align="center"><img src="assets/coverloop-how-it-works.svg" width="100%" alt="How Coverloop works: you request a change → an AI builder writes the diff → independent models (Codex for correctness, GLM·M3 for security/audit) and your tests attack it, findings verified against the real code → the fail-closed Coverloop gate opens only on complete, hashed, commit-bound evidence → you hold the final gate on dangerous changes → ship. Findings or red tests loop back to a fix. Review scales to risk from L0 (trivial) to L3 (money/auth/DB → full loop + your gate)."></p>
 
 **No model is an authority.** Every finding is a *claim* — verified against real code, tests, and runtime before it can block anything. Two models agreeing can just mean two models hallucinating the same thing, so **execution beats opinion**: when a test can settle it, you run the test.
 
@@ -181,6 +163,9 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 - 🧩 **Reviewers get full context, not just the diff** — the #1 cause of false alarms is a reviewer judging 5 lines with no surrounding code.
 - 🔗 **One source of truth, zero drift.** `AGENTS.md` is a symlink to `CLAUDE.md`, so every tool reads the exact same rules.
 - 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — a provable record of what left your machine, without the log ever containing your code or secrets.
+- 🔏 **Provenance, not just claims.** `gate --require-signed-commit` binds the evidence to a git-verifiable signature from a *trusted* key — your git trust, or a **repo-committed signer policy read from the committed tree** — so a report can't be replayed onto a forged or unsigned commit.
+- ⚛️ **Evidence writes are atomic and race-safe.** Reports are written to a temp file and atomically renamed into place, and concurrent `attest`s are serialized by a lock — so a gate reading mid-write never sees a torn report, and two attests never silently lose each other's evidence.
+- 🧪 **The privacy filter is fuzz-tested against itself.** Property tests and adversarial corpora hammer the secret/PII filter across thousands of seeded inputs — they've already caught real catastrophic-backtracking (ReDoS) holes in the egress path *before* they shipped.
 - 🥶 **Reviews are "cold reads" — by design.** The reviewer sees the change as a fresh artifact in a fresh session, never inside the conversation that wrote it. 2026 research measured this as the single strongest anti-bias lever in AI code review (an evaluator's catch-rate rises sharply when the work isn't in its own context) — cross-vendor review adds a second, independent layer on top.
 - 🎚️ **The judge's thinking dial is never left on "low".** Reviewer reasoning effort is routed by risk tier — high for normal changes, extra-high for money/auth/migrations, maximum for deadlock-breaking — and auto-delegating "ultra" modes are banned for gates: a judge doesn't outsource judgment.
 - 🕳️ **Evidence can't silently vanish into `.gitignore`.** If a repo's `*.log` rule would swallow a review transcript, `attest` refuses to record it — and `init` writes the negation rules so it can't happen in the first place.
@@ -229,7 +214,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own test suite (90 cases, stdlib only)
+tests/                      the gate's own suite — 128 cases (unit + property/fuzz + concurrency), stdlib-only, CI on Linux·macOS·Windows
 CHANGELOG.md                the story of how it got here
 ```
 
@@ -265,7 +250,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
 
-<details><summary><b>Windows?</b></summary><br/>Run it inside <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> — the scripts are bash.</details>
+<details><summary><b>Windows?</b></summary><br/>The <code>coverloop</code> gate and its full test suite are stdlib-only Python and run <b>natively on Windows</b> — CI proves the suite green on Linux · macOS · Windows every push. The <i>shell hooks</i> (session re-injection, test gate) are bash, so run those under <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> or Git Bash.</details>
 
 ---
 
