@@ -151,8 +151,8 @@ jobs:
       - name: Coverloop gate
         env:
           # Bump BOTH together on every upgrade to a release you vetted:
-          COVERLOOP_SHA: 71e0481ab924c3be4bb0f775d67f2b643c9b7369        # release commit (immutable)
-          COVERLOOP_SHA256: a3449495987611444a340952176421ad32130d60aff69608eab6ba1db4fe8a38  # shasum -a 256 bin/coverloop @ that commit
+          COVERLOOP_SHA: e6b3a4dabfcf24724ff314a4d520540c81b74b06        # v2.8.0 release commit (immutable)
+          COVERLOOP_SHA256: 27caf03a2faef295e0a6d6735937bc2204b93b206213e481de424ea2b8bb35fe  # shasum -a 256 bin/coverloop @ that commit
           # base_ref via env, never interpolated into the shell (a ref name can
           # carry shell metacharacters).
           BASE_REF: ${{ github.base_ref }}
