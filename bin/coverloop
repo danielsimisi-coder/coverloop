@@ -45,8 +45,11 @@ import itertools
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 # The canonical secret filter ships next to this script (install.sh copies all
 # of bin/). Import it for transcript/command redaction; fall back to a minimal
@@ -623,17 +626,52 @@ def _attest_lock(root):
     except ImportError:
         yield
         return
-    gitdir = git(["rev-parse", "--git-dir"], cwd=root)
-    lock_dir = os.path.join(root, gitdir) if gitdir else os.path.join(root, REPORTS_DIR)
-    try:
-        os.makedirs(lock_dir, exist_ok=True)
-        fd = os.open(os.path.join(lock_dir, "coverloop-attest.lock"),
-                     os.O_CREAT | os.O_RDWR, 0o644)
-    except OSError:
-        yield  # can't create a lock file → proceed unlocked rather than block work
+    # --git-common-dir (NOT --git-dir): the SHARED git dir, so two linked
+    # worktrees of the same repo take the SAME lock (M3 R4 — a per-worktree
+    # --git-dir let two worktrees lost-update each other). realpath canonicalizes
+    # a relative/`..` submodule path (M3 R4 P3).
+    common = git(["rev-parse", "--git-common-dir"], cwd=root)
+    candidates = []
+    if common:
+        candidates.append(os.path.realpath(os.path.join(root, common)))
+    candidates.append(os.path.realpath(os.path.join(root, REPORTS_DIR)))  # writable iff attest can write
+    fd = None
+    for lock_dir in candidates:
+        try:
+            os.makedirs(lock_dir, exist_ok=True)
+            fd = os.open(os.path.join(lock_dir, "coverloop-attest.lock"),
+                         os.O_CREAT | os.O_RDWR, 0o644)
+            break
+        except OSError:
+            continue
+    if fd is None:
+        # Do NOT silently drop the exclusivity contract (Sol + M3 R4): warn loudly
+        # so a lost update can't happen unnoticed on a flock-capable host.
+        sys.stderr.write("coverloop: WARNING — could not create the attest lock; proceeding "
+                         "UNLOCKED. Concurrent `attest` on this machine may lose updates.\n")
+        yield
         return
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        # Bounded wait (GLM R4 P2-4): poll non-blocking so a stuck holder can't
+        # hang every future attest forever; after a timeout, proceed unlocked
+        # with a warning rather than block a CLI indefinitely. NOTE: flock is a
+        # LOCAL-concurrency guard only — it is unreliable over NFS/shared FS
+        # (GLM R4 P2-3); cross-machine attest is not a supported workflow.
+        deadline = time.monotonic() + 30.0
+        warned = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    sys.stderr.write("coverloop: WARNING — attest lock held >30s; proceeding "
+                                     "UNLOCKED (a concurrent attest may lose updates).\n")
+                    break
+                if not warned:
+                    sys.stderr.write("coverloop: waiting for a concurrent attest to finish…\n")
+                    warned = True
+                time.sleep(0.1)
         yield
     finally:
         try:
@@ -1037,6 +1075,33 @@ _SIG_STATUS = {
 }
 
 
+def _project_signers_file(root, sha, tmpdir):
+    """Materialize .coverloop/allowed_signers AS COMMITTED at <sha> into a temp
+    file, IGNORING the working tree — a dirty/untracked policy file must never
+    self-authorize (Sol+M3+GLM R4 P1), and reading the committed blob also closes
+    the check-then-read TOCTOU/symlink window (no working-tree path is handed to
+    git). Returns the temp path, or None if the committed tree has no such file.
+    CAVEAT: a commit can still introduce its OWN signer file, so CHANGING the
+    signer policy is itself gated evidence — review it like any code change."""
+    content = git(["show", f"{sha}:.coverloop/allowed_signers"], cwd=root)
+    if content is None:
+        return None
+    p = os.path.join(tmpdir, "allowed_signers")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(content + "\n")
+    return p
+
+
+def _is_ssh_signed(root, sha):
+    """True iff <sha>'s signature is an SSH signature (vs GPG). The project
+    signer policy is an ssh allowed_signers file, which git only consults for SSH
+    signatures — a GPG-signed commit would be validated against the ambient GPG
+    keyring and bypass the policy entirely (GLM R4 P2-2). We detect the type from
+    the raw `gpgsig` header block in the commit object."""
+    obj = git(["cat-file", "commit", sha], cwd=root)
+    return bool(obj) and "BEGIN SSH SIGNATURE" in obj
+
+
 def verify_commit_signature(root, sha, signers_file=None):
     """(ok, detail) for whether <sha> is signed by a key git fully TRUSTS.
 
@@ -1164,13 +1229,31 @@ def cmd_gate(args):
     # (no evidence required) is exempt — a signature gate on a no-op is noise.
     if getattr(args, "require_signed_commit", False) and tier != "L0":
         signers = getattr(args, "signers", None)
-        if not signers:  # auto-detect a repo-committed signer policy
-            default_sf = os.path.join(root, ".coverloop", "allowed_signers")
-            if os.path.exists(default_sf):
-                signers = default_sf
-        sig_ok, sig_detail = verify_commit_signature(root, sha, signers_file=signers)
-        if signers:
-            sig_detail += " [project signer policy]"
+        if signers is not None and not signers.strip():
+            fail_usage("--signers path is empty")  # don't silently fall through (GLM R4 P2-5)
+        _sig_tmp = None
+        project_policy = bool(signers)
+        if not signers:
+            # auto-detect a repo-COMMITTED signer policy: the committed blob at
+            # the gated sha, NOT the working tree (a dirty/untracked file must not
+            # self-authorize — Sol/M3/GLM R4 P1)
+            _sig_tmp = tempfile.mkdtemp(prefix="coverloop-signers-")
+            signers = _project_signers_file(root, sha, _sig_tmp)
+            project_policy = signers is not None
+        try:
+            if project_policy and not _is_ssh_signed(root, sha):
+                # the policy is an ssh allowed_signers file; a GPG signature would
+                # be validated against the ambient keyring and bypass it (GLM P2-2)
+                sig_ok = False
+                sig_detail = ("HEAD provenance FAIL: a project signer policy is in effect but HEAD "
+                              "is not SSH-signed (the policy governs ssh signatures only)")
+            else:
+                sig_ok, sig_detail = verify_commit_signature(root, sha, signers_file=signers)
+                if project_policy:
+                    sig_detail += " [project signer policy]"
+        finally:
+            if _sig_tmp:
+                shutil.rmtree(_sig_tmp, ignore_errors=True)
         checks.append(check("signature", sig_ok, sig_detail))
         verdict = verdict and sig_ok
 

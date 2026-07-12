@@ -1467,6 +1467,59 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "project-signer gate should PASS: " + r.stdout + r.stderr)
         self.assertIn("project signer policy", (r.stdout + r.stderr).lower())
 
+    def test_dirty_untracked_signers_file_does_not_self_authorize(self):
+        """Sol/M3/GLM R4 P1: an UNTRACKED working-tree .coverloop/allowed_signers
+        must be ignored — the policy is read from the committed blob at the gated
+        sha. Machine trust empty + signer only in a dirty file => gate FAILS."""
+        import shutil
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        key = os.path.join(self.tmp.name, "id_ed25519")
+        if subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", key, "-q"],
+                          capture_output=True).returncode != 0:
+            self.skipTest("ssh-keygen failed")
+        pub = open(key + ".pub").read().strip()
+        machine_allowed = os.path.join(self.tmp.name, "machine_allowed")
+        open(machine_allowed, "w").close()  # ambient trust = 'U'
+        for cfg in (["gpg.format", "ssh"], ["user.signingkey", key],
+                    ["gpg.ssh.allowedSignersFile", machine_allowed]):
+            sh(["git", "config"] + cfg, self.repo)
+        self.init_project()
+        self.write("feature.py", "print('x')\n")
+        sh(["git", "add", "-A"], self.repo)  # NOTE: no signers file committed
+        if subprocess.run(["git", "commit", "-S", "-qm", "signed, no policy"],
+                          cwd=self.repo, capture_output=True).returncode != 0:
+            self.skipTest("git ssh-signing unsupported here")
+        # drop the policy file ONLY in the working tree (untracked, not committed)
+        with open(os.path.join(self.repo, ".coverloop", "allowed_signers"), "w") as fh:
+            fh.write("t@example.com %s\n" % pub)
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit"], self.repo)
+        self.assertEqual(r.returncode, 1, "dirty signers file must NOT self-authorize: "
+                         + r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_require_signed_commit_with_explicit_signers_is_fail_closed(self):
+        """--signers with an unsigned/non-SSH HEAD must FAIL closed (a project
+        policy governs ssh signatures; an unsigned commit can't satisfy it). No
+        ssh setup needed."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)  # HEAD is unsigned
+        sf = os.path.join(self.tmp.name, "signers")
+        open(sf, "w").close()
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit", "--signers", sf], self.repo)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_empty_signers_arg_is_rejected(self):
+        """GLM R4 P2-5: --signers "" must error, not silently fall through to
+        auto-detect / ambient trust."""
+        self.init_project()
+        run(["attest", "--tier", "L1", "--tests"], self.repo)
+        r = run(["gate", "--min-tier", "L1", "--require-signed-commit", "--signers", ""], self.repo)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("empty", (r.stdout + r.stderr).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
