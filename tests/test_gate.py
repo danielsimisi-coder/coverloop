@@ -1520,6 +1520,22 @@ class GateTestCase(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("empty", (r.stdout + r.stderr).lower())
 
+    def test_is_ssh_signed_ignores_message_marker(self):
+        """Sol R4 (spoof): _is_ssh_signed must parse ONLY the gpgsig header, so a
+        commit MESSAGE containing '-----BEGIN SSH SIGNATURE-----' on an unsigned
+        (or GPG-signed) commit is NOT mistaken for an ssh signature — otherwise a
+        GPG commit could bypass the ssh-only project policy."""
+        import importlib.util
+        import importlib.machinery
+        loader = importlib.machinery.SourceFileLoader("coverloop_mod", CLI)
+        spec = importlib.util.spec_from_loader("coverloop_mod", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        self.commit("f.py", "print(1)", msg="feat\n\n-----BEGIN SSH SIGNATURE-----\nspoof")
+        sha = self.git_out(["rev-parse", "HEAD"])
+        self.assertFalse(mod._is_ssh_signed(self.repo, sha),
+                         "a message-body marker spoofed ssh-signature detection")
+
 
 if __name__ == "__main__":
     unittest.main()

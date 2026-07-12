@@ -1096,10 +1096,22 @@ def _is_ssh_signed(root, sha):
     """True iff <sha>'s signature is an SSH signature (vs GPG). The project
     signer policy is an ssh allowed_signers file, which git only consults for SSH
     signatures — a GPG-signed commit would be validated against the ambient GPG
-    keyring and bypass the policy entirely (GLM R4 P2-2). We detect the type from
-    the raw `gpgsig` header block in the commit object."""
+    keyring and bypass the policy entirely (GLM R4 P2-2).
+
+    We inspect ONLY the `gpgsig` header, NOT the whole object: a commit's MESSAGE
+    is attacker-controlled, so a GPG-signed commit whose message merely contains
+    the text 'BEGIN SSH SIGNATURE' must not be mistaken for ssh-signed (Sol R4 —
+    a spoof of the substring check). Commit headers end at the first blank line;
+    the signature is the `gpgsig` header (its base64 continues on space-indented
+    lines), so we read only up to that blank line and only the gpgsig header."""
     obj = git(["cat-file", "commit", sha], cwd=root)
-    return bool(obj) and "BEGIN SSH SIGNATURE" in obj
+    if not obj:
+        return False
+    header = obj.partition("\n\n")[0]  # headers only — drop the message
+    for line in header.split("\n"):
+        if line.startswith("gpgsig "):
+            return "SSH SIGNATURE" in line  # 'gpgsig -----BEGIN SSH SIGNATURE-----'
+    return False
 
 
 def verify_commit_signature(root, sha, signers_file=None):
@@ -1346,9 +1358,10 @@ def main(argv=None):
                          "signature from a TRUSTED key (git status %%G? == 'G'), so a report "
                          "can't be replayed onto an unsigned/forged/untrusted commit. L0 is exempt")
     pg.add_argument("--signers", metavar="FILE",
-                    help="verify --require-signed-commit against this ssh allowed_signers file — a "
-                         "REPO-COMMITTED signer policy, uniform across machines/CI — instead of each "
-                         "machine's ambient git trust. Defaults to .coverloop/allowed_signers if present")
+                    help="verify --require-signed-commit against this ssh allowed_signers FILE "
+                         "(an operator-provided path) instead of the machine's ambient git trust. "
+                         "With no --signers, auto-detects the repo-committed .coverloop/allowed_signers "
+                         "— read from the COMMITTED blob at HEAD, not the working tree. SSH sigs only")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
     pg.set_defaults(fn=cmd_gate)
