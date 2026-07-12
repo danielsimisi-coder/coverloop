@@ -214,7 +214,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 128 cases (unit + property/fuzz + concurrency), stdlib-only, CI on Linux·macOS·Windows
+tests/                      the gate's own suite — 128 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
 
@@ -250,7 +250,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
 
-<details><summary><b>Windows?</b></summary><br/>The <code>coverloop</code> gate and its full test suite are stdlib-only Python and run <b>natively on Windows</b> — CI proves the suite green on Linux · macOS · Windows every push. The <i>shell hooks</i> (session re-injection, test gate) are bash, so run those under <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> or Git Bash.</details>
+<details><summary><b>Windows?</b></summary><br/>Supported today on <b>Linux and macOS</b> — CI runs the full stdlib-only suite green on both across Python 3.9/3.11/3.13. <b>Native Windows is in progress</b>: the gate runs, but some tests still assume POSIX file semantics (a few leak file handles that Windows locks), so the Windows CI leg is not green yet — run under <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> for now. The <i>shell hooks</i> are bash (WSL or Git Bash) regardless.</details>
 
 ---
 

@@ -131,7 +131,7 @@
     <rect width="292" height="52" rx="12" fill="#0f1f30" stroke="#22C7E6" stroke-opacity="0.6"/>
     <path transform="translate(26,26)" d="M0 -13 l13 5 v10 c0 10 -7 16 -13 20 c-6 -4 -13 -10 -13 -20 v-10 z" fill="none" stroke="#22C7E6" stroke-width="2.5" stroke-linejoin="round"/>
     <text class="h" x="52" y="22" font-size="12.5" font-weight="700" fill="#EAF0FF">Evidence is hashed &amp; bound to the commit.</text>
-    <text class="h" x="52" y="40" font-size="12.5" font-weight="700" fill="#34E0B4">No “trust me” — it can’t be faked.</text>
+    <text class="h" x="52" y="40" font-size="12.5" font-weight="700" fill="#34E0B4">Tamper-evident — not just “trust me”.</text>
   </g>
   <line x1="938" y1="418" x2="938" y2="440" stroke="#22C7E6" stroke-width="2" stroke-opacity="0.6"/>
 
