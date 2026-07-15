@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15k"
+FILTER_VERSION = "2026-07-15l"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -141,9 +141,72 @@ _COMMENT_RE = re.compile(r"\s(?:#|//).*$")
 def _strip_trailing_comment(line):
     """Drop a trailing ` #…` / ` //…` comment (space-prefixed so a `#field`/`://` inside code is
     kept) — a comment's punctuation must not flip a plain passphrase line into the code branch
-    (Sol r10). Replaced with spaces to preserve absolute offsets used against value positions."""
-    m = _COMMENT_RE.search(line)
-    return line[:m.start()] + " " * (len(line) - m.start()) if m else line
+    (Sol r10). QUOTE/BACKTICK-AWARE: a `//`/`#` INSIDE a string or template literal is not a
+    comment (Sol r11). Replaced with spaces to preserve absolute offsets."""
+    quote = None
+    esc = False
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote is not None:
+            if c == "\\" and not esc:
+                esc = True
+            elif c == quote and not esc:
+                quote = None
+            else:
+                esc = False
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c; i += 1; continue
+        if c in " \t" and i + 1 < n and (line[i + 1] == "#" or line[i + 1:i + 3] == "//"):
+            return line[:i] + " " * (n - i)
+        i += 1
+    return line
+
+
+def _multiword_span_start(line):
+    """Start offset of the first >=2-word whitespace-run OUTSIDE quotes with no code punctuation
+    between the words (a passphrase / prose value — never a valid code value), else -1. A call/key
+    token (`word(` / `word:`) does not count toward a span. Closes the whole 'attach punctuation to
+    a passphrase line' class (braces, marker brackets, comments — Sol r11)."""
+    run_start = -1
+    words = 0
+    quote = None
+    esc = False
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote is not None:
+            if c == "\\" and not esc:
+                esc = True
+            elif c == quote and not esc:
+                quote = None
+                run_start = -1; words = 0
+            else:
+                esc = False
+            i += 1
+            continue
+        if c == "'" or c == '"':
+            quote = c; run_start = -1; words = 0; i += 1; continue
+        if c in _CODE_PUNCT or c == ":":
+            run_start = -1; words = 0; i += 1; continue
+        if c.isspace():
+            i += 1; continue
+        j = i
+        while j < n and not line[j].isspace() and line[j] not in _CODE_PUNCT and line[j] not in "'\"" and line[j] != ":":
+            j += 1
+        follow = line[j] if j < n else ""
+        if follow == "(" or follow == ":":
+            run_start = -1; words = 0      # call name / mapping key — code, not a passphrase word
+        else:
+            if run_start == -1:
+                run_start = i
+            words += 1
+            if words >= 2:
+                return run_start
+        i = j
+    return -1
 
 
 def _line_block_max(line):
@@ -179,6 +242,9 @@ def _line_block_max(line):
         if _CALL_OR_KEY_RE.match(line, bm.end()) and _IDENT_RE.match(word):
             continue
         max_pos = bm.start()
+    mp = _multiword_span_start(line)
+    if mp > max_pos:
+        max_pos = mp
     return max_pos
 
 
@@ -203,19 +269,14 @@ def _plain_line_leaks(text, line_start, line_end, value_start_abs):
     # non-blank line (a blank line terminates a plain scalar); such a fold carries the real value.
     key_line = text[line_start:line_end]
     key_indent = len(key_line) - len(key_line.lstrip())
+    # find the first NON-blank line after the key line (a plain scalar folds across blanks; the cap
+    # is only a ReDoS backstop — reaching it on all-blank input means end-of-scalar => clean).
     pos = line_end
     for _ in range(_MAX_FOLD_LINES):
-        if pos >= len(text) or text[pos] != "\n":
+        nb = _next_nonblank_line(text, pos)
+        if nb is None:
             break
-        nxt = pos + 1
-        nend = text.find("\n", nxt)
-        if nend == -1:
-            nend = len(text)
-        cline = text[nxt:nend]
-        cstrip = cline.strip()
-        if not cstrip:
-            pos = nend
-            continue  # blank line — a plain scalar folds ACROSS it (Sol r10 #2)
+        nxt, nend, cline, cstrip = nb
         cindent = len(cline) - len(cline.lstrip())
         if cindent <= key_indent:
             break  # de-indent ends the block
@@ -227,6 +288,26 @@ def _plain_line_leaks(text, line_start, line_end, value_start_abs):
             break
         return True  # a more-indented non-mapping continuation carries the folded scalar -> BLOCK
     return False
+
+
+def _next_nonblank_line(text, pos):
+    """From pos (expected at a newline), return (start, end, line, stripped) of the next NON-blank
+    physical line, or None. Skips blank lines in ONE forward scan (linear, no per-blank iteration)."""
+    if pos >= len(text) or text[pos] != "\n":
+        return None
+    i = pos + 1
+    n = len(text)
+    while i < n:
+        end = text.find("\n", i)
+        if end == -1:
+            end = n
+        line = text[i:end]
+        if line.strip():
+            return i, end, line, line.strip()
+        if end >= n:
+            return None
+        i = end + 1
+    return None
 
 
 def _match_leaks(m, text, line_start, line_end, block_max, last_punct):

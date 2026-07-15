@@ -2,7 +2,7 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15k)
+## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15l)
 
 Operator-directed maintenance (MusicArcademy PR-21 gate). `scan()` structurally could not review
 supabase auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, fixtures like

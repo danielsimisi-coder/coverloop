@@ -224,6 +224,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "MY_DEPLOY_TOKEN=[REDACTED:secret-value]",       # redacted env assignment — marker wins over '='
         "token: 'x', // rotate quarterly",           # JS line comment, short value
         "webhookUrl: 'https://x.io/hook',",          # :// is not a comment
+        "sessionToken: buildToken(userId, expiry),",  # call w/ args, not a bare multiword (Sol r11)
+        "apiKey: config.get('k'), fallback: def,",
         # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
         "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
@@ -281,6 +283,10 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: true\n\n    actualsecret123456",
         "AUTH_TOKEN: true\n    actualsecret123456:payload",
         "AUTH_TOKEN: correct horse battery staple # rotated (today)",
+        # Sol round-11: multiword passphrase forced into the code branch; blank-storm fold; backtick comment
+        "AUTH_TOKEN: [REDACTED:secret-value] correct horse battery staple",
+        "{AUTH_TOKEN: correct horse battery staple}",
+        "AUTH_TOKEN: `x // actualsecret123456`",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
