@@ -221,6 +221,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "detectSessionInUrl: true,",                  # long ident key, ,-terminated (Sol r8)
         "config:\n  authToken: true\nother: value",    # exempt bool; next line de-indented sibling
         "authToken: true\n  detectSessionInUrl: true",  # continuation is a nested key, not a fold
+        "MY_DEPLOY_TOKEN=[REDACTED:secret-value]",       # redacted env assignment — marker wins over '='
+        "AUTH_TOKEN: [REDACTED:secret-value] leftover prose words",  # marker consumed the secret; rest is prose
         # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
         "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
@@ -263,14 +265,16 @@ class AssignmentScanBoundary(unittest.TestCase):
         "DB_PASSWORD: correct horse battery staple",   # YAML/env plain multiword scalar
         "AUTH_TOKEN: abcdefghijklmno",                 # unquoted opaque below the 16-char bareword bar
         # Sol round-7: a bool/marker CAPTURED value must not exempt a payload after it
-        "AUTH_TOKEN: true actualsecret123",
-        "AUTH_TOKEN: [REDACTED:secret-value] actualsecret123",
+        "AUTH_TOKEN: true actualsecret123",                # bool value then a separate real token
         "AUTH_TOKEN: null correct horse battery staple",
         # Sol round-8: YAML fold continuation + opaque-secret-as-map-key
         "AUTH_TOKEN: true\n    correct horse battery staple",  # scalar folded onto indented line
         "AUTH_TOKEN: true\n    abcdefghijklmno",
         "AUTH_TOKEN: se+cret/k3y@value#123: x",                # special-char opaque key (ident-gate)
         "AUTH_TOKEN: correctsecretkey12345678: value",         # pure-alnum key in punctuation-free zone
+        # Sol round-9: word-split YAML fold, colon-in-plain-scalar
+        "AUTH_TOKEN: true\n    correct\n    horse\n    battery",
+        "AUTH_TOKEN: Abcdefghijklmnop:payload",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
