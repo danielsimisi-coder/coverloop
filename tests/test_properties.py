@@ -218,6 +218,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         "refresh_token: currentRt,",
         "refresh_token: currentRefreshToken (url)",  # call name with space (Sol r2)
         "refresh_token: currentRefreshToken?.(url)",  # optional-chaining call (Sol r2)
+        "detectSessionInUrl: true,",                  # long ident key, ,-terminated (Sol r8)
+        "config:\n  authToken: true\nother: value",    # exempt bool; next line de-indented sibling
+        "authToken: true\n  detectSessionInUrl: true",  # continuation is a nested key, not a fold
         # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
         "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
@@ -263,6 +266,11 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: true actualsecret123",
         "AUTH_TOKEN: [REDACTED:secret-value] actualsecret123",
         "AUTH_TOKEN: null correct horse battery staple",
+        # Sol round-8: YAML fold continuation + opaque-secret-as-map-key
+        "AUTH_TOKEN: true\n    correct horse battery staple",  # scalar folded onto indented line
+        "AUTH_TOKEN: true\n    abcdefghijklmno",
+        "AUTH_TOKEN: se+cret/k3y@value#123: x",                # special-char opaque key (ident-gate)
+        "AUTH_TOKEN: correctsecretkey12345678: value",         # pure-alnum key in punctuation-free zone
     ]
 
     def test_auth_code_idioms_pass_scan(self):

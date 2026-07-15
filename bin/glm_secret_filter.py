@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15g"
+FILTER_VERSION = "2026-07-15h"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -135,10 +135,18 @@ _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
 _YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # incl. indentation indicators |2 >+2 (Sol r2)
 _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
 _CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
-_CODE_AFTER_RE = re.compile(r"[ \t]*(?:(?:\?\.)?\(|:)")
+# A bareword is a code IDENTIFIER (object key / call name), not an opaque literal, only when it is
+# a pure identifier shape AND immediately begins a call `(` or a key `:` (Sol r8: a `:`-lookahead
+# alone let a pure-alnum SECRET used as a map key escape — an opaque secret carries +/@#!%^&*- which
+# the identifier shape rejects).
+_IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*$")
+_CODE_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(|[ \t]*:")
 _MIN_OPAQUE_LEN = 8
 _CODE_PUNCT = set("()[]{};,=<>`|&")
 _WORD_RE = re.compile(r"\S+")
+# YAML fold/block continuation: after `KEY: true` the real scalar can continue on MORE-indented
+# following lines (`true correct horse battery staple`). Bounded to a few lines to stay linear.
+_MAX_FOLD_LINES = 8
 
 
 def _val_level_verdict(m):
@@ -189,12 +197,15 @@ def _line_block_max(line):
     if quote is not None and len(line) - lit_open - 1 >= _MIN_OPAQUE_LEN and lit_open > max_pos:
         max_pos = lit_open  # unterminated literal: fail closed
     for bm in _BAREWORD_RE.finditer(line):
-        # call names and object KEYS are code, not literals: platformStorageKey(url) / fn (x) /
-        # fn?.(x) / detectSessionInUrl: (long camelCase option names — Sol r7; a name match of
-        # the secret FAMILY is still handled by its own ASSIGN match, this only clears the
-        # bareword content rule)
-        if bm.start() > max_pos and not _CODE_AFTER_RE.match(line, bm.end()):
-            max_pos = bm.start()
+        # call names and pure-identifier object KEYS are code, not literals: platformStorageKey(url)
+        # / fn (x) / fn?.(x) / detectSessionInUrl: (long camelCase option names — Sol r7). An OPAQUE
+        # secret (has +/@#!%^&*-) fails _IDENT_RE, so a secret-as-map-key still blocks (Sol r8).
+        if bm.start() <= max_pos:
+            continue
+        word = line[bm.start():bm.end()]
+        if _CODE_AFTER_RE.match(line, bm.end()) and _IDENT_RE.match(word):
+            continue
+        max_pos = bm.start()
     return max_pos
 
 
@@ -224,6 +235,38 @@ def _plain_zone_leaks(zone, value_start):
     if n >= 2:
         return True
     return n == 1 and lens[i] >= _MIN_OPAQUE_LEN
+
+
+def _fold_continuation_leaks(text, line_start, line_end):
+    """When an exempt (bool/null/marker) value ENDS its physical line, a YAML fold/block can carry
+    the real scalar onto MORE-indented following lines (`AUTH_TOKEN: true\\n  correct horse …`).
+    Scan those continuation lines with the plain-scalar rule. Bounded to _MAX_FOLD_LINES (linear).
+    Returns True if a continuation line holds >= 2 words or one word >= _MIN_OPAQUE_LEN (Sol r8)."""
+    key_indent = len(text[line_start:line_end]) - len(text[line_start:line_end].lstrip())
+    pos = line_end
+    for _ in range(_MAX_FOLD_LINES):
+        if pos >= len(text) or text[pos] != "\n":
+            break
+        nxt = pos + 1
+        nend = text.find("\n", nxt)
+        if nend == -1:
+            nend = len(text)
+        cline = text[nxt:nend]
+        if not cline.strip():
+            pos = nend
+            continue  # blank line inside a block scalar
+        indent = len(cline) - len(cline.lstrip())
+        if indent <= key_indent:
+            break  # de-indent ends the continuation
+        # a continuation line that is a nested `key:` mapping is structure, not a folded scalar
+        stripped = cline.strip()
+        if _IDENT_RE.match(stripped.split(":", 1)[0]) and ":" in stripped:
+            break
+        words = stripped.split()
+        if len(words) >= 2 or (words and len(words[0]) >= _MIN_OPAQUE_LEN):
+            return True
+        pos = nend
+    return False
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -261,10 +304,10 @@ def scan(text):
             break
         if line_start != cached_line_start:
             cached_line_start = line_start
-            line_end = text.find("\n", line_start)
-            if line_end == -1:
-                line_end = len(text)
-            line = text[line_start:line_end]
+            cached_line_end = text.find("\n", line_start)
+            if cached_line_end == -1:
+                cached_line_end = len(text)
+            line = text[line_start:cached_line_end]
             cached_block_max = _line_block_max(line)
             cached_zone = _line_plain_zone(line)
         # False (bool/marker): the CAPTURED value is exempt but anything after it is not — the
@@ -274,6 +317,13 @@ def scan(text):
         else:
             check_from = (m.start("q") if m.group("q") else m.start("val")) - line_start
         if cached_block_max >= check_from or _plain_zone_leaks(cached_zone, check_from):
+            hits.append("secret-assignment")
+            break
+        # An exempt value that ENDS its line may be a YAML fold whose scalar continues indented
+        # below (Sol r8). Only bool/null/marker exempt values can reach here at line-end.
+        if verdict is False and m.end() >= cached_line_end and _fold_continuation_leaks(
+            text, line_start, cached_line_end
+        ):
             hits.append("secret-assignment")
             break
     return hits
