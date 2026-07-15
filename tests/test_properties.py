@@ -244,6 +244,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: >+2",
         'AUTH_TOKEN: "x\\" correct horse battery staple"',   # escaped-quote split of a SPACED payload
         "AUTH_TOKEN: '[REDACTED:secret-value]suffixpayload'",  # marker with suffix under ':' (isolates marker logic)
+        # Sol round-3 adversarial set (both were regressions introduced by the r2 fixes):
+        "AUTH_TOKEN: fn('correct PASSWORD: x horse')",  # inner name-match must not split the span scan
+        'AUTH_TOKEN: "abcdefgh\\\\"',                     # \\\\ = escaped backslash; the quote is REAL
     ]
 
     def test_auth_code_idioms_pass_scan(self):

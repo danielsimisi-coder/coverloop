@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15c"
+FILTER_VERSION = "2026-07-15d"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -130,12 +130,13 @@ _MIN_OPAQUE_LEN = 8
 _MIN_BAREWORD_LEN = 16  # enforced by _BAREWORD_RE's quantifier
 
 
-def _assignment_leaks(m, text, tail_cap=None):
+def _assignment_leaks(m, text, skip_tail=False):
     """True when an ASSIGN_RE match can actually leak secret material (see gate note above).
-    tail_cap bounds the content scan at the NEXT assignment match (linearity: each character is
-    scanned by at most one match — Sol r2 measured the uncapped version quadratic on repeated
-    matches; the union of capped segments still covers the whole line, and anything past the cap
-    belongs to the next match's own scan)."""
+    skip_tail: on a line with several matches, only the FIRST match runs the content scan — its
+    tail is a superset of every later match's tail on that line, so one scan per line both keeps
+    scan() linear (Sol r2: uncapped rescans were quadratic) and never splits a quoted span the way
+    a mid-line cap did (Sol r3: a cap at the next match start divided `fn('… PASSWORD: x …')`
+    across two scans and lost the pairing). Later matches still get the val-level rules."""
     val = (m.group("val") or "").rstrip(",;")
     if _REDACTED_MARKER_RE.match(val):
         return False  # exactly a redaction marker — scan(redact(x)) idempotency
@@ -145,6 +146,8 @@ def _assignment_leaks(m, text, tail_cap=None):
         return False
     if _YAML_BLOCK_RE.match(val):
         return True  # YAML block scalar: the payload lives on following lines — stay closed
+    if skip_tail:
+        return False  # this line's first match already content-scanned a superset of this tail
     # Content scan over the rest of the physical line from the value start. NOTE: no standalone
     # short-value exemption — the regex's value capture stops at the first quote (`fn('secret')`
     # captures only `fn(`), so ONLY the tail rules below may clear a match (Sol r1 catch).
@@ -153,14 +156,13 @@ def _assignment_leaks(m, text, tail_cap=None):
     tail_end = text.find("\n", start)
     if tail_end == -1:
         tail_end = len(text)
-    if tail_cap is not None:
-        tail_end = min(tail_end, max(tail_cap, m.end()))
     tail = text[start:tail_end]
     if "=" in tail:
         return True  # a swallowed env-style pair hides in the same match's shadow
-    # escaped quotes are stripped BEFORE span pairing, so \" truncation tricks can't split a
-    # long literal into two short-looking spans (Sol r2)
-    tail_spans = tail.replace('\\"', "").replace("\\'", "")
+    # ESCAPED quotes — odd backslash parity only; `\\"` is a REAL quote after an escaped
+    # backslash (Sol r3) — are stripped BEFORE span pairing, so \" truncation tricks can't split
+    # a long literal into two short-looking spans (Sol r2)
+    tail_spans = _ESCAPED_QUOTE_RE.sub(r"\1", tail)
     if _QUOTED_SPAN_RE.search(tail_spans):
         return True  # an opaque quoted literal the value capture may not have reached
     for bm in _BAREWORD_RE.finditer(tail):
@@ -171,6 +173,9 @@ def _assignment_leaks(m, text, tail_cap=None):
 
 
 _CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
+# an escaped quote = quote preceded by an ODD number of backslashes; keep the even
+# (escaped-backslash) pairs, drop only the escaping backslash + quote
+_ESCAPED_QUOTE_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\[\"']")
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -188,10 +193,13 @@ def scan(text):
             continue
         if rx.search(text):
             hits.append(label)
-    assign_matches = list(ASSIGN_RE.finditer(text))
-    for i, m in enumerate(assign_matches):
-        nxt = assign_matches[i + 1].start() if i + 1 < len(assign_matches) else None
-        if _assignment_leaks(m, text, tail_cap=nxt):
+    last_scanned_line_start = -1
+    for m in ASSIGN_RE.finditer(text):
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        same_line = line_start == last_scanned_line_start
+        if not same_line:
+            last_scanned_line_start = line_start
+        if _assignment_leaks(m, text, skip_tail=same_line):
             hits.append("secret-assignment")
             break
     return hits
