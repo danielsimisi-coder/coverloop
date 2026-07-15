@@ -122,6 +122,13 @@ PII_PATTERNS = [
 #      per line, one integer (max blocking position) answers every match on it (linear overall;
 #      Sol r2/r4 measured the per-match rescans quadratic, and Sol r3/r5 showed every
 #      mid-line-cap / stateful-deferral variant splits or shifts literal pairing).
+#   3. PLAIN-SCALAR rule (Sol r6): a match whose tail sits in the line's trailing zone with NO
+#      code punctuation at all (env/YAML dumps, prose — never real code, which always carries
+#      , ; ) } etc.) blocks when the value zone holds >= 2 words (multiword passphrase) or one
+#      word of >= _MIN_OPAQUE_LEN (an unquoted opaque token below the bareword threshold).
+#      This restores main's strictness for `DB_PASSWORD: correct horse battery staple` and
+#      `AUTH_TOKEN: abcdefghijklmno` while code idioms (`refresh_token: currentRt,`) stay clean
+#      via their punctuation.
 # There is NO env/flag escape hatch, by design.
 _REDACTED_MARKER_RE = re.compile(r"^\[REDACTED:[a-z-]+\]$")
 _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
@@ -129,6 +136,8 @@ _YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # incl. indentation indicators |
 _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
 _CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
 _MIN_OPAQUE_LEN = 8
+_CODE_PUNCT = set("()[]{};,=<>`|&")
+_WORD_RE = re.compile(r"\S+")
 
 
 def _val_level_verdict(m):
@@ -183,6 +192,34 @@ def _line_block_max(line):
     return max_pos
 
 
+def _line_plain_zone(line):
+    """(zone_start, word_starts, word_lens) for the trailing code-punctuation-free zone of the
+    line — the region where an unquoted value reads as an env/YAML plain scalar, not code."""
+    zone_start = 0
+    for i, c in enumerate(line):
+        if c in _CODE_PUNCT:
+            zone_start = i + 1
+    starts, lens = [], []
+    for wm in _WORD_RE.finditer(line, zone_start):
+        starts.append(wm.start())
+        lens.append(wm.end() - wm.start())
+    return zone_start, starts, lens
+
+
+def _plain_zone_leaks(zone, value_start):
+    """Plain-scalar rule (layer 3): >= 2 words, or one word >= _MIN_OPAQUE_LEN, at/after the
+    value start inside the punctuation-free zone."""
+    zone_start, starts, lens = zone
+    if value_start < zone_start:
+        return False  # code punctuation follows the value — it's code, layers 1-2 own it
+    from bisect import bisect_left
+    i = bisect_left(starts, value_start)
+    n = len(starts) - i
+    if n >= 2:
+        return True
+    return n == 1 and lens[i] >= _MIN_OPAQUE_LEN
+
+
 # Back-compat: some callers referenced KEY_RE directly.
 KEY_RE = VALUE_PATTERNS[0][1]
 
@@ -206,6 +243,7 @@ def scan(text):
     search_from = 0
     cached_line_start = -1
     cached_block_max = -1
+    cached_zone = (0, [], [])
     for m in ASSIGN_RE.finditer(text):
         nl = text.rfind("\n", search_from, m.start())
         if nl != -1:
@@ -222,9 +260,11 @@ def scan(text):
             line_end = text.find("\n", line_start)
             if line_end == -1:
                 line_end = len(text)
-            cached_block_max = _line_block_max(text[line_start:line_end])
+            line = text[line_start:line_end]
+            cached_block_max = _line_block_max(line)
+            cached_zone = _line_plain_zone(line)
         value_start = (m.start("q") if m.group("q") else m.start("val")) - line_start
-        if cached_block_max >= value_start:
+        if cached_block_max >= value_start or _plain_zone_leaks(cached_zone, value_start):
             hits.append("secret-assignment")
             break
     return hits
