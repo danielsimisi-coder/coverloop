@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 
 CLI_VERSION = "2.0.2"
 
@@ -99,7 +99,24 @@ def log_egress(model, mode, zdr_requested, http_status, secret_scan, char_count,
 def sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+def _enforce_egress_redaction(payload):
+    """SINGLE egress choke point (operator invariant, 2026-07-15): NO content reaches the network
+    without passing redact() + a fail-closed scan(). Every do_request caller — review, ping,
+    self-test, any future path — is covered here, so there is structurally no raw-packet bypass.
+    redact() is idempotent, so already-redacted review content is unchanged."""
+    for msg in payload.get("messages", []):
+        c = msg.get("content")
+        if isinstance(c, str):
+            msg["content"] = redact(c)
+    joined = "\n".join(m.get("content", "") for m in payload.get("messages", []) if isinstance(m.get("content"), str))
+    hits = scan(joined)
+    if hits:
+        raise RuntimeError("egress blocked: redacted packet still scans as secret-bearing: " + ",".join(hits))
+    return payload
+
+
 def do_request(payload, timeout):
+    payload = _enforce_egress_redaction(payload)
     req = urllib.request.Request(
         API_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -198,7 +215,11 @@ def main():
     if not task and not stdin_text.strip():
         print("ERROR: Provide a prompt and/or pipe explicit text.", file=sys.stderr)
         sys.exit(1)
-    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    # EGRESS INVARIANT (operator, 2026-07-15): EVERY packet passes redact() BEFORE scan and
+    # egress — there is no raw-packet path to the model. redact() strips secret VALUES and PII
+    # shape-independently (the primary data-protection layer); scan() then fail-closes on whatever
+    # would still leave. Enforced by tests/test_properties.py::EgressRedactionInvariant.
+    content = redact(f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip())
     payload_sha = sha(content)
     char_count = len(content)
 

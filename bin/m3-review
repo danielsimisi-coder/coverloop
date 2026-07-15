@@ -7,7 +7,7 @@ import os, sys, json, hashlib, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 
 CLI_VERSION = "m3-1.0.2"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -52,7 +52,23 @@ def log_egress(mode, http_status, secret_scan, char_count, payload_sha, extra=No
         print(f"ERROR: egress log write failed ({e}); failing closed (no unaudited send).", file=sys.stderr)
         sys.exit(7)
 
+def _enforce_egress_redaction(payload):
+    """SINGLE egress choke point (operator invariant, 2026-07-15): NO content reaches the network
+    without redact() + a fail-closed scan(). Covers review, ping, and any future caller — no raw
+    bypass. redact() is idempotent."""
+    for msg in payload.get("messages", []):
+        c = msg.get("content")
+        if isinstance(c, str):
+            msg["content"] = redact(c)
+    joined = "\n".join(m.get("content", "") for m in payload.get("messages", []) if isinstance(m.get("content"), str))
+    hits = scan(joined)
+    if hits:
+        raise RuntimeError("egress blocked: redacted packet still scans as secret-bearing: " + ",".join(hits))
+    return payload
+
+
 def do_request(payload, timeout):
+    payload = _enforce_egress_redaction(payload)
     req = urllib.request.Request(API_URL, data=json.dumps(payload).encode("utf-8"),
         headers={"Authorization": f"Bearer {read_key()}", "Content-Type": "application/json",
                  "X-Title": "M3 advisory (data_collection:deny)"}, method="POST")
@@ -105,7 +121,9 @@ def main():
     stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
     if not task and not stdin_text.strip():
         print("ERROR: provide a prompt and/or pipe text.", file=sys.stderr); sys.exit(1)
-    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    # EGRESS INVARIANT (operator, 2026-07-15): every packet passes redact() before scan/egress —
+    # no raw-packet path. See glm-review + tests/test_properties.py::EgressRedactionInvariant.
+    content = redact(f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip())
     psha = sha(content); cc = len(content)
     if cc > MAX_CHARS:
         log_egress(mode, None, "not-sent-too-large", cc, psha)

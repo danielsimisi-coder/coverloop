@@ -56,10 +56,17 @@ def gen_secret(rng):
         return ("postgres://" + _rand(rng, string.ascii_lowercase, 6) + ":" +
                 _rand(rng, b64, 10) + "@host/db"), "db-url-cred"
     if kind == "assign":
+        # 2026-07-15a boundary: env-style (=) assignments block at ANY value; colon-style blocks
+        # for quoted opaque literals >= 8 chars. Generate only the still-blocking class here —
+        # the colon-style code idioms scan() now deliberately allows are pinned the other way in
+        # AssignmentScanBoundary below.
         name = rng.choice(["API_KEY", "X_SECRET", "DB_PASSWORD", "AUTH_TOKEN", "MY_API_KEY", "z_passwd"])
-        sep = rng.choice(["=", ": ", " = "])
-        val = _rand(rng, b64 + "!@#", rng.randint(1, 30))
-        return name + sep + val, "secret-assignment"
+        if rng.random() < 0.5:
+            sep = rng.choice(["=", " = "])
+            val = _rand(rng, b64 + "!@#", rng.randint(1, 30))
+            return name + sep + val, "secret-assignment"
+        val = _rand(rng, b64 + "!@#", rng.randint(8, 30))
+        return "%s: '%s'" % (name, val), "secret-assignment"
     # pem
     body = _rand(rng, b64, rng.randint(40, 300))
     return "-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----", "private-key"
@@ -191,6 +198,291 @@ class SecretFilterProperties(unittest.TestCase):
                "-----END RSA PRIVATE KEY-----")
         self.assertNotIn("MIIBOgIBAAJBAKj34", F.redact(enc), "encrypted PEM body leaked")
         self.assertIn("[REDACTED:private-key]", F.redact(enc), "encrypted PEM not redacted whole")
+
+
+class AssignmentScanBoundary(unittest.TestCase):
+    """2026-07-15a (operator-directed): scan() must review real auth-client code without
+    false-positive blocking, while still blocking genuine secret assignments. redact() is
+    unchanged and maximal. Both directions pinned so a future edit can't silently widen OR
+    re-break the boundary."""
+
+    ALLOWED_AUTH_CODE = [
+        "autoRefreshToken: true,",
+        "detectSessionInUrl: true, persistSession: true",
+        "access_token: 'at-1',",
+        "refresh_token: 'rt-2',",
+        "  password: 'pw' })",
+        "storageKey: platformStorageKey(url),",
+        "p_game_key: gameKey,",
+        "refresh_token: `rt-${counter}`,",
+        "refresh_token: currentRt,",
+        "refresh_token: currentRefreshToken (url)",  # call name with space (Sol r2)
+        "refresh_token: currentRefreshToken?.(url)",  # optional-chaining call (Sol r2)
+        "detectSessionInUrl: true,",                  # long ident key, ,-terminated (Sol r8)
+        "config:\n  authToken: true\nother: value",    # exempt bool; next line de-indented sibling
+        "authToken: true\n  detectSessionInUrl: true",  # continuation is a nested key, not a fold
+        "MY_DEPLOY_TOKEN=[REDACTED:secret-value]",       # redacted env assignment — marker wins over '='
+        "token: 'x', // rotate quarterly",           # JS line comment, short value
+        "webhookUrl: 'https://x.io/hook',",          # :// is not a comment
+        "sessionToken: buildToken(userId, expiry),",  # call w/ args, not a bare multiword (Sol r11)
+        "apiKey: config.get('k'), fallback: def,",
+        # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
+        "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
+        "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
+        "expect(stored?.refresh_token).toBe(server.currentRefreshToken())",
+        "TOKEN: null", "apiKey: undefined,",
+    ]
+
+    STILL_BLOCKED = [
+        "VERCEL_TOKEN=whatever",
+        "export API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+        "  DB_PASSWORD = 'hunter2longenough'  ",
+        "AUTH_TOKEN: 'opaque!value123'",
+        "my_password: \"correct horse battery staple\"",
+        "SIGNING_KEY: 'aVeryLongOpaqueLiteral123'",
+        "TOKEN=x",  # env-style keeps the no-floor rule (Sol v2.7.3 verify #3)
+        # Sol round-2 adversarial set (each was a caught bypass of the first gate draft):
+             # long opaque bareword
+        "AUTH_TOKEN: fn('correcthorsebatterystaple')",       # literal hidden past the value capture
+        'AUTH_TOKEN: "x\\"correcthorsebatterystaple"',       # escaped-quote truncation trick
+        "AUTH_TOKEN=[REDACTED:secret-value]correcthorsebatterystaple",  # marker with payload suffix
+        "AUTH_TOKEN: |",                                     # YAML block scalar (payload on next lines)
+        "AUTH_TOKEN:`placeholder`;DB_PASSWORD=correcthorsebatterystaple",  # swallowed second pair
+        # Sol round-2 adversarial set:
+        "AUTH_TOKEN: |2",                                    # YAML block scalar WITH indentation indicator
+        "AUTH_TOKEN: >+2",
+        'AUTH_TOKEN: "x\\" correct horse battery staple"',   # escaped-quote split of a SPACED payload
+        "AUTH_TOKEN: '[REDACTED:secret-value]suffixpayload'",  # marker with suffix under ':' (isolates marker logic)
+        # Sol round-3 adversarial set (both were regressions introduced by the r2 fixes):
+        "AUTH_TOKEN: fn('correct PASSWORD: x horse')",  # inner name-match must not split the span scan
+        'AUTH_TOKEN: "abcdefgh\\\\"',                     # \\\\ = escaped backslash; the quote is REAL
+        # Sol round-4: val-level early exits must not mark the line as tail-scanned
+        "autoRefreshToken: true, AUTH_TOKEN: fn('correcthorsebatterystaple')",
+        "a_token: null, AUTH_TOKEN: correct horse battery staple",
+        "x_token: '[REDACTED:secret-value]', AUTH_TOKEN: 'opaquevalue123456'",
+        # Sol round-5: stateful per-match lexing vs line lexing disagreed on ambiguous pairing —
+        # a QUOTED opaque captured value now blocks at the match level, both readings closed
+        "({x_token:x, note: `'a_key:'correct horse battery staple'`})",
+        # Sol round-6: unquoted colon-assignment secrets in a code-punctuation-free zone
+        "DB_PASSWORD: correct horse battery staple",   # YAML/env plain multiword scalar
+        # Sol round-7: a bool/marker CAPTURED value must not exempt a payload after it
+        "AUTH_TOKEN: true actualsecret123",                # bool value then a separate real token
+        "AUTH_TOKEN: null correct horse battery staple",
+        # Sol round-8: YAML fold continuation + opaque-secret-as-map-key
+        "AUTH_TOKEN: true\n    correct horse battery staple",  # scalar folded onto indented line
+        "AUTH_TOKEN: true\n    abcdefghijklmno",
+        "AUTH_TOKEN: se+cret/k3y@value#123: x",                # special-char opaque key (ident-gate)
+        "AUTH_TOKEN: correctsecretkey12345678: value",         # pure-alnum key in punctuation-free zone
+        # Sol round-9: word-split YAML fold, colon-in-plain-scalar
+        "AUTH_TOKEN: true\n    correct\n    horse\n    battery",
+        "AUTH_TOKEN: Abcdefghijklmnop:payload",
+        # Sol round-10: marker-then-payload, blank-line + colon-scalar folds, comment punctuation
+        "AUTH_TOKEN: true\n\n    actualsecret123456",
+        "AUTH_TOKEN: true\n    actualsecret123456:payload",
+        "AUTH_TOKEN: correct horse battery staple # rotated (today)",
+    ]
+
+    # Documented residual (Sol r11/r12, operator-accepted): a passphrase/opaque value forced into
+    # the CODE branch by surrounding code punctuation (braces, marker+prose, string concatenation)
+    # is NOT caught -- catching it FP'd on real TS (`currentRt as string`, JSX `<>hello world</>`).
+    # scan() is an egress TRIPWIRE backed by maximal redact(); these shapes do not occur in the
+    # TS/JS review packets scan() gates. Pinned so a future change is a conscious boundary move.
+    DOCUMENTED_RESIDUAL_CLEAN = [
+        "{AUTH_TOKEN: correct horse battery staple}",
+        "AUTH_TOKEN: [REDACTED:secret-value] correct horse battery staple",
+        "({AUTH_TOKEN: 'corr' + \"ect \" + 'horse'})",
+        "{AUTH_TOKEN: A1b2C3d4E5f6G7h}",
+        # single pure-identifier-shaped unquoted opaque words == indistinguishable from identifiers
+        "AUTH_TOKEN: correcthorsebatterystaple",
+        "AUTH_TOKEN: abcdefghijklmno",
+    ]
+
+    def test_documented_residual_is_clean_and_ts_not_fp(self):
+        for t in self.DOCUMENTED_RESIDUAL_CLEAN:
+            self.assertEqual(F.scan(t), [], "residual moved -- was it intended? %r" % t)
+        # the reason the residual stays open: closing it FP'd on real TypeScript
+        for t in ["({authToken: currentRt as string})", "({authToken: currentRt, children: <>hi there</>})"]:
+            self.assertEqual(F.scan(t), [], "TS false positive: %r" % t)
+
+    def test_auth_code_idioms_pass_scan(self):
+        for t in self.ALLOWED_AUTH_CODE:
+            self.assertEqual(F.scan(t), [], "false positive on auth code: %r -> %r" % (t, F.scan(t)))
+
+    def test_real_assignments_still_block(self):
+        for t in self.STILL_BLOCKED:
+            self.assertIn("secret-assignment", F.scan(t), "real assignment NOT blocked: %r" % t)
+
+    def test_redact_still_covers_allowed_code(self):
+        # the scan() gate never weakens redact(): a secret-NAMED colon assignment with a quoted
+        # value is still stripped from committed transcripts even when scan() allows egress
+        out = F.redact("access_token: 'at-1',")
+        self.assertNotIn("'at-1'", out)
+
+    def test_scan_of_redacted_output_is_clean(self):
+        """Marker idempotency (operator req): redaction MARKERS must not re-trip ASSIGN_RE.
+        Scope note: the bare-name literal tripwires (VERCEL_TOKEN et al) intentionally still
+        fire post-redaction — this pins markers only, hence non-literal names below."""
+        # names chosen OUTSIDE LITERAL_PATTERNS: the literal name-mention tripwire (VERCEL_TOKEN
+        # et al) intentionally still fires post-redaction — this test pins only that the
+        # [REDACTED:…] MARKERS never re-trip ASSIGN_RE.
+        dirty = ("MY_DEPLOY_TOKEN=realvalue123 and access_token: 'longopaque123' and "
+                 "password: \"correct horse battery staple\"")
+        self.assertTrue(F.scan(dirty))
+        self.assertEqual(F.scan(F.redact(dirty)), [], "scan(redact(x)) not clean")
+
+    def test_repeated_allowed_assignments_stay_linear(self):
+        """Sol r2: uncapped tail rescans were quadratic (7.6s @ 8000 matches). The per-match
+        tail cap must keep repeated allowed assignments linear."""
+        import time
+        text = "AUTH_TOKEN:x " * 8000  # one line — repeated matches (and see the many-line shape below)
+        t0 = time.time()
+        F.scan(text)
+        self.assertLess(time.time() - t0, 1.0, "repeated-assignment scan no longer linear")
+        text = "AUTH_TOKEN:x\n" * 8000
+        t0 = time.time()
+        F.scan(text)
+        self.assertLess(time.time() - t0, 1.0, "many-line repeated-assignment scan no longer linear")
+
+    def test_no_env_escape_hatch(self):
+        import os as _os
+        _os.environ["GLM_FILTER_ALLOW"] = "1"  # must have zero effect
+        try:
+            self.assertTrue(F.scan("VERCEL_TOKEN=whatever"))
+        finally:
+            del _os.environ["GLM_FILTER_ALLOW"]
+
+
+_CAPTURED = {}
+
+
+class EgressRedactionInvariant(unittest.TestCase):
+    """Operator merge condition (2026-07-15): EVERY packet sent to an external review model passes
+    through redact() BEFORE scan and egress — no raw-packet bypass path. Integration-level: the
+    REAL CLI module (bin/glm-review, bin/m3-review) is imported and driven through its actual
+    main() path with do_request captured, so the assertion covers arg-parse → packet build →
+    redact → scan → payload — the exact bytes that would leave the machine."""
+
+    SECRET = "hunter2longenough"
+
+    def _run_cli(self, cli_name, stdin_text, argv):
+        import importlib.util, io, contextlib
+        path = os.path.join(os.path.dirname(CLI), cli_name)
+        spec = importlib.util.spec_from_loader(cli_name.replace("-", "_"), loader=None)
+        mod = importlib.util.module_from_spec(spec)
+        with open(path) as _fh:
+            src = _fh.read()
+        captured = {}
+
+        captured["all"] = []
+        global _CAPTURED
+        _CAPTURED = captured
+
+        def fake_do_request(payload, timeout):
+            # call the REAL choke point first, so the test proves do_request enforces redaction on
+            # EVERY payload regardless of caller (the invariant), then record the enforced payload.
+            enforced = mod._enforce_egress_redaction(payload)
+            captured["all"].append(enforced)
+            captured["payload"] = enforced
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "provider": "test"}
+
+        env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20, "M3_ENABLED": "1"}
+        old_env = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        old_argv, old_stdin = sys.argv, sys.stdin
+        sys.argv = [cli_name] + argv
+        sys.stdin = io.StringIO(stdin_text)
+        try:
+            mod.__dict__["__file__"] = path
+            exec(compile(src, path, "exec"), mod.__dict__)
+            mod.do_request = fake_do_request
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    mod.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv, sys.stdin = old_argv, old_stdin
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return captured.get("payload")
+
+    def _assert_invariant(self, cli_name, argv):
+        raw = "review this line\nDB_PASSWORD = '%s'\nplus context" % self.SECRET
+        payload = self._run_cli(cli_name, raw, argv)
+        self.assertIsNotNone(payload, "%s never reached do_request (packet refused?)" % cli_name)
+        body = json.dumps(payload)
+        # 1. the secret VALUE never leaves
+        self.assertNotIn(self.SECRET, body, "%s egressed a raw secret" % cli_name)
+        # 2. redaction visibly happened
+        self.assertIn("[REDACTED:", body, "%s egress carries no redaction marker" % cli_name)
+        # 3. NO raw-packet bypass: the user message is EXACTLY redact(raw packet). argv here is only
+        #    ["--mode", <mode>], so TASK is empty and the whole packet is redact() of the fixed
+        #    "TASK:\n\n\nPROVIDED INPUT:\n<raw>" template — any second build path that skips
+        #    redact() breaks this equality.
+        user_msg = payload["messages"][-1]["content"]
+        expected = F.redact(("TASK:\n\n\nPROVIDED INPUT:\n" + raw).strip())
+        self.assertEqual(user_msg, expected, "%s user packet is not redact(raw)" % cli_name)
+        # 4. a legitimate auth-code packet still EGRESSES (scan does not refuse it) — the FP fix.
+        #    NOTE (accepted trade): redact() is maximal, so secret-family ASSIGNMENT VALUES are
+        #    blanked in the egressed packet (`autoRefreshToken: true` -> `[REDACTED:...]`); the
+        #    reviewer still receives all non-assignment code (structure, control flow, prose). We
+        #    assert the packet is SENT and prose survives, NOT byte-identity.
+        clean = "please review this diff for correctness and reuse concerns"
+        p2 = self._run_cli(cli_name, clean, argv)
+        self.assertIsNotNone(p2, "%s refused a clean auth-code packet (FP fix regressed)" % cli_name)
+        self.assertIn("review this diff for correctness", p2["messages"][-1]["content"],
+                      "%s dropped non-assignment prose" % cli_name)
+
+    def test_glm_review_redacts_before_egress(self):
+        self._assert_invariant("glm-review", ["--mode", "redteam"])
+
+    def test_m3_review_redacts_before_egress(self):
+        self._assert_invariant("m3-review", ["--mode", "audit"])
+
+    def test_every_captured_request_is_redacted(self):
+        """EVERY do_request payload on a run (not just the last) carries no raw secret — a raw
+        request followed by a redacted one cannot pass."""
+        raw = "line one\nDB_PASSWORD = 'hunter2longenough'\nline two"
+        self._run_cli("glm-review", raw, ["--mode", "redteam"])
+        for p in _CAPTURED.get("all", []):
+            for m in p.get("messages", []):
+                if isinstance(m.get("content"), str):
+                    self.assertNotIn(self.SECRET, m["content"], "a captured request egressed a raw secret")
+
+    def test_choke_point_redacts_and_fails_closed(self):
+        """do_request's _enforce_egress_redaction is the SINGLE egress gate: it redacts every
+        message (covers ping/self-test/any caller) and RAISES if a redacted packet still scans."""
+        import importlib.util
+        for cli in ("glm-review", "m3-review"):
+            path = os.path.join(os.path.dirname(CLI), cli)
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(cli.replace("-", "_"), loader=None))
+            mod.__dict__["__file__"] = path
+            with open(path) as _fh:
+                exec(compile(_fh.read(), path, "exec"), mod.__dict__)
+            # a raw-secret payload handed straight to the choke point is redacted in place
+            payload = {"messages": [{"role": "user", "content": "x_password = 'hunter2longenough'"}]}
+            out = mod._enforce_egress_redaction(payload)
+            self.assertNotIn(self.SECRET, out["messages"][0]["content"])
+            self.assertIn("[REDACTED:", out["messages"][0]["content"])
+            # the ping self-test payload passes the gate unchanged (constant, clean)
+            ping = {"messages": [{"role": "user", "content": "ping"}]}
+            self.assertEqual(mod._enforce_egress_redaction(ping)["messages"][0]["content"], "ping")
+            # a LITERAL_PATTERNS name that redact() leaves (by design) makes the gate FAIL CLOSED
+            with self.assertRaises(RuntimeError):
+                mod._enforce_egress_redaction({"messages": [{"role": "user", "content": "note: VERCEL_TOKEN mentioned"}]})
+
+    def test_scan_runs_on_the_redacted_text(self):
+        """The tripwire fail-closes on what would actually LEAVE: a packet whose only secret is a
+        redactable assignment egresses REDACTED (not refused), while a LITERAL_PATTERNS name-mention
+        (never redacted by design) still refuses outright."""
+        payload = self._run_cli("glm-review", "x_password = 'hunter2longenough'", ["--mode", "redteam"])
+        self.assertIsNotNone(payload)  # redacted -> clean -> sent
+        refused = self._run_cli("glm-review", "context mentions VERCEL_TOKEN here", ["--mode", "redteam"])
+        self.assertIsNone(refused, "LITERAL_PATTERNS mention must still refuse egress")
 
 
 # ---- concurrency / filesystem-race tests against the real CLI ----
