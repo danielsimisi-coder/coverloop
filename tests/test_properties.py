@@ -215,6 +215,7 @@ class AssignmentScanBoundary(unittest.TestCase):
         "storageKey: platformStorageKey(url),",
         "p_game_key: gameKey,",
         "refresh_token: `rt-${counter}`,",
+        "refresh_token: currentRt,",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
         "expect(stored?.refresh_token).toBe(server.currentRefreshToken())",
         "TOKEN: null", "apiKey: undefined,",
@@ -228,6 +229,14 @@ class AssignmentScanBoundary(unittest.TestCase):
         "my_password: \"correct horse battery staple\"",
         "SIGNING_KEY: 'aVeryLongOpaqueLiteral123'",
         "TOKEN=x",  # env-style keeps the no-floor rule (Sol v2.7.3 verify #3)
+        # Sol round-2 adversarial set (each was a caught bypass of the first gate draft):
+        "AUTH_TOKEN: correcthorsebatterystaple",             # long opaque bareword
+        "AUTH_TOKEN: fn('correcthorsebatterystaple')",       # literal hidden past the value capture
+        "AUTH_TOKEN: `correcthorsebatterystaple`",           # raw backtick literal
+        'AUTH_TOKEN: "x\\"correcthorsebatterystaple"',       # escaped-quote truncation trick
+        "AUTH_TOKEN=[REDACTED:secret-value]correcthorsebatterystaple",  # marker with payload suffix
+        "AUTH_TOKEN: |",                                     # YAML block scalar (payload on next lines)
+        "AUTH_TOKEN:`placeholder`;DB_PASSWORD=correcthorsebatterystaple",  # swallowed second pair
     ]
 
     def test_auth_code_idioms_pass_scan(self):
@@ -245,7 +254,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         self.assertNotIn("'at-1'", out)
 
     def test_scan_of_redacted_output_is_clean(self):
-        """Idempotency (operator req): redaction markers must not re-trip the tripwire."""
+        """Marker idempotency (operator req): redaction MARKERS must not re-trip ASSIGN_RE.
+        Scope note: the bare-name literal tripwires (VERCEL_TOKEN et al) intentionally still
+        fire post-redaction — this pins markers only, hence non-literal names below."""
         # names chosen OUTSIDE LITERAL_PATTERNS: the literal name-mention tripwire (VERCEL_TOKEN
         # et al) intentionally still fires post-redaction — this test pins only that the
         # [REDACTED:…] MARKERS never re-trip ASSIGN_RE.

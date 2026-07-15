@@ -9,8 +9,9 @@ auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, test fixtures l
 `access_token: 'at-1'`, code references like `storageKey: platformStorageKey(url)`, and even its
 own `[REDACTED:…]` markers. New `_assignment_leaks()` gate narrows ONLY scan(): `=` (env-style)
 assignments keep full strictness; `:` assignments are exempt for booleans/nulls, unquoted code
-expressions/template literals, sub-8-char placeholder literals, and redaction markers
-(scan∘redact now clean). redact() is UNCHANGED (maximal). No env/flag escape hatch — pinned by
+expressions/template literals, sub-8-char placeholder literals, and EXACT redaction markers
+(marker idempotency: scan∘redact no longer re-trips ASSIGN_RE; the bare-name literal tripwires
+still fire post-redaction by design). redact() is UNCHANGED (maximal). No env/flag escape hatch — pinned by
 test. New `AssignmentScanBoundary` suite pins BOTH directions (12 allowed idioms / 7 still-blocked
 real assignments); the property generator's "assign" case aligned to the still-blocking class.
 

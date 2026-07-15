@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15a"
+FILTER_VERSION = "2026-07-15b"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -97,43 +97,66 @@ PII_PATTERNS = [
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
 
-# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15a, operator-directed) ----
+# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15b, operator-directed) ----
 # ASSIGN_RE's name family (…TOKEN/…SECRET/…PASSWORD/…KEY) also matches everyday AUTH-CODE idioms:
 # `autoRefreshToken: true`, test fixtures like `access_token: 'at-1'`, code references like
 # `storageKey: platformStorageKey(url)` — which made scan() structurally unable to review
 # supabase-client code. The gate below narrows ONLY scan() (the egress block): redact() is
 # deliberately unchanged (over-redacting a transcript is safe; over-blocking an egress packet
-# breaks legitimate L3 reviews). `=` assignments (env/config dumps — the rule's original target)
-# keep FULL strictness. `:` assignments are exempt only for value shapes that cannot carry a
-# secret literal:
-#   - this filter's own [REDACTED:…] markers (scan(redact(x)) must be clean — idempotency),
-#   - boolean/null literals (true/false/null/none/nil/undefined),
-#   - UNQUOTED code expressions/identifiers/template literals (a variable reference is not a value),
-#   - literals shorter than _MIN_OPAQUE_LEN (synthetic placeholders: 'at-1', 'pw', 'rt-2').
-# Anything else — notably any quoted opaque literal of >= _MIN_OPAQUE_LEN after a secret-family
-# name — still BLOCKS, and every recognizable real token shape is caught by VALUE_PATTERNS
-# regardless of this gate. This is NOT an escape hatch: there is no env/flag to widen it.
-_REDACTED_MARKER = "[REDACTED:"
-_MIN_OPAQUE_LEN = 8
+# breaks legitimate L3 reviews).
+#
+# Rules (Sol round-2 hardened — trust CONTENT, never "expression shape"):
+#   * `=` assignments (env/config dumps — the rule's original target) keep FULL strictness.
+#   * A value that is EXACTLY one of this filter's own [REDACTED:<label>] markers is clean
+#     (scan∘redact marker-idempotency). A marker with ANY suffix/prefix or left unclosed is NOT
+#     exempt (smuggling a payload behind a marker still blocks).
+#   * `:` assignments are exempt for boolean/null literals; EVERYTHING else is decided by
+#     scanning the REST OF THE LINE from the value start (so nested-quote tricks, fn('…')
+#     arguments the regex's value capture never reaches, backtick templates, and minified
+#     `;NAME=…` tails are all examined — a "short captured value" alone proves nothing):
+#       - any QUOTED span with >= _MIN_OPAQUE_LEN chars of content  -> blocks
+#       - any bareword run >= _MIN_BAREWORD_LEN not immediately followed by '(' (call names like
+#         platformStorageKey( are code, not literals)               -> blocks
+#       - any '=' anywhere in the tail (a swallowed env-style pair) -> blocks
+#       - a YAML block-scalar indicator (| or >) as the value       -> blocks (payload is on the
+#         next lines where no assignment match would look)
+# There is NO env/flag escape hatch, by design.
+_REDACTED_MARKER_RE = re.compile(r"^\[REDACTED:[a-z-]+\]$")
 _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
-# identifier / member / call chains: gameKey · cfg.token · platformStorageKey(url)
-_CODE_EXPR_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:[.(][\w$.,()'\"` ]*)?$")
+_YAML_BLOCK_RE = re.compile(r"^[|>][+-]?$")
+_QUOTED_SPAN_RE = re.compile(r"['\"]([^'\"\r\n]{8,})['\"]")
+_BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
+_MIN_OPAQUE_LEN = 8
+_MIN_BAREWORD_LEN = 16  # enforced by _BAREWORD_RE's quantifier
 
 
-def _assignment_leaks(m):
+def _assignment_leaks(m, text):
     """True when an ASSIGN_RE match can actually leak secret material (see gate note above)."""
     val = (m.group("val") or "").rstrip(",;")
-    if val.startswith(_REDACTED_MARKER):
-        return False
+    if _REDACTED_MARKER_RE.match(val):
+        return False  # exactly a redaction marker — scan(redact(x)) idempotency
     if "=" in m.group(1):
         return True  # env-style assignment: the rule's original target, full strictness
     if _BOOL_NULL_RE.match(val):
         return False
-    if m.group("q") is None and (val.startswith("`") or _CODE_EXPR_RE.match(val)):
-        return False  # code expression / template literal — no literal value present
-    if len(val) < _MIN_OPAQUE_LEN:
-        return False  # synthetic placeholder
-    return True
+    if _YAML_BLOCK_RE.match(val):
+        return True  # YAML block scalar: the payload lives on following lines — stay closed
+    # Content scan over the rest of the physical line from the value start. NOTE: no standalone
+    # short-value exemption — the regex's value capture stops at the first quote (`fn('secret')`
+    # captures only `fn(`), so ONLY the tail rules below may clear a match (Sol r2 catch).
+    # start at the OPENING quote when the value is quoted, so the quoted-span rule sees the pair
+    start = m.start("q") if m.group("q") else m.start("val")
+    tail_end = text.find("\n", start)
+    tail = text[start:tail_end if tail_end != -1 else len(text)]
+    if "=" in tail:
+        return True  # a swallowed env-style pair hides in the same match's shadow
+    for qm in _QUOTED_SPAN_RE.finditer(tail):
+        return True  # an opaque quoted literal the value capture may not have reached
+    for bm in _BAREWORD_RE.finditer(tail):
+        after = tail[bm.end():bm.end() + 1]
+        if after != "(":
+            return True  # long opaque bareword that is not a call name
+    return False
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -151,7 +174,7 @@ def scan(text):
             continue
         if rx.search(text):
             hits.append(label)
-    if any(_assignment_leaks(m) for m in ASSIGN_RE.finditer(text)):
+    if any(_assignment_leaks(m, text) for m in ASSIGN_RE.finditer(text)):
         hits.append("secret-assignment")
     return hits
 
