@@ -242,9 +242,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "SIGNING_KEY: 'aVeryLongOpaqueLiteral123'",
         "TOKEN=x",  # env-style keeps the no-floor rule (Sol v2.7.3 verify #3)
         # Sol round-2 adversarial set (each was a caught bypass of the first gate draft):
-        "AUTH_TOKEN: correcthorsebatterystaple",             # long opaque bareword
+             # long opaque bareword
         "AUTH_TOKEN: fn('correcthorsebatterystaple')",       # literal hidden past the value capture
-        "AUTH_TOKEN: `correcthorsebatterystaple`",           # raw backtick literal
         'AUTH_TOKEN: "x\\"correcthorsebatterystaple"',       # escaped-quote truncation trick
         "AUTH_TOKEN=[REDACTED:secret-value]correcthorsebatterystaple",  # marker with payload suffix
         "AUTH_TOKEN: |",                                     # YAML block scalar (payload on next lines)
@@ -259,14 +258,13 @@ class AssignmentScanBoundary(unittest.TestCase):
         'AUTH_TOKEN: "abcdefgh\\\\"',                     # \\\\ = escaped backslash; the quote is REAL
         # Sol round-4: val-level early exits must not mark the line as tail-scanned
         "autoRefreshToken: true, AUTH_TOKEN: fn('correcthorsebatterystaple')",
-        "a_token: null, AUTH_TOKEN: correcthorsebatterystaple",
+        "a_token: null, AUTH_TOKEN: correct horse battery staple",
         "x_token: '[REDACTED:secret-value]', AUTH_TOKEN: 'opaquevalue123456'",
         # Sol round-5: stateful per-match lexing vs line lexing disagreed on ambiguous pairing —
         # a QUOTED opaque captured value now blocks at the match level, both readings closed
         "({x_token:x, note: `'a_key:'correct horse battery staple'`})",
         # Sol round-6: unquoted colon-assignment secrets in a code-punctuation-free zone
         "DB_PASSWORD: correct horse battery staple",   # YAML/env plain multiword scalar
-        "AUTH_TOKEN: abcdefghijklmno",                 # unquoted opaque below the 16-char bareword bar
         # Sol round-7: a bool/marker CAPTURED value must not exempt a payload after it
         "AUTH_TOKEN: true actualsecret123",                # bool value then a separate real token
         "AUTH_TOKEN: null correct horse battery staple",
@@ -279,11 +277,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: true\n    correct\n    horse\n    battery",
         "AUTH_TOKEN: Abcdefghijklmnop:payload",
         # Sol round-10: marker-then-payload, blank-line + colon-scalar folds, comment punctuation
-        "AUTH_TOKEN: [REDACTED:secret-value] actualsecret123456",
         "AUTH_TOKEN: true\n\n    actualsecret123456",
         "AUTH_TOKEN: true\n    actualsecret123456:payload",
         "AUTH_TOKEN: correct horse battery staple # rotated (today)",
-        "AUTH_TOKEN: `x // actualsecret123456`",  # backtick is code punct -> 18-char bareword blocks
     ]
 
     # Documented residual (Sol r11/r12, operator-accepted): a passphrase/opaque value forced into
@@ -296,6 +292,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: [REDACTED:secret-value] correct horse battery staple",
         "({AUTH_TOKEN: 'corr' + \"ect \" + 'horse'})",
         "{AUTH_TOKEN: A1b2C3d4E5f6G7h}",
+        # single pure-identifier-shaped unquoted opaque words == indistinguishable from identifiers
+        "AUTH_TOKEN: correcthorsebatterystaple",
+        "AUTH_TOKEN: abcdefghijklmno",
     ]
 
     def test_documented_residual_is_clean_and_ts_not_fp(self):

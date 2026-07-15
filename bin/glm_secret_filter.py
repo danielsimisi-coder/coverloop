@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15m"
+FILTER_VERSION = "2026-07-15p"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -120,11 +120,18 @@ PII_PATTERNS = [
 #     only if that whole remaining value is a lone bool/null with no fold; otherwise BLOCK (fail
 #     closed -- this is where env dumps, multiword passphrases, opaque tokens, colon-bearing scalars
 #     and folds all live).
-# RESIDUAL (documented, operator-accepted): a pure `[A-Za-z0-9_$]` >=16 secret used as a map KEY in a
-# code-punctuation-bearing line (`{ Abcdefghijklmnop: v }`) is structurally identical to a legitimate
-# long identifier key (`detectSessionInUrl:`) and cannot be told apart without semantics -- blocking
-# it would reinstate the exact FP this gate removes. scan() is an egress TRIPWIRE, not a DLP; redact()
-# still strips every KNOWN secret SHAPE. There is NO env/flag escape hatch.
+# RESIDUAL (documented, OPERATOR DECISION — a real strictness trade, not a fixable defect):
+# scan() no longer catches an UNQUOTED pure-identifier-shaped value/key
+# (`[A-Za-z0-9_$]+`, any length) on a code-punctuation-bearing line is structurally identical to a
+# legitimate identifier -- a variable ref (`currentAccessToken`), a type name (`AuthenticationToken`),
+# or a map key. Blocking these reinstates the exact FP on real TS this gate exists to remove
+# (Sol r13: `access_token: currentAccessToken`, `refreshToken: AuthenticationToken`), so scan()
+# accepts a broader FALSE-NEGATIVE here in exchange for the operator's PRIMARY requirement (no FP on
+# real auth code). Still caught by scan(): MULTIWORD values (passphrases), NON-identifier tokens
+# (+/@#!%^&*-/), QUOTED opaque literals >=8, `=` assignments, YAML block/fold scalars, and every
+# KNOWN secret SHAPE (VALUE_PATTERNS). Critically, redact() is UNCHANGED and STILL STRIPS this value
+# (ASSIGN_RE redaction is shape-independent) — the DATA PROTECTION holds even where the egress
+# TRIPWIRE is permissive. There is NO env/flag escape hatch.
 _REDACTED_MARKER_RE = re.compile(r"^\[REDACTED:[a-z-]+\]$")
 _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
 _YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # YAML block scalar indicator |, >, |2, >+ ...
@@ -134,6 +141,7 @@ _CALL_OR_KEY_RE = re.compile(r"[ \t]*(?:\?\.)?\(|[ \t]*:")     # bareword follow
 _MIN_OPAQUE_LEN = 8
 _MAX_FOLD_LINES = 64
 _MAPPING_KEY_RE = re.compile(r"([^:]+):(?:\s|$)")
+_SWALLOWED_ENV_RE = re.compile(r"[A-Za-z0-9_]*(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD)=(?!=)", re.I)
 _CODE_PUNCT = set("()[]{};,=<>`|&")
 _COMMENT_RE = re.compile(r"\s(?:#|//).*$")
 
@@ -195,7 +203,11 @@ def _line_block_max(line):
         if bm.start() <= max_pos:
             continue
         word = line[bm.start():bm.end()]
-        if _CALL_OR_KEY_RE.match(line, bm.end()) and _IDENT_RE.match(word):
+        # a pure code IDENTIFIER (`[A-Za-z_$][\w$]*`) is a variable ref / type name / object key,
+        # never an opaque literal — exempt it OUTRIGHT (Sol r13: `access_token: currentAccessToken`,
+        # `refreshToken: AuthenticationToken;` are real code, not secrets). Only a bareword carrying
+        # non-identifier chars (+/@#!%^&*-/ — real opaque-secret material) blocks on a code line.
+        if _IDENT_RE.match(word):
             continue
         max_pos = bm.start()
     return max_pos
@@ -217,7 +229,14 @@ def _plain_line_leaks(text, line_start, line_end, value_start_abs):
     if _REDACTED_MARKER_RE.match(rest):
         return False
     if not _BOOL_NULL_RE.match(rest):
-        return True       # not a lone bool/null -> fail closed
+        # a lone pure-identifier value is a code reference / type name, not an opaque secret (Sol
+        # r13: `access_token: currentAccessToken`); consistent with the code-branch identifier
+        # exemption. A MULTIWORD value (passphrase) or a non-identifier token still blocks. (bool/
+        # null is handled below WITH its fold check — it also matches _IDENT_RE, so it must be
+        # tested first.)
+        if _IDENT_RE.match(rest):
+            return False
+        return True       # not a lone bool/null / identifier -> fail closed (passphrase / opaque)
     # lone bool/null: a YAML plain scalar folds ONLY onto the IMMEDIATELY following more-indented
     # non-blank line (a blank line terminates a plain scalar); such a fold carries the real value.
     key_line = text[line_start:line_end]
@@ -283,8 +302,12 @@ def _match_leaks(m, text, line_start, line_end, block_max, last_punct):
     vstart = value_start_abs - line_start
     if last_punct >= vstart:
         # code line: the marker itself is benign (idempotency); block_max flags a quoted opaque
-        # literal / opaque bareword at/after the value; a trailing opaque payload still trips it.
-        return block_max >= vstart
+        # literal / non-identifier opaque bareword at/after the value. Also catch a secret-NAMED
+        # env pair swallowed into this value (`…;DB_PASSWORD=secret`) — precise, so `=>`/`===` in
+        # real code don't trip it (Sol r1/r13).
+        if block_max >= vstart:
+            return True
+        return bool(_SWALLOWED_ENV_RE.search(text[value_start_abs:line_end]))
     return _plain_line_leaks(text, line_start, line_end, value_start_abs)  # plain/config/YAML line
 
 
