@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15d"
+FILTER_VERSION = "2026-07-15e"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -130,13 +130,11 @@ _MIN_OPAQUE_LEN = 8
 _MIN_BAREWORD_LEN = 16  # enforced by _BAREWORD_RE's quantifier
 
 
-def _assignment_leaks(m, text, skip_tail=False):
-    """True when an ASSIGN_RE match can actually leak secret material (see gate note above).
-    skip_tail: on a line with several matches, only the FIRST match runs the content scan — its
-    tail is a superset of every later match's tail on that line, so one scan per line both keeps
-    scan() linear (Sol r2: uncapped rescans were quadratic) and never splits a quoted span the way
-    a mid-line cap did (Sol r3: a cap at the next match start divided `fn('… PASSWORD: x …')`
-    across two scans and lost the pairing). Later matches still get the val-level rules."""
+def _val_level_verdict(m):
+    """Per-match value rules. True = leaks; False = provably clean; None = undecided (needs the
+    line content scan). Split from the tail scan so scan() can track which lines actually RAN a
+    tail scan — Sol r4: marking a line "scanned" on a bool/marker early-exit let a later
+    same-line assignment skip scanning entirely."""
     val = (m.group("val") or "").rstrip(",;")
     if _REDACTED_MARKER_RE.match(val):
         return False  # exactly a redaction marker — scan(redact(x)) idempotency
@@ -146,12 +144,17 @@ def _assignment_leaks(m, text, skip_tail=False):
         return False
     if _YAML_BLOCK_RE.match(val):
         return True  # YAML block scalar: the payload lives on following lines — stay closed
-    if skip_tail:
-        return False  # this line's first match already content-scanned a superset of this tail
-    # Content scan over the rest of the physical line from the value start. NOTE: no standalone
-    # short-value exemption — the regex's value capture stops at the first quote (`fn('secret')`
-    # captures only `fn(`), so ONLY the tail rules below may clear a match (Sol r1 catch).
-    # Starts at the OPENING quote when the value is quoted, so the quoted-span rule sees the pair.
+    return None
+
+
+def _tail_scan_leaks(m, text):
+    """Content scan for an UNDECIDED match — over the rest of the physical line from the value
+    start. Runs at most once per line (the first undecided match's tail is a superset of every
+    later same-line tail): linear (Sol r2) without the span-splitting mid-line cap (Sol r3).
+    NOTE: no standalone short-value exemption — the regex's value capture stops at the first
+    quote (`fn('secret')` captures only `fn(`), so ONLY the tail rules may clear a match (Sol r1
+    catch). Starts at the OPENING quote when the value is quoted, so the quoted-span rule sees
+    the pair."""
     start = m.start("q") if m.group("q") else m.start("val")
     tail_end = text.find("\n", start)
     if tail_end == -1:
@@ -160,11 +163,12 @@ def _assignment_leaks(m, text, skip_tail=False):
     if "=" in tail:
         return True  # a swallowed env-style pair hides in the same match's shadow
     # ESCAPED quotes — odd backslash parity only; `\\"` is a REAL quote after an escaped
-    # backslash (Sol r3) — are stripped BEFORE span pairing, so \" truncation tricks can't split
-    # a long literal into two short-looking spans (Sol r2)
+    # backslash (Sol r3) — are stripped BEFORE literal lexing, so \" truncation tricks can't
+    # split a long literal into two short-looking ones (Sol r2)
     tail_spans = _ESCAPED_QUOTE_RE.sub(r"\1", tail)
-    if _QUOTED_SPAN_RE.search(tail_spans):
-        return True  # an opaque quoted literal the value capture may not have reached
+    for lit in _quoted_literals(tail_spans):
+        if len(lit) >= _MIN_OPAQUE_LEN:
+            return True  # an opaque quoted literal the value capture may not have reached
     for bm in _BAREWORD_RE.finditer(tail):
         # call names are code, not literals: platformStorageKey(url) / fn (x) / fn?.(x)
         if not _CALL_AFTER_RE.match(tail, bm.end()):
@@ -176,6 +180,26 @@ _CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
 # an escaped quote = quote preceded by an ODD number of backslashes; keep the even
 # (escaped-backslash) pairs, drop only the escaping backslash + quote
 _ESCAPED_QUOTE_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\[\"']")
+
+
+def _quoted_literals(s):
+    """Sequential same-quote pairing, the way a JS/JSON lexer reads literals: on a quote char,
+    the literal runs to the NEXT occurrence of the SAME char. Naive regex pairing treated the
+    CODE BETWEEN two adjacent literals (`', refresh_token: '`) as a span and false-positived on
+    every multi-fixture line (Sol r4 follow-up). An unterminated literal runs to end-of-string —
+    over-reporting on purpose (fail closed)."""
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "'" or c == '"':
+            end = s.find(c, i + 1)
+            if end == -1:
+                yield s[i + 1:]
+                return
+            yield s[i + 1:end]
+            i = end + 1
+        else:
+            i += 1
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -193,13 +217,27 @@ def scan(text):
             continue
         if rx.search(text):
             hits.append(label)
-    last_scanned_line_start = -1
+    # Line tracking is INCREMENTAL (each rfind covers only the span since the previous match) so
+    # a single line with many matches stays linear (Sol r4 P3), and a line counts as scanned only
+    # when a tail scan actually RAN (Sol r4 P1 — val-level early exits must not mark it).
+    line_start = 0
+    search_from = 0
+    tail_scanned_line = -1
     for m in ASSIGN_RE.finditer(text):
-        line_start = text.rfind("\n", 0, m.start()) + 1
-        same_line = line_start == last_scanned_line_start
-        if not same_line:
-            last_scanned_line_start = line_start
-        if _assignment_leaks(m, text, skip_tail=same_line):
+        nl = text.rfind("\n", search_from, m.start())
+        if nl != -1:
+            line_start = nl + 1
+        search_from = m.start()
+        verdict = _val_level_verdict(m)
+        if verdict is True:
+            hits.append("secret-assignment")
+            break
+        if verdict is False:
+            continue
+        if line_start == tail_scanned_line:
+            continue  # this line's first undecided match already scanned a superset tail
+        tail_scanned_line = line_start
+        if _tail_scan_leaks(m, text):
             hits.append("secret-assignment")
             break
     return hits

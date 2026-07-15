@@ -218,6 +218,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "refresh_token: currentRt,",
         "refresh_token: currentRefreshToken (url)",  # call name with space (Sol r2)
         "refresh_token: currentRefreshToken?.(url)",  # optional-chaining call (Sol r2)
+        # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
+        "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
         "expect(stored?.refresh_token).toBe(server.currentRefreshToken())",
         "TOKEN: null", "apiKey: undefined,",
@@ -247,6 +249,10 @@ class AssignmentScanBoundary(unittest.TestCase):
         # Sol round-3 adversarial set (both were regressions introduced by the r2 fixes):
         "AUTH_TOKEN: fn('correct PASSWORD: x horse')",  # inner name-match must not split the span scan
         'AUTH_TOKEN: "abcdefgh\\\\"',                     # \\\\ = escaped backslash; the quote is REAL
+        # Sol round-4: val-level early exits must not mark the line as tail-scanned
+        "autoRefreshToken: true, AUTH_TOKEN: fn('correcthorsebatterystaple')",
+        "a_token: null, AUTH_TOKEN: correcthorsebatterystaple",
+        "x_token: '[REDACTED:secret-value]', AUTH_TOKEN: 'opaquevalue123456'",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
@@ -279,10 +285,14 @@ class AssignmentScanBoundary(unittest.TestCase):
         """Sol r2: uncapped tail rescans were quadratic (7.6s @ 8000 matches). The per-match
         tail cap must keep repeated allowed assignments linear."""
         import time
-        text = "AUTH_TOKEN:x " * 8000
+        text = "AUTH_TOKEN:x " * 8000  # one line — repeated matches (and see the many-line shape below)
         t0 = time.time()
         F.scan(text)
         self.assertLess(time.time() - t0, 1.0, "repeated-assignment scan no longer linear")
+        text = "AUTH_TOKEN:x\n" * 8000
+        t0 = time.time()
+        F.scan(text)
+        self.assertLess(time.time() - t0, 1.0, "many-line repeated-assignment scan no longer linear")
 
     def test_no_env_escape_hatch(self):
         import os as _os
