@@ -386,7 +386,7 @@ class EgressRedactionInvariant(unittest.TestCase):
             return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                     "provider": "test"}
 
-        env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20}
+        env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20, "M3_ENABLED": "1"}
         old_env = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         old_argv, old_stdin = sys.argv, sys.stdin
