@@ -283,11 +283,27 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN: true\n\n    actualsecret123456",
         "AUTH_TOKEN: true\n    actualsecret123456:payload",
         "AUTH_TOKEN: correct horse battery staple # rotated (today)",
-        # Sol round-11: multiword passphrase forced into the code branch; blank-storm fold; backtick comment
-        "AUTH_TOKEN: [REDACTED:secret-value] correct horse battery staple",
-        "{AUTH_TOKEN: correct horse battery staple}",
-        "AUTH_TOKEN: `x // actualsecret123456`",
+        "AUTH_TOKEN: `x // actualsecret123456`",  # backtick is code punct -> 18-char bareword blocks
     ]
+
+    # Documented residual (Sol r11/r12, operator-accepted): a passphrase/opaque value forced into
+    # the CODE branch by surrounding code punctuation (braces, marker+prose, string concatenation)
+    # is NOT caught -- catching it FP'd on real TS (`currentRt as string`, JSX `<>hello world</>`).
+    # scan() is an egress TRIPWIRE backed by maximal redact(); these shapes do not occur in the
+    # TS/JS review packets scan() gates. Pinned so a future change is a conscious boundary move.
+    DOCUMENTED_RESIDUAL_CLEAN = [
+        "{AUTH_TOKEN: correct horse battery staple}",
+        "AUTH_TOKEN: [REDACTED:secret-value] correct horse battery staple",
+        "({AUTH_TOKEN: 'corr' + \"ect \" + 'horse'})",
+        "{AUTH_TOKEN: A1b2C3d4E5f6G7h}",
+    ]
+
+    def test_documented_residual_is_clean_and_ts_not_fp(self):
+        for t in self.DOCUMENTED_RESIDUAL_CLEAN:
+            self.assertEqual(F.scan(t), [], "residual moved -- was it intended? %r" % t)
+        # the reason the residual stays open: closing it FP'd on real TypeScript
+        for t in ["({authToken: currentRt as string})", "({authToken: currentRt, children: <>hi there</>})"]:
+            self.assertEqual(F.scan(t), [], "TS false positive: %r" % t)
 
     def test_auth_code_idioms_pass_scan(self):
         for t in self.ALLOWED_AUTH_CODE:

@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15l"
+FILTER_VERSION = "2026-07-15m"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -165,50 +165,6 @@ def _strip_trailing_comment(line):
     return line
 
 
-def _multiword_span_start(line):
-    """Start offset of the first >=2-word whitespace-run OUTSIDE quotes with no code punctuation
-    between the words (a passphrase / prose value — never a valid code value), else -1. A call/key
-    token (`word(` / `word:`) does not count toward a span. Closes the whole 'attach punctuation to
-    a passphrase line' class (braces, marker brackets, comments — Sol r11)."""
-    run_start = -1
-    words = 0
-    quote = None
-    esc = False
-    i, n = 0, len(line)
-    while i < n:
-        c = line[i]
-        if quote is not None:
-            if c == "\\" and not esc:
-                esc = True
-            elif c == quote and not esc:
-                quote = None
-                run_start = -1; words = 0
-            else:
-                esc = False
-            i += 1
-            continue
-        if c == "'" or c == '"':
-            quote = c; run_start = -1; words = 0; i += 1; continue
-        if c in _CODE_PUNCT or c == ":":
-            run_start = -1; words = 0; i += 1; continue
-        if c.isspace():
-            i += 1; continue
-        j = i
-        while j < n and not line[j].isspace() and line[j] not in _CODE_PUNCT and line[j] not in "'\"" and line[j] != ":":
-            j += 1
-        follow = line[j] if j < n else ""
-        if follow == "(" or follow == ":":
-            run_start = -1; words = 0      # call name / mapping key — code, not a passphrase word
-        else:
-            if run_start == -1:
-                run_start = i
-            words += 1
-            if words >= 2:
-                return run_start
-        i = j
-    return -1
-
-
 def _line_block_max(line):
     """Max offset in a CODE line of an opaque-literal / opaque-bareword blocking signal, else -1.
     One parity-aware pass from LINE START, so quote pairing is position-independent (Sol r5)."""
@@ -242,9 +198,6 @@ def _line_block_max(line):
         if _CALL_OR_KEY_RE.match(line, bm.end()) and _IDENT_RE.match(word):
             continue
         max_pos = bm.start()
-    mp = _multiword_span_start(line)
-    if mp > max_pos:
-        max_pos = mp
     return max_pos
 
 

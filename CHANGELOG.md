@@ -2,7 +2,7 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15l)
+## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15m)
 
 Operator-directed maintenance (MusicArcademy PR-21 gate). `scan()` structurally could not review
 supabase auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, fixtures like
@@ -15,8 +15,12 @@ no folded continuation. Linear (cached per-line block-max + last-punct). Nine Co
 hardened it against: marker suffixes, fn('…')/backtick/escaped-quote span tricks, YAML indentation
 indicators + folds (incl. word-split + colon-in-scalar), swallowed `;NAME=…` pairs, quadratic
 rescans, stateful pairing, val-level exits skipping payloads, and identifier-vs-secret map keys.
-Documented residual (operator-accepted): a pure `[A-Za-z0-9_$]`≥16 secret used as a map key in a
-punctuation-bearing line is indistinguishable from a legit long identifier key; scan() is an egress
+Documented residual (operator decision pending): a passphrase / opaque value forced into the CODE
+branch by surrounding code punctuation (`{AUTH_TOKEN: correct horse battery staple}`, marker+prose,
+string concatenation, a pure-alnum map key) is NOT caught -- closing it FP'd on real TypeScript
+(`currentRt as string`, JSX `<>text</>`), which violates the primary "don't block auth code" goal.
+Realistic secret dumps (env/YAML/config/comment/fold/quoted-opaque) DO block. scan() is an egress
+TRIPWIRE backed by maximal redact(); scan() is an egress
 TRIPWIRE backed by maximal redact(), no env/flag escape hatch. Regression corpus pins both
 directions.
 
