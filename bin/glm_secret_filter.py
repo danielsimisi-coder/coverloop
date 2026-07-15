@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-11e"
+FILTER_VERSION = "2026-07-15a"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -97,6 +97,45 @@ PII_PATTERNS = [
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
 
+# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15a, operator-directed) ----
+# ASSIGN_RE's name family (…TOKEN/…SECRET/…PASSWORD/…KEY) also matches everyday AUTH-CODE idioms:
+# `autoRefreshToken: true`, test fixtures like `access_token: 'at-1'`, code references like
+# `storageKey: platformStorageKey(url)` — which made scan() structurally unable to review
+# supabase-client code. The gate below narrows ONLY scan() (the egress block): redact() is
+# deliberately unchanged (over-redacting a transcript is safe; over-blocking an egress packet
+# breaks legitimate L3 reviews). `=` assignments (env/config dumps — the rule's original target)
+# keep FULL strictness. `:` assignments are exempt only for value shapes that cannot carry a
+# secret literal:
+#   - this filter's own [REDACTED:…] markers (scan(redact(x)) must be clean — idempotency),
+#   - boolean/null literals (true/false/null/none/nil/undefined),
+#   - UNQUOTED code expressions/identifiers/template literals (a variable reference is not a value),
+#   - literals shorter than _MIN_OPAQUE_LEN (synthetic placeholders: 'at-1', 'pw', 'rt-2').
+# Anything else — notably any quoted opaque literal of >= _MIN_OPAQUE_LEN after a secret-family
+# name — still BLOCKS, and every recognizable real token shape is caught by VALUE_PATTERNS
+# regardless of this gate. This is NOT an escape hatch: there is no env/flag to widen it.
+_REDACTED_MARKER = "[REDACTED:"
+_MIN_OPAQUE_LEN = 8
+_BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
+# identifier / member / call chains: gameKey · cfg.token · platformStorageKey(url)
+_CODE_EXPR_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:[.(][\w$.,()'\"` ]*)?$")
+
+
+def _assignment_leaks(m):
+    """True when an ASSIGN_RE match can actually leak secret material (see gate note above)."""
+    val = (m.group("val") or "").rstrip(",;")
+    if val.startswith(_REDACTED_MARKER):
+        return False
+    if "=" in m.group(1):
+        return True  # env-style assignment: the rule's original target, full strictness
+    if _BOOL_NULL_RE.match(val):
+        return False
+    if m.group("q") is None and (val.startswith("`") or _CODE_EXPR_RE.match(val)):
+        return False  # code expression / template literal — no literal value present
+    if len(val) < _MIN_OPAQUE_LEN:
+        return False  # synthetic placeholder
+    return True
+
+
 # Back-compat: some callers referenced KEY_RE directly.
 KEY_RE = VALUE_PATTERNS[0][1]
 
@@ -112,7 +151,7 @@ def scan(text):
             continue
         if rx.search(text):
             hits.append(label)
-    if ASSIGN_RE.search(text):
+    if any(_assignment_leaks(m) for m in ASSIGN_RE.finditer(text)):
         hits.append("secret-assignment")
     return hits
 

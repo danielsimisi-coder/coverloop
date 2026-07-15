@@ -2,6 +2,18 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15a)
+
+Operator-directed maintenance (MusicArcademy PR-21 gate): `scan()` could not review real
+auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, test fixtures like
+`access_token: 'at-1'`, code references like `storageKey: platformStorageKey(url)`, and even its
+own `[REDACTED:…]` markers. New `_assignment_leaks()` gate narrows ONLY scan(): `=` (env-style)
+assignments keep full strictness; `:` assignments are exempt for booleans/nulls, unquoted code
+expressions/template literals, sub-8-char placeholder literals, and redaction markers
+(scan∘redact now clean). redact() is UNCHANGED (maximal). No env/flag escape hatch — pinned by
+test. New `AssignmentScanBoundary` suite pins BOTH directions (12 allowed idioms / 7 still-blocked
+real assignments); the property generator's "assign" case aligned to the still-blocking class.
+
 ## v2.7.3 (2026-07-11) — full multi-lineage audit hardening
 A professional whole-repo audit run through the loop itself — 5 Claude dimension reviewers + 3 real GPT-5.6 Sol passes + 2 real GLM red-teams (42 agents), 31 candidate findings, **each adversarially verified against the code** (18 real, 4 already-guarded, 2 false-positive). Verdict: architecture is frontier-grade, **no P0s**, but 4 real P1s (two defeating headline controls) put it just below a high professional bar — now fixed. **Cross-lineage convergence** was the highest-signal theme: Claude and Sol independently hit the same captured/attached trust-boundary from two angles; Claude and Sol independently hit the same secret-filter value-leak.
 - **P1 — laundered failed capture (forged-evidence bypass):** a genuinely FAILED `--codex-run` (its committed log is the withheld-run placeholder) passed `verify_capture` — even `--require-executed` — after a single hand-edit of the un-hashed `exit_code` 1→0, because the withheld-marker content check was scoped to `source=="attached"`. Now **source-agnostic**: a withheld-marker log is rejected for captured too (no re-hash possible), closing the one-integer forge. Regression added.

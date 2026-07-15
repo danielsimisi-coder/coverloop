@@ -56,10 +56,17 @@ def gen_secret(rng):
         return ("postgres://" + _rand(rng, string.ascii_lowercase, 6) + ":" +
                 _rand(rng, b64, 10) + "@host/db"), "db-url-cred"
     if kind == "assign":
+        # 2026-07-15a boundary: env-style (=) assignments block at ANY value; colon-style blocks
+        # for quoted opaque literals >= 8 chars. Generate only the still-blocking class here —
+        # the colon-style code idioms scan() now deliberately allows are pinned the other way in
+        # AssignmentScanBoundary below.
         name = rng.choice(["API_KEY", "X_SECRET", "DB_PASSWORD", "AUTH_TOKEN", "MY_API_KEY", "z_passwd"])
-        sep = rng.choice(["=", ": ", " = "])
-        val = _rand(rng, b64 + "!@#", rng.randint(1, 30))
-        return name + sep + val, "secret-assignment"
+        if rng.random() < 0.5:
+            sep = rng.choice(["=", " = "])
+            val = _rand(rng, b64 + "!@#", rng.randint(1, 30))
+            return name + sep + val, "secret-assignment"
+        val = _rand(rng, b64 + "!@#", rng.randint(8, 30))
+        return "%s: '%s'" % (name, val), "secret-assignment"
     # pem
     body = _rand(rng, b64, rng.randint(40, 300))
     return "-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----", "private-key"
@@ -191,6 +198,69 @@ class SecretFilterProperties(unittest.TestCase):
                "-----END RSA PRIVATE KEY-----")
         self.assertNotIn("MIIBOgIBAAJBAKj34", F.redact(enc), "encrypted PEM body leaked")
         self.assertIn("[REDACTED:private-key]", F.redact(enc), "encrypted PEM not redacted whole")
+
+
+class AssignmentScanBoundary(unittest.TestCase):
+    """2026-07-15a (operator-directed): scan() must review real auth-client code without
+    false-positive blocking, while still blocking genuine secret assignments. redact() is
+    unchanged and maximal. Both directions pinned so a future edit can't silently widen OR
+    re-break the boundary."""
+
+    ALLOWED_AUTH_CODE = [
+        "autoRefreshToken: true,",
+        "detectSessionInUrl: true, persistSession: true",
+        "access_token: 'at-1',",
+        "refresh_token: 'rt-2',",
+        "  password: 'pw' })",
+        "storageKey: platformStorageKey(url),",
+        "p_game_key: gameKey,",
+        "refresh_token: `rt-${counter}`,",
+        "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
+        "expect(stored?.refresh_token).toBe(server.currentRefreshToken())",
+        "TOKEN: null", "apiKey: undefined,",
+    ]
+
+    STILL_BLOCKED = [
+        "VERCEL_TOKEN=whatever",
+        "export API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+        "  DB_PASSWORD = 'hunter2longenough'  ",
+        "AUTH_TOKEN: 'opaque!value123'",
+        "my_password: \"correct horse battery staple\"",
+        "SIGNING_KEY: 'aVeryLongOpaqueLiteral123'",
+        "TOKEN=x",  # env-style keeps the no-floor rule (Sol v2.7.3 verify #3)
+    ]
+
+    def test_auth_code_idioms_pass_scan(self):
+        for t in self.ALLOWED_AUTH_CODE:
+            self.assertEqual(F.scan(t), [], "false positive on auth code: %r -> %r" % (t, F.scan(t)))
+
+    def test_real_assignments_still_block(self):
+        for t in self.STILL_BLOCKED:
+            self.assertIn("secret-assignment", F.scan(t), "real assignment NOT blocked: %r" % t)
+
+    def test_redact_still_covers_allowed_code(self):
+        # the scan() gate never weakens redact(): a secret-NAMED colon assignment with a quoted
+        # value is still stripped from committed transcripts even when scan() allows egress
+        out = F.redact("access_token: 'at-1',")
+        self.assertNotIn("'at-1'", out)
+
+    def test_scan_of_redacted_output_is_clean(self):
+        """Idempotency (operator req): redaction markers must not re-trip the tripwire."""
+        # names chosen OUTSIDE LITERAL_PATTERNS: the literal name-mention tripwire (VERCEL_TOKEN
+        # et al) intentionally still fires post-redaction — this test pins only that the
+        # [REDACTED:…] MARKERS never re-trip ASSIGN_RE.
+        dirty = ("MY_DEPLOY_TOKEN=realvalue123 and access_token: 'longopaque123' and "
+                 "password: \"correct horse battery staple\"")
+        self.assertTrue(F.scan(dirty))
+        self.assertEqual(F.scan(F.redact(dirty)), [], "scan(redact(x)) not clean")
+
+    def test_no_env_escape_hatch(self):
+        import os as _os
+        _os.environ["GLM_FILTER_ALLOW"] = "1"  # must have zero effect
+        try:
+            self.assertTrue(F.scan("VERCEL_TOKEN=whatever"))
+        finally:
+            del _os.environ["GLM_FILTER_ALLOW"]
 
 
 # ---- concurrency / filesystem-race tests against the real CLI ----
