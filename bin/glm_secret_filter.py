@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15e"
+FILTER_VERSION = "2026-07-15f"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -97,7 +97,7 @@ PII_PATTERNS = [
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
 
-# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15b, operator-directed) ----
+# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15f, operator-directed) ----
 # ASSIGN_RE's name family (…TOKEN/…SECRET/…PASSWORD/…KEY) also matches everyday AUTH-CODE idioms:
 # `autoRefreshToken: true`, test fixtures like `access_token: 'at-1'`, code references like
 # `storageKey: platformStorageKey(url)` — which made scan() structurally unable to review
@@ -105,36 +105,36 @@ PII_PATTERNS = [
 # deliberately unchanged (over-redacting a transcript is safe; over-blocking an egress packet
 # breaks legitimate L3 reviews).
 #
-# Rules (Sol round-2 hardened — trust CONTENT, never "expression shape"):
-#   * `=` assignments (env/config dumps — the rule's original target) keep FULL strictness.
-#   * A value that is EXACTLY one of this filter's own [REDACTED:<label>] markers is clean
-#     (scan∘redact marker-idempotency). A marker with ANY suffix/prefix or left unclosed is NOT
-#     exempt (smuggling a payload behind a marker still blocks).
-#   * `:` assignments are exempt for boolean/null literals; EVERYTHING else is decided by
-#     scanning the REST OF THE LINE from the value start (so nested-quote tricks, fn('…')
-#     arguments the regex's value capture never reaches, backtick templates, and minified
-#     `;NAME=…` tails are all examined — a "short captured value" alone proves nothing):
-#       - any QUOTED span with >= _MIN_OPAQUE_LEN chars of content  -> blocks
-#       - any bareword run >= _MIN_BAREWORD_LEN not immediately followed by '(' (call names like
-#         platformStorageKey( are code, not literals)               -> blocks
-#       - any '=' anywhere in the tail (a swallowed env-style pair) -> blocks
-#       - a YAML block-scalar indicator (| or >) as the value       -> blocks (payload is on the
-#         next lines where no assignment match would look)
+# Two layers (Sol r1-r5 hardened — trust CONTENT, never "expression shape"):
+#   1. Per-match VALUE rules (_val_level_verdict): `=` assignments (env/config dumps — the rule's
+#      original target) keep FULL strictness; a value that is EXACTLY a [REDACTED:<label>] marker
+#      is clean (scan∘redact marker-idempotency; any suffix/prefix voids it); boolean/null
+#      literals are clean; YAML block scalars (|/> incl. indentation indicators) block — the
+#      payload lives on lines no assignment match would scan; a QUOTED captured value of
+#      >= _MIN_OPAQUE_LEN blocks outright (quote pairing is ambiguous — fail closed, Sol r5).
+#   2. Per-LINE content scan (_line_block_max) for every match the value rules leave undecided:
+#      the whole physical line is lexed ONCE from LINE START with a parity-aware sequential
+#      string lexer (an escaped quote — odd backslash run — never opens/closes a literal;
+#      an unterminated literal runs to end-of-line, fail closed). Blocking signals and their
+#      positions: a string literal with >= _MIN_OPAQUE_LEN chars of content; a bareword run
+#      >= 16 chars not immediately followed by a call `(` (with optional space / `?.`); any `=`.
+#      A match leaks iff ANY blocking signal sits at/after its value start — one O(line) pass
+#      per line, one integer (max blocking position) answers every match on it (linear overall;
+#      Sol r2/r4 measured the per-match rescans quadratic, and Sol r3/r5 showed every
+#      mid-line-cap / stateful-deferral variant splits or shifts literal pairing).
 # There is NO env/flag escape hatch, by design.
 _REDACTED_MARKER_RE = re.compile(r"^\[REDACTED:[a-z-]+\]$")
 _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
 _YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # incl. indentation indicators |2 >+2 (Sol r2)
-_QUOTED_SPAN_RE = re.compile(r"['\"]([^'\"\r\n]{8,})['\"]")
 _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
+_CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
 _MIN_OPAQUE_LEN = 8
-_MIN_BAREWORD_LEN = 16  # enforced by _BAREWORD_RE's quantifier
 
 
 def _val_level_verdict(m):
     """Per-match value rules. True = leaks; False = provably clean; None = undecided (needs the
-    line content scan). Split from the tail scan so scan() can track which lines actually RAN a
-    tail scan — Sol r4: marking a line "scanned" on a bool/marker early-exit let a later
-    same-line assignment skip scanning entirely."""
+    line content scan). Split from the line scan so a bool/marker early exit can never stand in
+    for a scan that was skipped (Sol r4)."""
     val = (m.group("val") or "").rstrip(",;")
     if _REDACTED_MARKER_RE.match(val):
         return False  # exactly a redaction marker — scan(redact(x)) idempotency
@@ -144,62 +144,43 @@ def _val_level_verdict(m):
         return False
     if _YAML_BLOCK_RE.match(val):
         return True  # YAML block scalar: the payload lives on following lines — stay closed
+    if m.group("q") and len(val) >= _MIN_OPAQUE_LEN:
+        # A QUOTED literal of opaque length directly assigned to a secret-family name blocks at
+        # the match level, independent of line lexing — quote pairing is genuinely ambiguous
+        # (`'a_key:'x y'` reads both ways; Sol r5 reproducer), so the fail-closed reading wins.
+        return True
     return None
 
 
-def _tail_scan_leaks(m, text):
-    """Content scan for an UNDECIDED match — over the rest of the physical line from the value
-    start. Runs at most once per line (the first undecided match's tail is a superset of every
-    later same-line tail): linear (Sol r2) without the span-splitting mid-line cap (Sol r3).
-    NOTE: no standalone short-value exemption — the regex's value capture stops at the first
-    quote (`fn('secret')` captures only `fn(`), so ONLY the tail rules may clear a match (Sol r1
-    catch). Starts at the OPENING quote when the value is quoted, so the quoted-span rule sees
-    the pair."""
-    start = m.start("q") if m.group("q") else m.start("val")
-    tail_end = text.find("\n", start)
-    if tail_end == -1:
-        tail_end = len(text)
-    tail = text[start:tail_end]
-    if "=" in tail:
-        return True  # a swallowed env-style pair hides in the same match's shadow
-    # ESCAPED quotes — odd backslash parity only; `\\"` is a REAL quote after an escaped
-    # backslash (Sol r3) — are stripped BEFORE literal lexing, so \" truncation tricks can't
-    # split a long literal into two short-looking ones (Sol r2)
-    tail_spans = _ESCAPED_QUOTE_RE.sub(r"\1", tail)
-    for lit in _quoted_literals(tail_spans):
-        if len(lit) >= _MIN_OPAQUE_LEN:
-            return True  # an opaque quoted literal the value capture may not have reached
-    for bm in _BAREWORD_RE.finditer(tail):
+def _line_block_max(line):
+    """Max offset (in `line`) of any blocking content signal, or -1 when the line is clean.
+    Single pass, positions monotonic and independent of any match position — the lexer starts at
+    LINE START, so quote pairing can never differ between two matches on the same line (Sol r5:
+    a per-match tail lexer was stateful and a skipped later match could see different pairing)."""
+    max_pos = line.rfind("=")
+    run = 0
+    quote = None
+    lit_open = -1
+    for i, c in enumerate(line):
+        if c == "\\":
+            run += 1
+            continue
+        escaped = (run % 2) == 1
+        run = 0
+        if quote is None:
+            if (c == "'" or c == '"') and not escaped:
+                quote, lit_open = c, i
+        elif c == quote and not escaped:
+            if i - lit_open - 1 >= _MIN_OPAQUE_LEN and lit_open > max_pos:
+                max_pos = lit_open
+            quote = None
+    if quote is not None and len(line) - lit_open - 1 >= _MIN_OPAQUE_LEN and lit_open > max_pos:
+        max_pos = lit_open  # unterminated literal: fail closed
+    for bm in _BAREWORD_RE.finditer(line):
         # call names are code, not literals: platformStorageKey(url) / fn (x) / fn?.(x)
-        if not _CALL_AFTER_RE.match(tail, bm.end()):
-            return True  # long opaque bareword that is not a call name
-    return False
-
-
-_CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
-# an escaped quote = quote preceded by an ODD number of backslashes; keep the even
-# (escaped-backslash) pairs, drop only the escaping backslash + quote
-_ESCAPED_QUOTE_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\[\"']")
-
-
-def _quoted_literals(s):
-    """Sequential same-quote pairing, the way a JS/JSON lexer reads literals: on a quote char,
-    the literal runs to the NEXT occurrence of the SAME char. Naive regex pairing treated the
-    CODE BETWEEN two adjacent literals (`', refresh_token: '`) as a span and false-positived on
-    every multi-fixture line (Sol r4 follow-up). An unterminated literal runs to end-of-string —
-    over-reporting on purpose (fail closed)."""
-    i, n = 0, len(s)
-    while i < n:
-        c = s[i]
-        if c == "'" or c == '"':
-            end = s.find(c, i + 1)
-            if end == -1:
-                yield s[i + 1:]
-                return
-            yield s[i + 1:end]
-            i = end + 1
-        else:
-            i += 1
+        if bm.start() > max_pos and not _CALL_AFTER_RE.match(line, bm.end()):
+            max_pos = bm.start()
+    return max_pos
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -218,11 +199,13 @@ def scan(text):
         if rx.search(text):
             hits.append(label)
     # Line tracking is INCREMENTAL (each rfind covers only the span since the previous match) so
-    # a single line with many matches stays linear (Sol r4 P3), and a line counts as scanned only
-    # when a tail scan actually RAN (Sol r4 P1 — val-level early exits must not mark it).
+    # a single line with many matches stays linear (Sol r4 P3). The line's content verdict is one
+    # cached integer (max blocking position) — every undecided match on the line compares its own
+    # value start against it (Sol r5: position-independent, lexer-safe).
     line_start = 0
     search_from = 0
-    tail_scanned_line = -1
+    cached_line_start = -1
+    cached_block_max = -1
     for m in ASSIGN_RE.finditer(text):
         nl = text.rfind("\n", search_from, m.start())
         if nl != -1:
@@ -234,10 +217,14 @@ def scan(text):
             break
         if verdict is False:
             continue
-        if line_start == tail_scanned_line:
-            continue  # this line's first undecided match already scanned a superset tail
-        tail_scanned_line = line_start
-        if _tail_scan_leaks(m, text):
+        if line_start != cached_line_start:
+            cached_line_start = line_start
+            line_end = text.find("\n", line_start)
+            if line_end == -1:
+                line_end = len(text)
+            cached_block_max = _line_block_max(text[line_start:line_end])
+        value_start = (m.start("q") if m.group("q") else m.start("val")) - line_start
+        if cached_block_max >= value_start:
             hits.append("secret-assignment")
             break
     return hits

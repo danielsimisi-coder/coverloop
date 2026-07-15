@@ -253,6 +253,9 @@ class AssignmentScanBoundary(unittest.TestCase):
         "autoRefreshToken: true, AUTH_TOKEN: fn('correcthorsebatterystaple')",
         "a_token: null, AUTH_TOKEN: correcthorsebatterystaple",
         "x_token: '[REDACTED:secret-value]', AUTH_TOKEN: 'opaquevalue123456'",
+        # Sol round-5: stateful per-match lexing vs line lexing disagreed on ambiguous pairing —
+        # a QUOTED opaque captured value now blocks at the match level, both readings closed
+        "({x_token:x, note: `'a_key:'correct horse battery staple'`})",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
