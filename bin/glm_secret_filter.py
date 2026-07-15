@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15b"
+FILTER_VERSION = "2026-07-15c"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -123,15 +123,19 @@ PII_PATTERNS = [
 # There is NO env/flag escape hatch, by design.
 _REDACTED_MARKER_RE = re.compile(r"^\[REDACTED:[a-z-]+\]$")
 _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
-_YAML_BLOCK_RE = re.compile(r"^[|>][+-]?$")
+_YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # incl. indentation indicators |2 >+2 (Sol r2)
 _QUOTED_SPAN_RE = re.compile(r"['\"]([^'\"\r\n]{8,})['\"]")
 _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
 _MIN_OPAQUE_LEN = 8
 _MIN_BAREWORD_LEN = 16  # enforced by _BAREWORD_RE's quantifier
 
 
-def _assignment_leaks(m, text):
-    """True when an ASSIGN_RE match can actually leak secret material (see gate note above)."""
+def _assignment_leaks(m, text, tail_cap=None):
+    """True when an ASSIGN_RE match can actually leak secret material (see gate note above).
+    tail_cap bounds the content scan at the NEXT assignment match (linearity: each character is
+    scanned by at most one match — Sol r2 measured the uncapped version quadratic on repeated
+    matches; the union of capped segments still covers the whole line, and anything past the cap
+    belongs to the next match's own scan)."""
     val = (m.group("val") or "").rstrip(",;")
     if _REDACTED_MARKER_RE.match(val):
         return False  # exactly a redaction marker — scan(redact(x)) idempotency
@@ -143,20 +147,30 @@ def _assignment_leaks(m, text):
         return True  # YAML block scalar: the payload lives on following lines — stay closed
     # Content scan over the rest of the physical line from the value start. NOTE: no standalone
     # short-value exemption — the regex's value capture stops at the first quote (`fn('secret')`
-    # captures only `fn(`), so ONLY the tail rules below may clear a match (Sol r2 catch).
-    # start at the OPENING quote when the value is quoted, so the quoted-span rule sees the pair
+    # captures only `fn(`), so ONLY the tail rules below may clear a match (Sol r1 catch).
+    # Starts at the OPENING quote when the value is quoted, so the quoted-span rule sees the pair.
     start = m.start("q") if m.group("q") else m.start("val")
     tail_end = text.find("\n", start)
-    tail = text[start:tail_end if tail_end != -1 else len(text)]
+    if tail_end == -1:
+        tail_end = len(text)
+    if tail_cap is not None:
+        tail_end = min(tail_end, max(tail_cap, m.end()))
+    tail = text[start:tail_end]
     if "=" in tail:
         return True  # a swallowed env-style pair hides in the same match's shadow
-    for qm in _QUOTED_SPAN_RE.finditer(tail):
+    # escaped quotes are stripped BEFORE span pairing, so \" truncation tricks can't split a
+    # long literal into two short-looking spans (Sol r2)
+    tail_spans = tail.replace('\\"', "").replace("\\'", "")
+    if _QUOTED_SPAN_RE.search(tail_spans):
         return True  # an opaque quoted literal the value capture may not have reached
     for bm in _BAREWORD_RE.finditer(tail):
-        after = tail[bm.end():bm.end() + 1]
-        if after != "(":
+        # call names are code, not literals: platformStorageKey(url) / fn (x) / fn?.(x)
+        if not _CALL_AFTER_RE.match(tail, bm.end()):
             return True  # long opaque bareword that is not a call name
     return False
+
+
+_CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
 
 
 # Back-compat: some callers referenced KEY_RE directly.
@@ -174,8 +188,12 @@ def scan(text):
             continue
         if rx.search(text):
             hits.append(label)
-    if any(_assignment_leaks(m, text) for m in ASSIGN_RE.finditer(text)):
-        hits.append("secret-assignment")
+    assign_matches = list(ASSIGN_RE.finditer(text))
+    for i, m in enumerate(assign_matches):
+        nxt = assign_matches[i + 1].start() if i + 1 < len(assign_matches) else None
+        if _assignment_leaks(m, text, tail_cap=nxt):
+            hits.append("secret-assignment")
+            break
     return hits
 
 

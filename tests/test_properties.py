@@ -216,6 +216,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "p_game_key: gameKey,",
         "refresh_token: `rt-${counter}`,",
         "refresh_token: currentRt,",
+        "refresh_token: currentRefreshToken (url)",  # call name with space (Sol r2)
+        "refresh_token: currentRefreshToken?.(url)",  # optional-chaining call (Sol r2)
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
         "expect(stored?.refresh_token).toBe(server.currentRefreshToken())",
         "TOKEN: null", "apiKey: undefined,",
@@ -237,6 +239,11 @@ class AssignmentScanBoundary(unittest.TestCase):
         "AUTH_TOKEN=[REDACTED:secret-value]correcthorsebatterystaple",  # marker with payload suffix
         "AUTH_TOKEN: |",                                     # YAML block scalar (payload on next lines)
         "AUTH_TOKEN:`placeholder`;DB_PASSWORD=correcthorsebatterystaple",  # swallowed second pair
+        # Sol round-2 adversarial set:
+        "AUTH_TOKEN: |2",                                    # YAML block scalar WITH indentation indicator
+        "AUTH_TOKEN: >+2",
+        'AUTH_TOKEN: "x\\" correct horse battery staple"',   # escaped-quote split of a SPACED payload
+        "AUTH_TOKEN: '[REDACTED:secret-value]suffixpayload'",  # marker with suffix under ':' (isolates marker logic)
     ]
 
     def test_auth_code_idioms_pass_scan(self):
@@ -264,6 +271,15 @@ class AssignmentScanBoundary(unittest.TestCase):
                  "password: \"correct horse battery staple\"")
         self.assertTrue(F.scan(dirty))
         self.assertEqual(F.scan(F.redact(dirty)), [], "scan(redact(x)) not clean")
+
+    def test_repeated_allowed_assignments_stay_linear(self):
+        """Sol r2: uncapped tail rescans were quadratic (7.6s @ 8000 matches). The per-match
+        tail cap must keep repeated allowed assignments linear."""
+        import time
+        text = "AUTH_TOKEN:x " * 8000
+        t0 = time.time()
+        F.scan(text)
+        self.assertLess(time.time() - t0, 1.0, "repeated-assignment scan no longer linear")
 
     def test_no_env_escape_hatch(self):
         import os as _os
