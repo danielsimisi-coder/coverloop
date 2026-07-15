@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 
 CLI_VERSION = "2.0.2"
 
@@ -198,7 +198,11 @@ def main():
     if not task and not stdin_text.strip():
         print("ERROR: Provide a prompt and/or pipe explicit text.", file=sys.stderr)
         sys.exit(1)
-    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    # EGRESS INVARIANT (operator, 2026-07-15): EVERY packet passes redact() BEFORE scan and
+    # egress — there is no raw-packet path to the model. redact() strips secret VALUES and PII
+    # shape-independently (the primary data-protection layer); scan() then fail-closes on whatever
+    # would still leave. Enforced by tests/test_properties.py::EgressRedactionInvariant.
+    content = redact(f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip())
     payload_sha = sha(content)
     char_count = len(content)
 

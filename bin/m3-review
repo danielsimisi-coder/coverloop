@@ -7,7 +7,7 @@ import os, sys, json, hashlib, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan
+from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 
 CLI_VERSION = "m3-1.0.2"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -105,7 +105,9 @@ def main():
     stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
     if not task and not stdin_text.strip():
         print("ERROR: provide a prompt and/or pipe text.", file=sys.stderr); sys.exit(1)
-    content = f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip()
+    # EGRESS INVARIANT (operator, 2026-07-15): every packet passes redact() before scan/egress —
+    # no raw-packet path. See glm-review + tests/test_properties.py::EgressRedactionInvariant.
+    content = redact(f"TASK:\n{task}\n\nPROVIDED INPUT:\n{stdin_text}".strip())
     psha = sha(content); cc = len(content)
     if cc > MAX_CHARS:
         log_egress(mode, None, "not-sent-too-large", cc, psha)

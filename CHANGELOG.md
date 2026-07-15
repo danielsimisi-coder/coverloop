@@ -2,47 +2,50 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-07-15 — secret-filter: scan()-side FP gate for code-idiom assignments (v2026-07-15q)
+## 2026-07-15 — secret-filter: scan()-side FP gate so review models can read auth code (v2026-07-15q)
 
 Operator-directed maintenance (MusicArcademy PR-21 gate). `scan()` structurally could not review
-supabase auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, fixtures like
-`access_token: 'at-1'`, refs like `storageKey: platformStorageKey(url)`, and its own redaction
-markers. NEW scan()-side gate (redact() UNCHANGED): per secret-family assignment, marker-value →
-clean (idempotency, wins over `=`); `=`/YAML-block-scalar/quoted-opaque → block; a CODE-structured
-line (code punctuation at/after the value) is lexed once for opaque quoted literals / non-identifier
-opaque barewords; a NON-code (env/YAML/prose) line blocks unless the value is a lone bool/null with
-no folded continuation. Linear (cached per-line block-max + last-punct). Nine Codex (Sol) rounds
-hardened it against: marker suffixes, fn('…')/backtick/escaped-quote span tricks, YAML indentation
-indicators + folds (incl. word-split + colon-in-scalar), swallowed `;NAME=…` pairs, quadratic
-rescans, stateful pairing, val-level exits skipping payloads, and identifier-vs-secret map keys.
-Documented residual (operator decision — a real strictness trade): after Sol r13, scan() exempts
-UNQUOTED pure-identifier-shaped values/keys (any length) — required because blocking them FP'd on
-real TypeScript (`access_token: currentAccessToken`, `refreshToken: AuthenticationToken`). So a
-single identifier-shaped opaque token on any line is a false-negative; MULTIWORD passphrases,
-NON-identifier tokens (+/@#…), QUOTED opaque >=8, `=` assignments (incl. swallowed `;NAME=…`), YAML
-block/fold scalars, and every KNOWN secret SHAPE still block. redact() is UNCHANGED and still strips
-these values (shape-independent), so DATA PROTECTION holds where the egress tripwire is permissive.
-Prior wording: a passphrase / opaque value forced into the CODE
-branch by surrounding code punctuation (`{AUTH_TOKEN: correct horse battery staple}`, marker+prose,
-string concatenation, a pure-alnum map key) is NOT caught -- closing it FP'd on real TypeScript
-(`currentRt as string`, JSX `<>text</>`), which violates the primary "don't block auth code" goal.
-Realistic secret dumps (env/YAML/config/comment/fold/quoted-opaque) DO block. scan() is an egress
-TRIPWIRE backed by maximal redact(); scan() is an egress
-TRIPWIRE backed by maximal redact(), no env/flag escape hatch. Regression corpus pins both
-directions.
+Supabase auth-client code: `ASSIGN_RE` blocked `autoRefreshToken: true`, fixtures like
+`access_token: 'at-1'`, references like `storageKey: platformStorageKey(url)`, and even its own
+`[REDACTED:…]` markers, so every packet containing auth code was refused egress.
 
-## (superseded intra-day drafts a–i folded into v2026-07-15j)
+**Fix — scan() ONLY; `redact()` unchanged; no env/flag escape hatch.** A secret-family assignment is
+CLEAN only when it is unambiguously code carrying a benign value; anything that reads as an
+env/YAML/config dump, or carries an opaque literal, BLOCKS:
+- `=` form, YAML block scalars (`|`/`>`), quoted opaque values (≥8), and every KNOWN secret SHAPE
+  (`VALUE_PATTERNS`) → block; an exact `[REDACTED:…]` marker value → clean (scan∘redact idempotency,
+  wins over `=` so a redacted env line never re-trips).
+- A CODE-structured line (code punctuation at/after the value) is lexed once (parity-aware,
+  quote/backtick-aware comment strip) for opaque quoted literals and non-identifier opaque barewords;
+  a swallowed `;NAME=secret` env pair is caught (no `=>`/`===` false positive).
+- A NON-code (env/YAML/prose) line blocks unless the value is a lone bool/null/identifier with no
+  folded continuation. Linear (cached per-line signals), verified on word- and blank-storms.
 
-Operator-directed maintenance (MusicArcademy PR-21 gate): `scan()` could not review real
-auth-client code — ASSIGN_RE blocked `autoRefreshToken: true`, test fixtures like
-`access_token: 'at-1'`, code references like `storageKey: platformStorageKey(url)`, and even its
-own `[REDACTED:…]` markers. New `_assignment_leaks()` gate narrows ONLY scan(): `=` (env-style)
-assignments keep full strictness; `:` assignments are exempt for booleans/nulls, unquoted code
-expressions/template literals, sub-8-char placeholder literals, and EXACT redaction markers
-(marker idempotency: scan∘redact no longer re-trips ASSIGN_RE; the bare-name literal tripwires
-still fire post-redaction by design). redact() is UNCHANGED (maximal). No env/flag escape hatch — pinned by
-test. New `AssignmentScanBoundary` suite pins BOTH directions (12 allowed idioms / 7 still-blocked
-real assignments); the property generator's "assign" case aligned to the still-blocking class.
+**Hardened across 14 Codex (Sol) rounds** against: marker suffixes, `fn('…')` / backtick /
+escaped-quote span tricks, YAML indentation indicators + folds (word-split, blank-line, colon-in-
+scalar), swallowed `;NAME=` pairs, quadratic rescans, stateful pairing, val-level exits skipping
+payloads, identifier-vs-secret map keys, and arrow-function `=>` / comment false positives.
+
+**Accepted residual (operator decision, 2026-07-15).** `scan()` does NOT catch an unquoted
+identifier-shaped value, or a value forced into the code branch by surrounding code punctuation
+(braces / marker+prose / concatenation). Closing it re-introduces false positives on legitimate
+TypeScript (`access_token: currentAccessToken`, `refreshToken: AuthenticationToken`,
+`currentRt as string`, JSX). This is the inherent false-negative ↔ false-positive frontier of a
+heuristic tripwire; the primary requirement (do not block real auth code) wins. `scan()` is an
+egress TRIPWIRE, not a DLP — `redact()` is the primary data-protection layer, is unchanged, and
+still strips these values shape-independently.
+
+**Egress invariant (operator merge condition).** Both review CLIs (`bin/glm-review`, `bin/m3-review`)
+now `redact()` every packet BEFORE scan and egress — there is no raw-packet path to any external
+model. Enforced by `tests/test_properties.py::EgressRedactionInvariant` (integration-level: the real
+CLI `main()` is driven with `do_request` captured; asserts the secret value never leaves, a redaction
+marker is present, the egressed message equals `redact(raw)`, and a clean auth-code packet still
+egresses). Trade recorded: because `redact()` is maximal, secret-family assignment VALUES are blanked
+in the packet the reviewer sees (e.g. `autoRefreshToken: true` → `[REDACTED:…]`); all non-assignment
+code (structure, control flow, prose) remains visible, which is sufficient for logic/structure review.
+
+Tests: full suite green with the new boundary + invariant coverage. CONTRACT_VERSION unchanged
+(tooling/code only, no project resync).
 
 ## v2.7.3 (2026-07-11) — full multi-lineage audit hardening
 A professional whole-repo audit run through the loop itself — 5 Claude dimension reviewers + 3 real GPT-5.6 Sol passes + 2 real GLM red-teams (42 agents), 31 candidate findings, **each adversarially verified against the code** (18 real, 4 already-guarded, 2 false-positive). Verdict: architecture is frontier-grade, **no P0s**, but 4 real P1s (two defeating headline controls) put it just below a high professional bar — now fixed. **Cross-lineage convergence** was the highest-signal theme: Claude and Sol independently hit the same captured/attached trust-boundary from two angles; Claude and Sol independently hit the same secret-filter value-leak.

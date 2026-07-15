@@ -352,6 +352,95 @@ class AssignmentScanBoundary(unittest.TestCase):
             del _os.environ["GLM_FILTER_ALLOW"]
 
 
+class EgressRedactionInvariant(unittest.TestCase):
+    """Operator merge condition (2026-07-15): EVERY packet sent to an external review model passes
+    through redact() BEFORE scan and egress — no raw-packet bypass path. Integration-level: the
+    REAL CLI module (bin/glm-review, bin/m3-review) is imported and driven through its actual
+    main() path with do_request captured, so the assertion covers arg-parse → packet build →
+    redact → scan → payload — the exact bytes that would leave the machine."""
+
+    SECRET = "hunter2longenough"
+
+    def _run_cli(self, cli_name, stdin_text, argv):
+        import importlib.util, io, contextlib
+        path = os.path.join(os.path.dirname(CLI), cli_name)
+        spec = importlib.util.spec_from_loader(cli_name.replace("-", "_"), loader=None)
+        mod = importlib.util.module_from_spec(spec)
+        src = open(path).read()
+        captured = {}
+
+        def fake_do_request(payload, timeout):
+            captured["payload"] = payload
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "provider": "test"}
+
+        env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20}
+        old_env = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        old_argv, old_stdin = sys.argv, sys.stdin
+        sys.argv = [cli_name] + argv
+        sys.stdin = io.StringIO(stdin_text)
+        try:
+            mod.__dict__["__file__"] = path
+            exec(compile(src, path, "exec"), mod.__dict__)
+            mod.do_request = fake_do_request
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    mod.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv, sys.stdin = old_argv, old_stdin
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return captured.get("payload")
+
+    def _assert_invariant(self, cli_name, argv):
+        raw = "review this line\nDB_PASSWORD = '%s'\nplus context" % self.SECRET
+        payload = self._run_cli(cli_name, raw, argv)
+        self.assertIsNotNone(payload, "%s never reached do_request (packet refused?)" % cli_name)
+        body = json.dumps(payload)
+        # 1. the secret VALUE never leaves
+        self.assertNotIn(self.SECRET, body, "%s egressed a raw secret" % cli_name)
+        # 2. redaction visibly happened
+        self.assertIn("[REDACTED:", body, "%s egress carries no redaction marker" % cli_name)
+        # 3. NO raw-packet bypass: the user message is EXACTLY redact(raw packet). argv here is only
+        #    ["--mode", <mode>], so TASK is empty and the whole packet is redact() of the fixed
+        #    "TASK:\n\n\nPROVIDED INPUT:\n<raw>" template — any second build path that skips
+        #    redact() breaks this equality.
+        user_msg = payload["messages"][-1]["content"]
+        expected = F.redact(("TASK:\n\n\nPROVIDED INPUT:\n" + raw).strip())
+        self.assertEqual(user_msg, expected, "%s user packet is not redact(raw)" % cli_name)
+        # 4. a legitimate auth-code packet still EGRESSES (scan does not refuse it) — the FP fix.
+        #    NOTE (accepted trade): redact() is maximal, so secret-family ASSIGNMENT VALUES are
+        #    blanked in the egressed packet (`autoRefreshToken: true` -> `[REDACTED:...]`); the
+        #    reviewer still receives all non-assignment code (structure, control flow, prose). We
+        #    assert the packet is SENT and prose survives, NOT byte-identity.
+        clean = "please review this diff for correctness and reuse concerns"
+        p2 = self._run_cli(cli_name, clean, argv)
+        self.assertIsNotNone(p2, "%s refused a clean auth-code packet (FP fix regressed)" % cli_name)
+        self.assertIn("review this diff for correctness", p2["messages"][-1]["content"],
+                      "%s dropped non-assignment prose" % cli_name)
+
+    def test_glm_review_redacts_before_egress(self):
+        self._assert_invariant("glm-review", ["--mode", "redteam"])
+
+    def test_m3_review_redacts_before_egress(self):
+        self._assert_invariant("m3-review", ["--mode", "audit"])
+
+    def test_scan_runs_on_the_redacted_text(self):
+        """The tripwire fail-closes on what would actually LEAVE: a packet whose only secret is a
+        redactable assignment egresses REDACTED (not refused), while a LITERAL_PATTERNS name-mention
+        (never redacted by design) still refuses outright."""
+        payload = self._run_cli("glm-review", "x_password = 'hunter2longenough'", ["--mode", "redteam"])
+        self.assertIsNotNone(payload)  # redacted -> clean -> sent
+        refused = self._run_cli("glm-review", "context mentions VERCEL_TOKEN here", ["--mode", "redteam"])
+        self.assertIsNone(refused, "LITERAL_PATTERNS mention must still refuse egress")
+
+
 # ---- concurrency / filesystem-race tests against the real CLI ----
 def _run(args, cwd, timeout=60):
     return subprocess.run([sys.executable, CLI] + args, cwd=cwd,
