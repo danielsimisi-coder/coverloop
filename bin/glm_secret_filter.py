@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15p"
+FILTER_VERSION = "2026-07-15q"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -141,7 +141,7 @@ _CALL_OR_KEY_RE = re.compile(r"[ \t]*(?:\?\.)?\(|[ \t]*:")     # bareword follow
 _MIN_OPAQUE_LEN = 8
 _MAX_FOLD_LINES = 64
 _MAPPING_KEY_RE = re.compile(r"([^:]+):(?:\s|$)")
-_SWALLOWED_ENV_RE = re.compile(r"[A-Za-z0-9_]*(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD)=(?!=)", re.I)
+_SWALLOWED_ENV_RE = re.compile(r"(?:^|[;\s])[A-Za-z0-9_]*(?:API[_-]?KEY|[_-]KEY|SECRET|TOKEN|PASSWORD|PASSWD)=(?![=>])", re.I)
 _CODE_PUNCT = set("()[]{};,=<>`|&")
 _COMMENT_RE = re.compile(r"\s(?:#|//).*$")
 
@@ -217,7 +217,7 @@ def _plain_line_leaks(text, line_start, line_end, value_start_abs):
     """NON-code (plain) line: the value is the rest of the line from value_start_abs. CLEAN only for
     a lone bool/null with no folded continuation; else BLOCK (env dumps / passphrases / opaque tokens
     / colon-bearing scalars / folds)."""
-    rest = text[value_start_abs:line_end].strip()
+    rest = _strip_trailing_comment(text[value_start_abs:line_end]).strip()
     # a lone quoted value: unwrap one layer for the bool/marker checks
     if len(rest) >= 2 and rest[0] in "'\"" and rest[-1] == rest[0]:
         inner = rest[1:-1]
