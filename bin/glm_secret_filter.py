@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15j"
+FILTER_VERSION = "2026-07-15k"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -132,7 +132,18 @@ _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
 _IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*$")           # pure code identifier (key/call name)
 _CALL_OR_KEY_RE = re.compile(r"[ \t]*(?:\?\.)?\(|[ \t]*:")     # bareword followed by a call or a key ':'
 _MIN_OPAQUE_LEN = 8
+_MAX_FOLD_LINES = 64
+_MAPPING_KEY_RE = re.compile(r"([^:]+):(?:\s|$)")
 _CODE_PUNCT = set("()[]{};,=<>`|&")
+_COMMENT_RE = re.compile(r"\s(?:#|//).*$")
+
+
+def _strip_trailing_comment(line):
+    """Drop a trailing ` #…` / ` //…` comment (space-prefixed so a `#field`/`://` inside code is
+    kept) — a comment's punctuation must not flip a plain passphrase line into the code branch
+    (Sol r10). Replaced with spaces to preserve absolute offsets used against value positions."""
+    m = _COMMENT_RE.search(line)
+    return line[:m.start()] + " " * (len(line) - m.start()) if m else line
 
 
 def _line_block_max(line):
@@ -190,20 +201,31 @@ def _plain_line_leaks(text, line_start, line_end, value_start_abs):
         return True       # not a lone bool/null -> fail closed
     # lone bool/null: a YAML plain scalar folds ONLY onto the IMMEDIATELY following more-indented
     # non-blank line (a blank line terminates a plain scalar); such a fold carries the real value.
-    if line_end < len(text) and text[line_end] == "\n":
-        nxt = line_end + 1
+    key_line = text[line_start:line_end]
+    key_indent = len(key_line) - len(key_line.lstrip())
+    pos = line_end
+    for _ in range(_MAX_FOLD_LINES):
+        if pos >= len(text) or text[pos] != "\n":
+            break
+        nxt = pos + 1
         nend = text.find("\n", nxt)
         if nend == -1:
             nend = len(text)
         cline = text[nxt:nend]
-        if cline.strip():
-            key_line = text[line_start:line_end]
-            key_indent = len(key_line) - len(key_line.lstrip())
-            cindent = len(cline) - len(cline.lstrip())
-            cstrip = cline.strip()
-            is_nested_key = ":" in cstrip and _IDENT_RE.match(cstrip.split(":", 1)[0])
-            if cindent > key_indent and not is_nested_key:
-                return True  # folded scalar continuation (not a nested mapping) -> BLOCK
+        cstrip = cline.strip()
+        if not cstrip:
+            pos = nend
+            continue  # blank line — a plain scalar folds ACROSS it (Sol r10 #2)
+        cindent = len(cline) - len(cline.lstrip())
+        if cindent <= key_indent:
+            break  # de-indent ends the block
+        # only a real `key: value` MAPPING ends the fold. YAML requires `: ` (colon+space) or a
+        # trailing colon for a mapping; `word:payload` (no space) is scalar TEXT, not structure
+        # (Sol r10 #2).
+        cm = _MAPPING_KEY_RE.match(cstrip)
+        if cm and _IDENT_RE.match(cm.group(1)):
+            break
+        return True  # a more-indented non-mapping continuation carries the folded scalar -> BLOCK
     return False
 
 
@@ -211,17 +233,18 @@ def _match_leaks(m, text, line_start, line_end, block_max, last_punct):
     """Whole verdict for one ASSIGN match. True = block. block_max/last_punct are precomputed once
     per physical line (O(1) per match -> linear over a many-match line, Sol r2/r4)."""
     val = (m.group("val") or "").rstrip(",;")
-    if _REDACTED_MARKER_RE.match(val):
-        return False  # value is EXACTLY our own marker -> scan(redact(x)) idempotency (wins over
-        #               the `=` rule: a redacted env assignment must not re-trip)
+    is_marker = bool(_REDACTED_MARKER_RE.match(val))
     if "=" in m.group(1):
-        return True  # env-style assignment: full strictness
+        # a redacted env assignment must not re-trip (idempotency); any OTHER env value blocks.
+        return not is_marker
     if _YAML_BLOCK_RE.match(val):
         return True  # YAML block scalar (|, >): the real payload lives on the following lines
-    if m.group("q") and len(val) >= _MIN_OPAQUE_LEN:
+    if m.group("q") and len(val) >= _MIN_OPAQUE_LEN and not is_marker:
         # a QUOTED opaque literal directly assigned to a secret-family name -> block at the match
         # level (quote pairing is genuinely ambiguous, `'a_key:'x y'` reads both ways; Sol r5).
         return True
+    # NOTE: a marker is a BENIGN captured value (not a hard exit) — the line branch still scans any
+    # trailing opaque payload after it (Sol r10 #1); _line_block_max skips marker-content literals.
     value_start_abs = m.start("q") if m.group("q") else m.start("val")
     vstart = value_start_abs - line_start
     if last_punct >= vstart:
@@ -263,7 +286,7 @@ def scan(text):
             cached_line_end = text.find("\n", line_start)
             if cached_line_end == -1:
                 cached_line_end = len(text)
-            line = text[line_start:cached_line_end]
+            line = _strip_trailing_comment(text[line_start:cached_line_end])
             cached_block_max = _line_block_max(line)
             cached_last_punct = max((i for i, c in enumerate(line) if c in _CODE_PUNCT), default=-1)
         if _match_leaks(m, text, line_start, cached_line_end, cached_block_max, cached_last_punct):

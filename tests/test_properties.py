@@ -222,7 +222,8 @@ class AssignmentScanBoundary(unittest.TestCase):
         "config:\n  authToken: true\nother: value",    # exempt bool; next line de-indented sibling
         "authToken: true\n  detectSessionInUrl: true",  # continuation is a nested key, not a fold
         "MY_DEPLOY_TOKEN=[REDACTED:secret-value]",       # redacted env assignment — marker wins over '='
-        "AUTH_TOKEN: [REDACTED:secret-value] leftover prose words",  # marker consumed the secret; rest is prose
+        "token: 'x', // rotate quarterly",           # JS line comment, short value
+        "webhookUrl: 'https://x.io/hook',",          # :// is not a comment
         # sequential-lexer pairing: inter-literal CODE must not read as a quoted span (Sol r4)
         "access_token: 'at-1', refresh_token: 'rt-1', token_type: 'bearer1'",
         "const sessionKeys = touched.filter(k => k === platformStorageKey(URL_))",
@@ -275,6 +276,11 @@ class AssignmentScanBoundary(unittest.TestCase):
         # Sol round-9: word-split YAML fold, colon-in-plain-scalar
         "AUTH_TOKEN: true\n    correct\n    horse\n    battery",
         "AUTH_TOKEN: Abcdefghijklmnop:payload",
+        # Sol round-10: marker-then-payload, blank-line + colon-scalar folds, comment punctuation
+        "AUTH_TOKEN: [REDACTED:secret-value] actualsecret123456",
+        "AUTH_TOKEN: true\n\n    actualsecret123456",
+        "AUTH_TOKEN: true\n    actualsecret123456:payload",
+        "AUTH_TOKEN: correct horse battery staple # rotated (today)",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
