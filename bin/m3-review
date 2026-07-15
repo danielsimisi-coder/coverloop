@@ -52,7 +52,23 @@ def log_egress(mode, http_status, secret_scan, char_count, payload_sha, extra=No
         print(f"ERROR: egress log write failed ({e}); failing closed (no unaudited send).", file=sys.stderr)
         sys.exit(7)
 
+def _enforce_egress_redaction(payload):
+    """SINGLE egress choke point (operator invariant, 2026-07-15): NO content reaches the network
+    without redact() + a fail-closed scan(). Covers review, ping, and any future caller — no raw
+    bypass. redact() is idempotent."""
+    for msg in payload.get("messages", []):
+        c = msg.get("content")
+        if isinstance(c, str):
+            msg["content"] = redact(c)
+    joined = "\n".join(m.get("content", "") for m in payload.get("messages", []) if isinstance(m.get("content"), str))
+    hits = scan(joined)
+    if hits:
+        raise RuntimeError("egress blocked: redacted packet still scans as secret-bearing: " + ",".join(hits))
+    return payload
+
+
 def do_request(payload, timeout):
+    payload = _enforce_egress_redaction(payload)
     req = urllib.request.Request(API_URL, data=json.dumps(payload).encode("utf-8"),
         headers={"Authorization": f"Bearer {read_key()}", "Content-Type": "application/json",
                  "X-Title": "M3 advisory (data_collection:deny)"}, method="POST")

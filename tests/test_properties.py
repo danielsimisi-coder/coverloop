@@ -352,6 +352,9 @@ class AssignmentScanBoundary(unittest.TestCase):
             del _os.environ["GLM_FILTER_ALLOW"]
 
 
+_CAPTURED = {}
+
+
 class EgressRedactionInvariant(unittest.TestCase):
     """Operator merge condition (2026-07-15): EVERY packet sent to an external review model passes
     through redact() BEFORE scan and egress — no raw-packet bypass path. Integration-level: the
@@ -366,11 +369,20 @@ class EgressRedactionInvariant(unittest.TestCase):
         path = os.path.join(os.path.dirname(CLI), cli_name)
         spec = importlib.util.spec_from_loader(cli_name.replace("-", "_"), loader=None)
         mod = importlib.util.module_from_spec(spec)
-        src = open(path).read()
+        with open(path) as _fh:
+            src = _fh.read()
         captured = {}
 
+        captured["all"] = []
+        global _CAPTURED
+        _CAPTURED = captured
+
         def fake_do_request(payload, timeout):
-            captured["payload"] = payload
+            # call the REAL choke point first, so the test proves do_request enforces redaction on
+            # EVERY payload regardless of caller (the invariant), then record the enforced payload.
+            enforced = mod._enforce_egress_redaction(payload)
+            captured["all"].append(enforced)
+            captured["payload"] = enforced
             return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                     "provider": "test"}
 
@@ -430,6 +442,38 @@ class EgressRedactionInvariant(unittest.TestCase):
 
     def test_m3_review_redacts_before_egress(self):
         self._assert_invariant("m3-review", ["--mode", "audit"])
+
+    def test_every_captured_request_is_redacted(self):
+        """EVERY do_request payload on a run (not just the last) carries no raw secret — a raw
+        request followed by a redacted one cannot pass."""
+        raw = "line one\nDB_PASSWORD = 'hunter2longenough'\nline two"
+        self._run_cli("glm-review", raw, ["--mode", "redteam"])
+        for p in _CAPTURED.get("all", []):
+            for m in p.get("messages", []):
+                if isinstance(m.get("content"), str):
+                    self.assertNotIn(self.SECRET, m["content"], "a captured request egressed a raw secret")
+
+    def test_choke_point_redacts_and_fails_closed(self):
+        """do_request's _enforce_egress_redaction is the SINGLE egress gate: it redacts every
+        message (covers ping/self-test/any caller) and RAISES if a redacted packet still scans."""
+        import importlib.util
+        for cli in ("glm-review", "m3-review"):
+            path = os.path.join(os.path.dirname(CLI), cli)
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(cli.replace("-", "_"), loader=None))
+            mod.__dict__["__file__"] = path
+            with open(path) as _fh:
+                exec(compile(_fh.read(), path, "exec"), mod.__dict__)
+            # a raw-secret payload handed straight to the choke point is redacted in place
+            payload = {"messages": [{"role": "user", "content": "x_password = 'hunter2longenough'"}]}
+            out = mod._enforce_egress_redaction(payload)
+            self.assertNotIn(self.SECRET, out["messages"][0]["content"])
+            self.assertIn("[REDACTED:", out["messages"][0]["content"])
+            # the ping self-test payload passes the gate unchanged (constant, clean)
+            ping = {"messages": [{"role": "user", "content": "ping"}]}
+            self.assertEqual(mod._enforce_egress_redaction(ping)["messages"][0]["content"], "ping")
+            # a LITERAL_PATTERNS name that redact() leaves (by design) makes the gate FAIL CLOSED
+            with self.assertRaises(RuntimeError):
+                mod._enforce_egress_redaction({"messages": [{"role": "user", "content": "note: VERCEL_TOKEN mentioned"}]})
 
     def test_scan_runs_on_the_redacted_text(self):
         """The tripwire fail-closes on what would actually LEAVE: a packet whose only secret is a
