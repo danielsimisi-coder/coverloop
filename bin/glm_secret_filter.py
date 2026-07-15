@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15f"
+FILTER_VERSION = "2026-07-15g"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -135,15 +135,17 @@ _BOOL_NULL_RE = re.compile(r"(?i)^(?:true|false|null|none|nil|undefined)$")
 _YAML_BLOCK_RE = re.compile(r"^[|>][0-9+-]*$")  # incl. indentation indicators |2 >+2 (Sol r2)
 _BAREWORD_RE = re.compile(r"[A-Za-z0-9_+/@#$%^&*!-]{16,}")
 _CALL_AFTER_RE = re.compile(r"[ \t]*(?:\?\.)?\(")
+_CODE_AFTER_RE = re.compile(r"[ \t]*(?:(?:\?\.)?\(|:)")
 _MIN_OPAQUE_LEN = 8
 _CODE_PUNCT = set("()[]{};,=<>`|&")
 _WORD_RE = re.compile(r"\S+")
 
 
 def _val_level_verdict(m):
-    """Per-match value rules. True = leaks; False = provably clean; None = undecided (needs the
-    line content scan). Split from the line scan so a bool/marker early exit can never stand in
-    for a scan that was skipped (Sol r4)."""
+    """Per-match value rules. True = leaks; False = the CAPTURED value is clean (the line layers
+    still run from the value's END — a payload after `true` / a marker is not exempt, Sol r7);
+    None = undecided (line layers run from the value START). Split from the line scan so a
+    bool/marker early exit can never stand in for a scan that was skipped (Sol r4)."""
     val = (m.group("val") or "").rstrip(",;")
     if _REDACTED_MARKER_RE.match(val):
         return False  # exactly a redaction marker — scan(redact(x)) idempotency
@@ -180,14 +182,18 @@ def _line_block_max(line):
             if (c == "'" or c == '"') and not escaped:
                 quote, lit_open = c, i
         elif c == quote and not escaped:
-            if i - lit_open - 1 >= _MIN_OPAQUE_LEN and lit_open > max_pos:
+            content = line[lit_open + 1:i]
+            if len(content) >= _MIN_OPAQUE_LEN and lit_open > max_pos and not _REDACTED_MARKER_RE.match(content):
                 max_pos = lit_open
             quote = None
     if quote is not None and len(line) - lit_open - 1 >= _MIN_OPAQUE_LEN and lit_open > max_pos:
         max_pos = lit_open  # unterminated literal: fail closed
     for bm in _BAREWORD_RE.finditer(line):
-        # call names are code, not literals: platformStorageKey(url) / fn (x) / fn?.(x)
-        if bm.start() > max_pos and not _CALL_AFTER_RE.match(line, bm.end()):
+        # call names and object KEYS are code, not literals: platformStorageKey(url) / fn (x) /
+        # fn?.(x) / detectSessionInUrl: (long camelCase option names — Sol r7; a name match of
+        # the secret FAMILY is still handled by its own ASSIGN match, this only clears the
+        # bareword content rule)
+        if bm.start() > max_pos and not _CODE_AFTER_RE.match(line, bm.end()):
             max_pos = bm.start()
     return max_pos
 
@@ -253,8 +259,6 @@ def scan(text):
         if verdict is True:
             hits.append("secret-assignment")
             break
-        if verdict is False:
-            continue
         if line_start != cached_line_start:
             cached_line_start = line_start
             line_end = text.find("\n", line_start)
@@ -263,8 +267,13 @@ def scan(text):
             line = text[line_start:line_end]
             cached_block_max = _line_block_max(line)
             cached_zone = _line_plain_zone(line)
-        value_start = (m.start("q") if m.group("q") else m.start("val")) - line_start
-        if cached_block_max >= value_start or _plain_zone_leaks(cached_zone, value_start):
+        # False (bool/marker): the CAPTURED value is exempt but anything after it is not — the
+        # line layers run from the value's END (Sol r7: `AUTH_TOKEN: true actualsecret123`).
+        if verdict is False:
+            check_from = m.end() - line_start
+        else:
+            check_from = (m.start("q") if m.group("q") else m.start("val")) - line_start
+        if cached_block_max >= check_from or _plain_zone_leaks(cached_zone, check_from):
             hits.append("secret-assignment")
             break
     return hits

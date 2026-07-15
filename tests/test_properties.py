@@ -259,6 +259,10 @@ class AssignmentScanBoundary(unittest.TestCase):
         # Sol round-6: unquoted colon-assignment secrets in a code-punctuation-free zone
         "DB_PASSWORD: correct horse battery staple",   # YAML/env plain multiword scalar
         "AUTH_TOKEN: abcdefghijklmno",                 # unquoted opaque below the 16-char bareword bar
+        # Sol round-7: a bool/marker CAPTURED value must not exempt a payload after it
+        "AUTH_TOKEN: true actualsecret123",
+        "AUTH_TOKEN: [REDACTED:secret-value] actualsecret123",
+        "AUTH_TOKEN: null correct horse battery staple",
     ]
 
     def test_auth_code_idioms_pass_scan(self):
