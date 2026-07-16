@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
+import egress_cap  # daily reviewer-call spend cap (R6)
 
 CLI_VERSION = "m3-1.0.2"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -133,6 +134,7 @@ def main():
         log_egress(mode, None, "REFUSED", cc, psha, {"matched": hits})
         print("ERROR: Refusing to send possible secret-bearing content. Matched: " + ", ".join(hits), file=sys.stderr)
         sys.exit(3)
+    egress_cap.enforce_daily_cap()  # daily spend guardrail (R6), before any billable send
     payload = {"model": MODEL, "messages": [{"role": "system", "content": SYSTEMS[mode]},
                {"role": "user", "content": content}], "temperature": 0.1,
                "max_tokens": MAX_TOKENS, "provider": PROVIDER}

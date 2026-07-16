@@ -591,5 +591,63 @@ def worker_dispatch(case, results, barrier, flag):
     results.append(_run(args, case.repo))
 
 
+class DailyReviewCap(unittest.TestCase):
+    """R6: the daily reviewer-call cap counts today's SENT reviews (egress
+    'attempt' markers) and refuses past the configured cap, fail-closed — a
+    token-spend guardrail for runaway loops / many parallel projects."""
+
+    def setUp(self):
+        import egress_cap
+        self.cap = egress_cap
+        self.tmp = tempfile.mkdtemp()
+        self.log = os.path.join(self.tmp, "egress.log")
+        os.environ["COVERLOOP_EGRESS_LOG"] = self.log
+
+    def tearDown(self):
+        os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+        os.environ.pop("COVERLOOP_DAILY_REVIEW_CAP", None)
+
+    def _write(self, n_today=0, n_old=0, n_result=0, corrupt=False):
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).isoformat()
+        with open(self.log, "w", encoding="utf-8") as f:
+            if corrupt:
+                f.write("not-json-a-partial-line\n")
+            for _ in range(n_today):
+                f.write(json.dumps({"ts": today, "phase": "attempt"}) + "\n")
+            for _ in range(n_result):  # result-phase is NOT a new billable call
+                f.write(json.dumps({"ts": today, "phase": "result"}) + "\n")
+            for _ in range(n_old):      # a different day
+                f.write(json.dumps({"ts": "2020-01-01T00:00:00+00:00", "phase": "attempt"}) + "\n")
+
+    def test_counts_only_todays_attempts(self):
+        self._write(n_today=5, n_old=9, n_result=4)
+        self.assertEqual(self.cap.sent_today(), 5)
+
+    def test_missing_log_is_zero(self):
+        self.assertEqual(self.cap.sent_today(), 0)
+
+    def test_corrupt_line_tolerated(self):
+        self._write(n_today=1, corrupt=True)
+        self.assertEqual(self.cap.sent_today(), 1)
+
+    def test_under_cap_passes(self):
+        self._write(n_today=3)
+        os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = "10"
+        self.cap.enforce_daily_cap()  # must NOT exit
+
+    def test_at_cap_fails_closed(self):
+        self._write(n_today=3)
+        os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = "3"
+        with self.assertRaises(SystemExit) as cm:
+            self.cap.enforce_daily_cap()
+        self.assertEqual(cm.exception.code, 4)
+
+    def test_zero_disables_even_far_over(self):
+        self._write(n_today=500)
+        os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = "0"
+        self.cap.enforce_daily_cap()  # disabled -> no exit
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

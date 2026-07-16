@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
+import egress_cap  # daily reviewer-call spend cap (R6)
 
 CLI_VERSION = "2.0.2"
 
@@ -234,6 +235,10 @@ def main():
         print("ERROR: Refusing to send possible secret-bearing content to GLM.", file=sys.stderr)
         print("Matched patterns: " + ", ".join(hits), file=sys.stderr)
         sys.exit(3)
+
+    # Daily spend guardrail (R6): packet is clean and about to be sent — refuse
+    # if today's review budget is exhausted, BEFORE any billable network call.
+    egress_cap.enforce_daily_cap()
 
     payload = {
         "model": MODEL,

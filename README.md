@@ -242,7 +242,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Do I need a VPS or a server?</b></summary><br/>No. Coverloop runs on your normal laptop or desktop. A server only matters if you <i>already</i> run your AI agent on one.</details>
 
-<details><summary><b>Does it cost money to run?</b></summary><br/>The tooling is free and open source. The reviewer models run through OpenRouter (pay-as-you-go, usually a few cents per review). You decide which change tiers trigger the paid reviewers — trivial changes don't call them at all.</details>
+<details><summary><b>Does it cost money to run?</b></summary><br/>The tooling is free and open source. The reviewer models run through OpenRouter (pay-as-you-go, usually a few cents per review). You decide which change tiers trigger the paid reviewers — trivial changes don't call them at all. And there's a <b>daily spend guardrail</b>: the reviewer CLIs count reviews actually sent today and <b>fail closed</b> once you hit a daily cap (<code>COVERLOOP_DAILY_REVIEW_CAP</code>, default 40; set <code>0</code> to disable) — so a runaway review loop or several parallel projects can't silently drain your token budget.</details>
 
 <details><summary><b>Which AI coding tool does it work with?</b></summary><br/>Built for <b>Claude Code</b> (auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
 
