@@ -3,7 +3,7 @@
 `coverloop-report/v2` introduces an explicit authority boundary for L3 approval.
 It exists to remove a structural flaw in report/v1: a report travelling inside a
 PR can currently contain the same `human_gate` object that the L3 gate later
-accepts.  Attribution is useful audit text, but PR-authored attribution is not
+accepts. Attribution is useful audit text, but PR-authored attribution is not
 an authorization primitive.
 
 ## Protocol invariant
@@ -14,13 +14,13 @@ A v2 report represents approval as a **closed sum type**:
 approval = human | delegated_policy
 ```
 
-The variants are mutually exclusive.  Unknown keys are rejected.  There is no
+The variants are mutually exclusive. Unknown keys are rejected. There is no
 fallback from malformed v2 authority to v1 `human_gate`, no opaque
 `delegated_policy` extension, and no synthetic owner-approval compatibility
 path.
 
 The report contains only an authorization reference and the SHA-256 digest of
-the exact signed authorization bytes.  A `delegated_policy` variant additionally
+the exact signed authorization bytes. A `delegated_policy` variant additionally
 binds the policy id, version, and digest.
 
 The authoritative material is deliberately **not in the PR**:
@@ -36,7 +36,7 @@ The fixed OpenSSH signature namespace is `coverloop-l3-approval/v2`.
 
 ## Signed authorization
 
-The exact UTF-8 bytes of the authorization JSON are signed.  The verifier first
+The exact UTF-8 bytes of the authorization JSON are signed. The verifier first
 checks that their SHA-256 matches `approval.authorization_sha256`, then validates
 all semantic bindings, and only then verifies the signature against the external
 trust root.
@@ -57,10 +57,10 @@ Both variants bind:
 
 ## Why the signature is over exact bytes
 
-The verifier does not invent a second JSON canonicalization protocol.  The
+The verifier does not invent a second JSON canonicalization protocol. The
 report hash binds the exact authorization bytes, and OpenSSH signs those same
-bytes.  Reformatting, editing, or replacing the authorization changes the hash
-and invalidates the signature.  This keeps the authority preimage unambiguous
+bytes. Reformatting, editing, or replacing the authorization changes the hash
+and invalidates the signature. This keeps the authority preimage unambiguous
 without claiming RFC 8785 semantics that this feature does not implement.
 
 ## CLI
@@ -76,13 +76,20 @@ python3 bin/coverloop_report_v2.py .coverloop/reports/<sha>.json \
 ```
 
 The signature and trust-root paths must be absolute and external to
-`--repo-root`.  Failure is closed and returns exit 1 with a JSON reason.
+`--repo-root`. Failure is closed and returns exit 1 with a JSON reason.
+
+A successful invocation emits `approval_verdict: "pass"` under
+`coverloop-l3-approval-verification/v1`, with
+`verification_scope: "approval_authority_only"`. It deliberately does **not**
+emit a generic `verdict: pass`: this verifier cannot satisfy, replace, or upgrade
+the normal CoverLoop tests/reviewer/freshness gate. Approval authority is one
+required input to L3, not the whole L3 decision.
 
 ## Scope and migration
 
-This is the upstream **report/v2 authority kernel**.  It intentionally does not
-silently change the behavior of the legacy report/v1 CLI.  Consumers opt into
-v2 and must call this verifier from their trusted attestation boundary.  A later
+This is the upstream **report/v2 authority kernel**. It intentionally does not
+silently change the behavior of the legacy report/v1 CLI. Consumers opt into
+v2 and must call this verifier from their trusted attestation boundary. A later
 migration may make v2 the default report format only after compatibility and
 qualification work proves that doing so does not weaken existing gates.
 
@@ -94,12 +101,12 @@ effects of this protocol change.
 ## Threat model
 
 This verifier prevents a PR author from creating authority merely by editing the
-report.  A PR author can still copy or reference an authorization, but cannot
+report. A PR author can still copy or reference an authorization, but cannot
 make it valid for another commit/task, change its delegated policy identity,
 extend its expiry, choose another trusted principal, or replace its signing key
 without a valid signature from an externally trusted signer.
 
 The trusted environment remains responsible for protecting the external
 signature/trust-root files, selecting the expected principal and task id, and
-for any higher-level revocation/one-shot consumption policy.  Those controls are
+for any higher-level revocation/one-shot consumption policy. Those controls are
 not represented as PR-authored data by design.
