@@ -34,6 +34,8 @@ jobs:
       # Windows runner, which would fail the whole Windows leg (Sol + GLM R3).
       - name: Gate test suite
         run: python tests/test_gate.py
+      - name: Report v2 external-authority tests
+        run: python tests/test_report_v2.py
       - name: Property / fuzz / concurrency tests
         run: python tests/test_properties.py
       # The shell hooks are POSIX (bash + pwd -P + git). They ship for Unix; on
