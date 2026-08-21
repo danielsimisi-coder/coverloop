@@ -152,19 +152,32 @@ class ReportV2Test(unittest.TestCase):
     def test_human_signed_external_authority_passes(self):
         _, report_path, _, auth_path, sig = self._case("human")
         out = self._verify(report_path, auth_path, sig)
-        self.assertEqual(out["verdict"], "pass")
+        self.assertEqual(out["approval_verdict"], "pass")
+        self.assertEqual(out["verification_scope"], "approval_authority_only")
+        self.assertNotIn("verdict", out)
         self.assertEqual(out["approval_kind"], "human")
         self.assertEqual(out["trust_root_source"], "external")
 
     def test_delegated_policy_signed_external_authority_passes(self):
         _, report_path, _, auth_path, sig = self._case("delegated_policy")
         out = self._verify(report_path, auth_path, sig)
-        self.assertEqual(out["verdict"], "pass")
+        self.assertEqual(out["approval_verdict"], "pass")
         self.assertEqual(out["approval_kind"], "delegated_policy")
 
     def test_human_variant_cannot_smuggle_delegated_fields(self):
         report, report_path, _, auth_path, sig = self._case("human")
         report["approval"]["policy_id"] = POLICY_ID
+        _write_json(report_path, report)
+        with self.assertRaises(v2.VerificationError):
+            self._verify(report_path, auth_path, sig)
+
+    def test_v1_human_gate_is_not_representable_in_v2(self):
+        report, report_path, _, auth_path, sig = self._case("human")
+        report["human_gate"] = {
+            "required": True,
+            "approved": True,
+            "approver": "daniel",
+        }
         _write_json(report_path, report)
         with self.assertRaises(v2.VerificationError):
             self._verify(report_path, auth_path, sig)
