@@ -13,6 +13,8 @@ Authority model:
   * the trusted caller supplies the expected signer principal and task id.
 
 No field inside the PR selects a public key, trust root, or signer identity.
+This verifies APPROVAL AUTHORITY ONLY.  It never emits a full CoverLoop gate
+verdict; tests/reviews/freshness remain separate required checks.
 """
 
 import argparse
@@ -29,6 +31,7 @@ import tempfile
 
 REPORT_SCHEMA = "coverloop-report/v2"
 AUTH_SCHEMA = "coverloop-l3-authorization/v1"
+VERIFICATION_SCHEMA = "coverloop-l3-approval-verification/v1"
 SIGNATURE_NAMESPACE = "coverloop-l3-approval/v2"
 TIERS = ("L0", "L1", "L2", "L3")
 KINDS = ("human", "delegated_policy")
@@ -277,8 +280,9 @@ def verify(report_path, authorization_path, signature_path, allowed_signers_path
         auth_bytes, signature_bytes, allowed_signers_bytes, expected_principal)
 
     return {
-        "schema": "coverloop-l3-verification/v1",
-        "verdict": "pass",
+        "schema": VERIFICATION_SCHEMA,
+        "approval_verdict": "pass",
+        "verification_scope": "approval_authority_only",
         "report_schema": REPORT_SCHEMA,
         "commit": report["commit"],
         "approval_kind": approval["kind"],
@@ -293,7 +297,7 @@ def verify(report_path, authorization_path, signature_path, allowed_signers_path
 
 def _main(argv=None):
     p = argparse.ArgumentParser(
-        description="Verify report/v2 L3 human/delegated approval against external SSH authority")
+        description="Verify report/v2 L3 approval authority (not the full CoverLoop gate)")
     p.add_argument("report", help="coverloop-report/v2 JSON file")
     p.add_argument("--authorization", required=True,
                    help="signed authorization JSON whose exact bytes are hash-bound by the report")
@@ -317,8 +321,9 @@ def _main(argv=None):
         )
     except VerificationError as exc:
         print(json.dumps({
-            "schema": "coverloop-l3-verification/v1",
-            "verdict": "fail",
+            "schema": VERIFICATION_SCHEMA,
+            "approval_verdict": "fail",
+            "verification_scope": "approval_authority_only",
             "reason": str(exc),
         }, indent=2), file=sys.stdout)
         return 1
