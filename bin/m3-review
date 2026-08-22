@@ -26,13 +26,18 @@ SYSTEMS = {
 }
 
 def read_key():
+    # Plugin-provided key (OS keychain via userConfig) wins — see glm-review.
+    k = os.getenv("CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
+    if k:
+        return k
     k = os.getenv("OPENROUTER_API_KEY", "").strip()
     if k:
         return k
     p = Path.home() / ".config" / "openrouter" / "api_key"
     if p.exists():
         return p.read_text(encoding="utf-8").strip()
-    print("ERROR: Missing OpenRouter API key.", file=sys.stderr); sys.exit(1)
+    print("ERROR: no OpenRouter API key — run `coverloop doctor`.",
+          file=sys.stderr); sys.exit(1)
 
 def sha(t):
     return hashlib.sha256(t.encode("utf-8")).hexdigest()

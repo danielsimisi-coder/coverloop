@@ -364,6 +364,23 @@ class EgressRedactionInvariant(unittest.TestCase):
 
     SECRET = "hunter2longenough"
 
+    def setUp(self):
+        # ISOLATE THE SPEND CAP. These tests drive the real CLI main(), which
+        # consults the R6 daily cap against the REAL egress log — so on a day
+        # when you actually ran ~40 reviews, the packet is refused before
+        # do_request and every assertion here fails with a misleading
+        # "never reached do_request". CI never saw it (fresh log); only real
+        # working days did. A privacy invariant must not depend on how busy
+        # you were today.
+        self._saved_cap = os.environ.get("COVERLOOP_DAILY_REVIEW_CAP")
+        os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = "0"  # 0 = disabled
+
+    def tearDown(self):
+        if self._saved_cap is None:
+            os.environ.pop("COVERLOOP_DAILY_REVIEW_CAP", None)
+        else:
+            os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = self._saved_cap
+
     def _run_cli(self, cli_name, stdin_text, argv):
         import importlib.util, io, contextlib
         path = os.path.join(os.path.dirname(CLI), cli_name)
@@ -740,3 +757,53 @@ class DeterministicClassify(unittest.TestCase):
                                  cwd=d, capture_output=True, text=True, timeout=30)
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertEqual(out.stdout.strip(), "L3", out.stdout + out.stderr)
+
+
+class DoctorSetupReport(unittest.TestCase):
+    """`doctor` is the first command a stranger runs. Its contract: never crash,
+    exit non-zero while setup is incomplete, and always name the fix."""
+
+    def _run(self, home, cwd, path="/usr/bin:/bin"):
+        import subprocess
+        return subprocess.run([sys.executable, CLI, "doctor"],
+                              cwd=cwd, capture_output=True, text=True, timeout=60,
+                              env={"HOME": home, "PATH": path})
+
+    def test_unconfigured_machine_exits_nonzero_and_names_the_fix(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = self._run(d, d)
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn("openrouter", out.stdout.lower())
+            # A bare "MISSING" is useless — the fix must be printed.
+            self.assertIn("To finish setup:", out.stdout)
+            self.assertIn("openrouter.ai/keys", out.stdout)
+
+    def test_never_leaks_a_stray_error_above_the_report(self):
+        """repo_root() prints its own error and exits; doctor must not let that
+        spill into stderr and look like a crash (found while testing)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = self._run(d, d)
+            self.assertEqual(out.stderr.strip(), "", out.stderr)
+            self.assertTrue(out.stdout.startswith("coverloop doctor"), out.stdout[:80])
+
+    def test_offers_both_gate_routes_with_the_privacy_difference_stated(self):
+        """The two gate routes are not equivalent. A safety tool must show the
+        tradeoff rather than silently pick the convenient one."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = self._run(d, d)
+            self.assertIn("Codex CLI", out.stdout)
+            self.assertIn("sol-review", out.stdout)
+            self.assertIn("NOT full ZDR", out.stdout)
+
+    def test_does_not_print_the_key_itself(self):
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as d:
+            kd = _os.path.join(d, ".config", "openrouter")
+            _os.makedirs(kd)
+            with open(_os.path.join(kd, "api_key"), "w") as fh:
+                fh.write("sk-or-SECRETVALUE123456")
+            out = self._run(d, d)
+            self.assertNotIn("SECRETVALUE123456", out.stdout + out.stderr)

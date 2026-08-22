@@ -20,6 +20,12 @@ MAX_CHARS = int(os.getenv("GLM_MAX_CHARS", "120000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("GLM_MAX_COMPLETION_TOKENS", "4096"))
 REASONING_EFFORT = os.getenv("GLM_REASONING_EFFORT", "high")
 USE_ZDR = True  # ZDR mandatory, NOT env-disableable (Codex P1; protocol Hard Boundaries)
+# The role prompts below name the reviewer ("You are GLM-5.2 as …"). The engine
+# itself — privacy gate, secret filter, egress log, spend cap — is model-agnostic,
+# so a sibling reviewer on a DIFFERENT lineage reuses it by overriding the model
+# and this name. Nothing else about the prompts changes: the ROLE is the point,
+# the lineage is what makes a second opinion worth having.
+REVIEWER_NAME = os.getenv("REVIEWER_NAME", "GLM-5.2")
 EGRESS_LOG = Path.home() / ".config" / "openrouter" / "egress.log"
 
 SYSTEMS = {
@@ -62,13 +68,23 @@ def provider_block():
     return {"zdr": True, "allow_fallbacks": False, "data_collection": "deny"}
 
 def read_key():
+    # Installed as a Claude Code plugin, the key comes from the user's OS
+    # keychain via userConfig and is exposed here — no file to create, no
+    # chmod to remember, and nothing key-shaped anywhere in the repo. Checked
+    # FIRST so a plugin install needs no manual setup at all.
+    plugin_key = os.getenv("CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
+    if plugin_key:
+        return plugin_key
     env_key = os.getenv("OPENROUTER_API_KEY")
     if env_key:
         return env_key.strip()
     key_path = Path.home() / ".config" / "openrouter" / "api_key"
     if key_path.exists():
         return key_path.read_text(encoding="utf-8").strip()
-    print("ERROR: Missing OpenRouter API key at ~/.config/openrouter/api_key", file=sys.stderr)
+    print("ERROR: no OpenRouter API key. Either set it in the Coverloop plugin "
+          "settings, or export OPENROUTER_API_KEY, or write it to "
+          "~/.config/openrouter/api_key (chmod 600). Run `coverloop doctor` "
+          "for the exact command.", file=sys.stderr)
     sys.exit(1)
 
 def log_egress(model, mode, zdr_requested, http_status, secret_scan, char_count, payload_sha, extra=None):
@@ -243,7 +259,7 @@ def main():
     payload = {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEMS[mode]},
+            {"role": "system", "content": SYSTEMS[mode].replace("GLM-5.2", REVIEWER_NAME)},
             {"role": "user", "content": content}
         ],
         "temperature": 0.1,

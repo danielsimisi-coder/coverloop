@@ -1258,6 +1258,133 @@ def verify_commit_signature(root, sha, signers_file=None):
                    "or drop --require-signed-commit")
 
 
+def _which(name):
+    """Absolute path of an executable, or None. Uses a login-shell PATH lookup
+    as a fallback because a tool installed under ~/.npm-global/bin is invisible
+    to a non-login shell — a real trap this project hit repeatedly."""
+    p = shutil.which(name)
+    if p:
+        return p
+    home_bins = [os.path.expanduser(x) for x in
+                 ("~/.npm-global/bin", "~/.local/bin", "~/bin")]
+    for d in home_bins:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def cmd_doctor(args):
+    """Explain what is installed, what is missing, and what each choice costs.
+
+    A setup command's job is not to say "not configured" — it is to say exactly
+    which command fixes it. This project's own field audit found that when the
+    strong path is annoying enough, people quietly stop using it, and a gate
+    nobody runs protects nobody. So every ✗ below carries its fix.
+    """
+    ok = "✓"
+    bad = "✗"
+    warn = "!"
+    rows, problems = [], []
+
+    def line(sym, label, detail):
+        rows.append(f"  {sym} {label:<24} {detail}")
+
+    # --- the things nothing works without -------------------------------
+    py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    line(ok, "python3", py)
+    g = _which("git")
+    line(ok if g else bad, "git", g or "MISSING — install git")
+    if not g:
+        problems.append("install git")
+
+    claude = _which("claude")
+    line(ok if claude else warn, "claude code",
+         claude or "not on PATH (fine if you drive coverloop yourself)")
+
+    # --- the one credential the review loop actually needs ---------------
+    key_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    key_file = os.path.expanduser("~/.config/openrouter/api_key")
+    plugin_key = os.environ.get("CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
+    have_file = False
+    if os.path.isfile(key_file):
+        try:
+            with open(key_file, encoding="utf-8") as _fh:
+                have_file = bool(_fh.read().strip())
+        except OSError:
+            have_file = False
+    if plugin_key:
+        line(ok, "openrouter key", "provided by the plugin (stored in your keychain)")
+    elif key_env:
+        line(ok, "openrouter key", "from $OPENROUTER_API_KEY")
+    elif have_file:
+        mode = oct(os.stat(key_file).st_mode & 0o777)[2:]
+        # A world-readable key on a shared box is a real leak, not a nit.
+        note = key_file + ("" if mode == "600" else
+                           f"   [!] mode {mode} — run: chmod 600 {key_file}")
+        line(ok if mode == "600" else warn, "openrouter key", note)
+    else:
+        line(bad, "openrouter key", "MISSING")
+        problems.append(
+            "get a key at https://openrouter.ai/keys, then:\n"
+            "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
+            "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
+
+    # --- the reviewers ---------------------------------------------------
+    here = os.path.dirname(os.path.abspath(__file__))
+    for tool, why in (("glm-review", "red-team + audit (full ZDR)"),
+                      ("sol-review", "diff gate via OpenRouter")):
+        p = os.path.join(here, tool)
+        line(ok if os.path.exists(p) else bad, tool,
+             why if os.path.exists(p) else "MISSING from this install")
+
+    # --- the gate: two routes, different privacy, user's call ------------
+    codex = _which("codex")
+    rows.append("")
+    rows.append("  Independent diff gate — pick ONE (both are supported):")
+    if codex:
+        rows.append(f"    {ok} A. Codex CLI            {codex}")
+        rows.append("         highest privacy: the diff goes to OpenAI under YOUR")
+        rows.append("         ChatGPT subscription and never transits OpenRouter.")
+        rows.append("         Verify sign-in with a REAL call, not `codex login status`:")
+        rows.append("           codex exec --skip-git-repo-check hi < /dev/null")
+    else:
+        rows.append(f"    {bad} A. Codex CLI            not installed")
+        rows.append("         npm i -g @openai/codex && codex login")
+        rows.append("         Highest privacy, but a second account + browser sign-in.")
+    rows.append(f"    {ok} B. sol-review           no extra install; uses the key above")
+    rows.append("         GPT-5.6 Sol via OpenRouter. Different lineage from the")
+    rows.append("         builder, so it is a genuine second opinion — but its")
+    rows.append("         provider offers data_collection:deny, NOT full ZDR.")
+    rows.append("         GLM (full ZDR) stays the reviewer for the touchiest code.")
+    if not codex:
+        problems.append("choose a gate route: install Codex CLI (A) or use sol-review (B) "
+                        "and accept the documented privacy difference")
+
+    # --- this repo -------------------------------------------------------
+    rows.append("")
+    # Ask git directly: repo_root() prints its own error and exits, which would
+    # spill a stray "not inside a git repository" line above this report.
+    r = git(["rev-parse", "--show-toplevel"])
+    if r:
+        has = os.path.isdir(os.path.join(r, REPORTS_DIR))
+        line(ok if has else warn, "this repo",
+             "initialised" if has else "not initialised yet — run: coverloop init")
+        if not has:
+            problems.append("coverloop init   (once per repo)")
+    else:
+        line(warn, "this repo", "not a git repository — cd into your project first")
+
+    print("coverloop doctor\n")
+    print("\n".join(rows))
+    if problems:
+        print("\nTo finish setup:")
+        for i, p in enumerate(problems, 1):
+            print(f"  {i}. {p}")
+        sys.exit(1)
+    print("\nAll set. Next:  coverloop classify   (what risk is your current change?)")
+
+
 def cmd_classify(args):
     """Print the deterministic tier floor for the current change.
 
@@ -1489,6 +1616,10 @@ def main(argv=None):
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
     pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
     pi.set_defaults(fn=cmd_init)
+
+    pd = sub.add_parser("doctor",
+                        help="check the install and say exactly what to fix")
+    pd.set_defaults(fn=cmd_doctor)
 
     pc = sub.add_parser("classify",
                         help="derive the deterministic tier FLOOR from the changed paths")

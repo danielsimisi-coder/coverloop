@@ -1,0 +1,65 @@
+{
+  "name": "coverloop",
+  "version": "2.10.0",
+  "description": "Never let the model that wrote the code be the one that approves it. Risk-tiered gates, independent cross-lineage review, and evidence bound to the commit.",
+  "author": {
+    "name": "Daniel Siman Tov",
+    "url": "https://github.com/danielsimisi-coder/coverloop"
+  },
+  "homepage": "https://github.com/danielsimisi-coder/coverloop",
+  "license": "MIT",
+  "keywords": ["code-review", "safety", "gate", "risk", "evidence", "multi-model"],
+
+  "userConfig": {
+    "openrouter_api_key": {
+      "type": "string",
+      "title": "OpenRouter API key",
+      "description": "Powers the independent reviewers (GLM red-team, and the optional Sol diff gate). Get one at https://openrouter.ai/keys — reviews cost a few cents each, and only L2/L3 changes call a model at all. Stored in your OS keychain, never in the repo.",
+      "sensitive": true
+    }
+  },
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-contract.sh\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/pre-risky-git.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/loop-stop-check.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/capture-failure.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
