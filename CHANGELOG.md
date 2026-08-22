@@ -2,6 +2,27 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — rounds three and four (PROTOCOL v2.10.2)
+
+- **The floor stopped crying danger at UI components.** The camelCase boundary that
+  rescued `workerPool.ts` also swept in every PascalCase component whose name starts
+  with a keyword: `ModelViewer.tsx` read as a data model, `ContextMenu.tsx` as React
+  context, `RoutePlanner.tsx` as a router. Keywords are now split — the dangerous ones
+  (auth, credentials, billing, worker) still accept any casing, so `AuthGuard.tsx`
+  stays L3, while the ones that collide with component naming accept the hump only in
+  lowercase. Directory and dotted forms are untouched.
+- **The daily cap is genuinely safe in parallel now.** The check sat about fifteen
+  lines before the attempt was recorded, so two reviewers on different projects could
+  both read cap-1 and both send. Reserving the slot and writing the preflight audit
+  record are now one step under an exclusive lock. Verified with twelve concurrent
+  processes against a cap of five: exactly five sent.
+- **The gate stopped importing on Python 3.9.** The ReDoS fix reached for a possessive
+  quantifier, which needs 3.11 — on the 3.9 job in this repo's own CI it is a syntax
+  error at import time, so `coverloop` did not start at all. The `{1,64}` bound was
+  what made the pattern linear; the possessive added nothing. A guard now greps the
+  shipped sources for regex syntax newer than the oldest supported Python, because
+  every local check ran on 3.13 and stayed green.
+
 ## 2026-08-22 — the release reviews itself, and the review found five fail-opens (PROTOCOL v2.10.1)
 
 v2.10.0 shipped `classify` and the claim that the risk tier is no longer the author's

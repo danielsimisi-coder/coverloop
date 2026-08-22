@@ -1114,5 +1114,67 @@ class SecondRoundRegressions(unittest.TestCase):
                 os.environ.clear()
                 os.environ.update(old)
 
+
+class ThirdRoundRegressions(unittest.TestCase):
+    """The last two findings: a classifier that cried danger at UI components,
+    and a daily cap two reviewers could walk past together."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_pascalcase_component_names_are_not_danger(self):
+        # The camelCase boundary that rescued workerPool.ts also swept in every
+        # PascalCase component whose name happens to start with a keyword.
+        for path in ("src/ModelViewer.tsx", "src/ContextMenu.tsx",
+                     "src/RoutePlanner.tsx", "src/StateBadge.tsx",
+                     "src/StoreFront.tsx"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L1")
+
+    def test_narrowing_did_not_cost_the_real_matches(self):
+        # The counter-test. Only the HUMP form was restricted, and only for words
+        # that collide with component naming — so directory and dotted forms, and
+        # every dangerous keyword, still land where they did.
+        for path, expect in (("src/AuthGuard.tsx", "L3"), ("src/authGuard.tsx", "L3"),
+                             ("models/user.py", "L3"), ("src/model.ts", "L3"),
+                             ("src/Schema.ts", "L3"), ("src/schemaVersion.py", "L3"),
+                             ("credentialsManager.go", "L3"),
+                             ("src/routes/api.ts", "L2"), ("src/contextProvider.ts", "L2"),
+                             ("src/api.ts", "L2"), ("src/store/index.ts", "L2")):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], expect)
+
+    def test_daily_cap_holds_under_real_concurrency(self):
+        """Twelve processes, cap of five. The check used to sit ~15 lines before
+        the attempt was recorded, so reviewers on different projects could all
+        read cap-1 and all send. Threads would not prove this — the lock is
+        per-process, so this spawns real ones."""
+        prog = (
+            "import sys, os, json, datetime\n"
+            "sys.path.insert(0, %r)\n"
+            "import egress_cap\n"
+            "def rec():\n"
+            "    with open(os.environ['COVERLOOP_EGRESS_LOG'], 'a') as f:\n"
+            "        f.write(json.dumps({'phase': 'attempt', 'ts': datetime.datetime.now("
+            "datetime.timezone.utc).isoformat()}) + '\\n')\n"
+            "egress_cap.reserve_daily_slot(rec)\n"
+            "print('SENT')\n"
+        ) % os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "egress.log")
+            env = dict(os.environ, COVERLOOP_EGRESS_LOG=log,
+                       COVERLOOP_DAILY_REVIEW_CAP="5")
+            import concurrent.futures as cf
+            with cf.ThreadPoolExecutor(12) as ex:
+                results = list(ex.map(
+                    lambda _: subprocess.run([sys.executable, "-c", prog], env=env,
+                                             capture_output=True, text=True),
+                    range(12)))
+            sent = sum(1 for r in results if "SENT" in r.stdout)
+            self.assertEqual(sent, 5, f"cap 5 but {sent} processes sent")
+            with open(log) as fh:
+                self.assertEqual(sum(1 for line in fh if line.strip()), 5)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

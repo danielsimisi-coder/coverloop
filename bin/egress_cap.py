@@ -13,6 +13,7 @@ secret scan passes, before the send). Configure with COVERLOOP_DAILY_REVIEW_CAP
 (default 40); set it to 0 to disable, or raise it for a single run.
 """
 import json
+import fcntl
 import os
 import sys
 from datetime import datetime, timezone
@@ -85,3 +86,55 @@ def enforce_daily_cap():
             "run with COVERLOOP_DAILY_REVIEW_CAP=%d, or set it to 0 to disable.\n"
             % (used, cap, cap * 2))
         sys.exit(4)
+
+
+def reserve_daily_slot(record_attempt):
+    """Count today's sends and record this one as a SINGLE atomic step.
+
+    `enforce_daily_cap()` only counts. The caller then records its attempt a few
+    lines later, and in that gap two reviewers running against different projects
+    could both read cap-1, both pass, and both send — so the documented
+    parallel-project protection did not hold. Holding an exclusive lock across
+    check-and-record closes the window: at most `cap` processes can observe a
+    count below the cap.
+
+    Falls back to the old check-then-record if the filesystem cannot lock, and
+    SAYS SO rather than pretending. This is a spend guardrail, not a safety
+    boundary; refusing to run at all on an exotic filesystem would be friction
+    with no security to show for it.
+    """
+    cap = _cap()
+    if cap <= 0:
+        record_attempt()
+        return
+    log = _log_path()
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = str(log) + ".lock"
+        with open(lock_path, "a+") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                _check_and_record(cap, record_attempt)
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        return
+    except OSError as exc:
+        print(f"egress cap: proceeding without a lock ({exc}); the daily cap is "
+              f"still enforced but is not safe against reviewers running in "
+              f"parallel.", file=sys.stderr)
+    _check_and_record(cap, record_attempt)
+
+
+def _check_and_record(cap, record_attempt):
+    try:
+        used = sent_today()
+    except OSError as exc:
+        print(f"egress cap: cannot read the quota log ({exc}); refusing to send.",
+              file=sys.stderr)
+        sys.exit(4)
+    if used >= cap:
+        print(f"egress cap: {used}/{cap} reviews already sent today; refusing. "
+              f"Raise COVERLOOP_DAILY_REVIEW_CAP or wait for the UTC day to roll.",
+              file=sys.stderr)
+        sys.exit(4)
+    record_attempt()

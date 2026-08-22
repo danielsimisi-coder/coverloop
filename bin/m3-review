@@ -146,12 +146,12 @@ def main():
         log_egress(mode, None, "REFUSED", cc, psha, {"matched": hits})
         print("ERROR: Refusing to send possible secret-bearing content. Matched: " + ", ".join(hits), file=sys.stderr)
         sys.exit(3)
-    egress_cap.enforce_daily_cap()  # daily spend guardrail (R6), before any billable send
     payload = {"model": MODEL, "messages": [{"role": "system", "content": SYSTEMS[mode]},
                {"role": "user", "content": content}], "temperature": 0.1,
                "max_tokens": MAX_TOKENS, "provider": PROVIDER}
     try:
-        log_egress(mode, None, "clean", cc, psha, {"phase": "attempt"})
+        egress_cap.reserve_daily_slot(
+            lambda: log_egress(mode, None, "clean", cc, psha, {"phase": "attempt"}))
         d = do_request(payload, 120); served = d.get("provider")
         log_egress(mode, 200, "clean", cc, psha, {"served_by": served, "phase": "result"})
         choice = d["choices"][0]; out = choice["message"].get("content")

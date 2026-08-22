@@ -261,7 +261,6 @@ def main():
 
     # Daily spend guardrail (R6): packet is clean and about to be sent — refuse
     # if today's review budget is exhausted, BEFORE any billable network call.
-    egress_cap.enforce_daily_cap()
 
     payload = {
         "model": MODEL,
@@ -278,7 +277,12 @@ def main():
 
     try:
         # preflight: an audit record MUST be writable BEFORE any content leaves (fail closed)
-        log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count, payload_sha, {"phase": "attempt"})
+        # Reserving the slot and writing the preflight audit record are the SAME
+        # step, under a lock: the cap check used to sit ~15 lines earlier, and two
+        # reviewers could both pass it before either recorded an attempt.
+        egress_cap.reserve_daily_slot(
+            lambda: log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count,
+                               payload_sha, {"phase": "attempt"}))
         data = do_request(payload, 120)
         served = data.get("provider")
         log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha, {"served_by": served, "phase": "result"})

@@ -103,6 +103,28 @@ TIERS = ("L0", "L1", "L2", "L3")
 # Ordering: first match wins per file, HIGHEST tier over all files wins overall.
 # Anything unrecognised is L1, never L0 — an unknown file is not evidence of
 # safety.
+# Two ways a keyword can end, and the difference is the whole false-positive story.
+#
+# _kw  — any casing, then a separator, a camelCase hump, or end of name. Used for
+#        the DANGEROUS words (auth, credentials, billing, worker...). AuthGuard.tsx
+#        and authGuard.tsx both reach L3, and a component that merely sounds like
+#        auth being reviewed as auth costs a review nobody regrets.
+# _kws — the same, EXCEPT that a PascalCase name does not count as a hump. Used for
+#        words that collide with ordinary React component names: ModelViewer.tsx is
+#        not a data model, ContextMenu.tsx is not React context, RoutePlanner.tsx is
+#        not a router. Those read as L3/L2 under _kw, and a floor that cries danger
+#        at a UI component is a floor people learn to route around — which costs far
+#        more than the handful of real files it would have caught.
+#        `models/`, `model.ts` and `Schema.ts` still match: only the HUMP form is
+#        restricted, because that is the only form the collision takes.
+def _kw(words):
+    return f"(?:{words})(?=(?-i:[A-Z])|[/._-]|$)"
+
+
+def _kws(words):
+    return f"(?:(?-i:{words})(?=(?-i:[A-Z]))|(?:{words})(?=[/._-]|$))"
+
+
 RISK_RULES = (
     # (tier, compiled path pattern, human-readable reason)
     ("L3", r"(^|/)migrations?/", "database migration"),
@@ -119,8 +141,8 @@ RISK_RULES = (
      "CI / deploy configuration"),
     ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._-]|$)",
      "worker / cron / queue"),
-    ("L3", r"(^|/)(schemas?|models?)(?=(?-i:[A-Z])|[/._-]|$)"
-           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json)$",
+    ("L3", r"(^|/)" + _kws("schemas?|models?")
+           + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json)$",
      "schema / data model"),
     # L2 — product surface and shared contracts: wide blast radius, no direct
     # money/auth authority.
@@ -129,11 +151,11 @@ RISK_RULES = (
     # would match any stray text file — over-classification is not free: a
     # floor that cries L2 at documentation trains people to bypass the gate,
     # and a bypassed gate protects nothing.
-    ("L2", r"(^|/)(api|routes?|handlers?|controllers?|middleware)(?=(?-i:[A-Z])|[/._-]|$)"
-           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
+    ("L2", r"(^|/)(?:" + _kw("api|handlers?|controllers?|middleware")
+           + "|" + _kws("routes?") + r")" + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
      "API surface"),
-    ("L2", r"(^|/)(hooks?|contexts?|providers?|store|state)(?=(?-i:[A-Z])|[/._-]|$)"
-           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
+    ("L2", r"(^|/)(?:" + _kw("hooks?|providers?")
+           + "|" + _kws("contexts?|stores?|states?") + r")" + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
      "shared application state"),
     ("L2", r"(^|/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements.*\.txt|pyproject\.toml)$",
      "dependency manifest"),
