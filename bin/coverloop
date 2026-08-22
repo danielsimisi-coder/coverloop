@@ -127,17 +127,19 @@ def _kws(words):
 
 RISK_RULES = (
     # (tier, compiled path pattern, human-readable reason)
-    ("L3", r"(^|/)migrations?/", "database migration"),
+    ("L3", r"(^|/)migrations?/|(^|/)(alembic|db)/(versions?|migrate)/"
+           r"|(^|/)migrate/[^/]*\.(rb|py|go|ts|js|sql)$", "database migration"),
     ("L3", r"\.sql$", "raw SQL"),
     ("L3", r"(^|/)(auth|authn|authz|authentication|authorization|authorisation"
-           r"|rls|permissions?|policies|policy|acl)(?=(?-i:[A-Z])|[/._\-\s]|$)",
+           r"|rls|rbac|permissions?|policies|policy|acls?|admin)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "authentication / authorisation / RLS"),
     ("L3", r"(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
-           r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._\-\s]|$)",
+           r"|stripe|cardcom|subscriptions?|wallets?|payouts?|refunds?|transfers?|ledgers?)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "money path"),
     ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._\-\s]|$)|(^|/)\.env",
      "secrets / credentials"),
-    ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)",
+    ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)"
+           r"|(^|/)(\.gitlab-ci\.yml|Jenkinsfile|\.circleci/|azure-pipelines\.yml|buildspec\.yml)",
      "CI / deploy configuration"),
     ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "worker / cron / queue"),
@@ -169,6 +171,7 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 
 # Above this many changed files a change is too broad to be L1 regardless of
 # what the individual paths look like — breadth is itself a risk signal.
+_NAMED_NOT_INERT = re.compile(r"(^|/)requirements[^/]*\.txt$", re.I)
 _INERT_RE = re.compile(r"\.(md|mdx|txt|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
@@ -191,9 +194,25 @@ IRREVERSIBLE_RE = re.compile(
     r"(^|/)migrations?/"                                  # schema migrations
     r"|\.sql$"                                            # raw SQL
     r"|(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
-    r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._\-\s]|$)"
-    r"|(^|/)(rls|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._\-\s]|$)",
+    r"|stripe|cardcom|subscriptions?|wallets?|payouts?|refunds?|transfers?|ledgers?)(?=(?-i:[A-Z])|[/._\-\s]|$)"
+    r"|(^|/)(rls|rbac|acls?|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._\-\s]|$)",
     re.I)
+
+
+def _resolve_commit(ref, cwd):
+    """Resolve a user-supplied ref to a commit id, or None.
+
+    `--base` reaches `git diff` as a positional, so an option-shaped value was
+    read as a FLAG: `--base=--cached` diffed the index, found nothing to classify,
+    and the gate passed. `--end-of-options` stops git parsing further flags, and
+    demanding a 40-hex answer means nothing but a real commit gets through.
+    """
+    out = git(["rev-parse", "--verify", "--quiet", "--end-of-options",
+               f"{ref}^{{commit}}"], cwd=cwd)
+    if not out:
+        return None
+    out = out.strip()
+    return out if re.fullmatch(r"[0-9a-f]{40}", out) else None
 
 
 def _git_paths(args, cwd):
@@ -226,6 +245,9 @@ def _changed_paths_for_gate(root, args):
     else the working tree plus untracked files (local)."""
     base = getattr(args, "base", None)
     if base:
+        base = _resolve_commit(base, root)
+        if base is None:
+            return []
         out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
             out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
@@ -249,6 +271,13 @@ def _gate_floor_paths(root, args, report, sha):
     """
     base = getattr(args, "base", None)
     if base:
+        # Resolve to a commit id FIRST. `--base=--cached` was passed through to
+        # `git diff` as an OPTION, which diffed the index, found nothing, and
+        # gated clean. Anything that does not resolve to a commit is refused
+        # before it can reach git as a flag.
+        base = _resolve_commit(base, root)
+        if base is None:
+            return [], True
         out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
             out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
@@ -265,8 +294,14 @@ def _gate_floor_paths(root, args, report, sha):
     paths = list(tracked) + list(untracked)
 
     # ...plus whatever the evidence does not already cover.
+    # The commit being gated is ALWAYS classified, including when the evidence
+    # sits on it. The old expression returned None in exactly that case — the
+    # normal attest path — so a migration could be committed, attested L0 with
+    # tests, and sail through: the floor never looked at it. `prior^..sha` also
+    # re-covers the evidence commit itself, which is the point: the recorded
+    # tier has to match what that commit actually contains.
     prior = (report or {}).get("commit")
-    rng = f"{prior}..{sha}" if prior and prior != sha else (None if prior else f"{sha}^..{sha}")
+    rng = f"{prior}^..{sha}" if prior and prior != sha else f"{sha}^..{sha}"
     if rng:
         out = _git_paths(["diff", "--name-only", rng], root)
         if out is None:
@@ -296,7 +331,11 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
         # docs/workerPool.md and docs/credentialsGuide.md were all classified L3 —
         # a floor that demands a red-team review of a markdown file is a floor
         # people learn to route around, which costs more than it ever protects.
-        if _INERT_RE.search(path):
+        # ...unless the name itself carries meaning. requirements.txt is a
+        # dependency manifest that happens to end in .txt, and the blanket inert
+        # shortcut demoted it from L2 to L0 — a regression introduced by the fix
+        # for documentation false positives.
+        if _INERT_RE.search(path) and not _NAMED_NOT_INERT.search(path):
             matched = ("L0", "documentation / styling (inert regardless of name)")
         for rule_tier, rx, why in (() if matched else _RISK_RULES_C):
             if rx.search(path):
@@ -368,7 +407,13 @@ def git(args, cwd=None):
     """Run a git command; return stdout or None on failure."""
     try:
         out = subprocess.run(
-            ["git"] + args, cwd=cwd, capture_output=True, text=True, timeout=30
+            ["git"] + args, cwd=cwd, capture_output=True, text=True, timeout=30,
+            # Strict UTF-8 made a non-decodable FILENAME raise, which the gate
+            # caught and softened to an L1 floor — an L3 change passing on tests
+            # alone because someone's file was latin-1. surrogateescape keeps the
+            # bytes intact and round-trippable, so the path is classified rather
+            # than lost.
+            errors="surrogateescape",
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1561,11 +1606,14 @@ def cmd_classify(args):
         # a fix lands in one place and quietly misses the other.
         root = repo_root()
         base = getattr(args, "base", None)
-        paths = _changed_paths_for_gate(root, args)
-        if base and not paths:
-            print("coverloop classify: cannot read the diff — is this a git repo "
-                  "with the given base?", file=sys.stderr)
+        if base and _resolve_commit(base, root) is None:
+            # An EMPTY diff is a legitimate answer ("nothing changed since that
+            # ref"); only an unresolvable ref is an error. Conflating the two
+            # made `classify --base HEAD` report the repo as unreadable.
+            print(f"coverloop classify: cannot resolve --base {base!r} — is this "
+                  f"a git repo, and does that ref exist?", file=sys.stderr)
             sys.exit(2)
+        paths = _changed_paths_for_gate(root, args)
         source = (f"diff {base}...HEAD" if base
                   else "working tree vs HEAD (incl. untracked)")
 

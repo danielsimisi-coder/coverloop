@@ -1085,15 +1085,23 @@ class SecondRoundRegressions(unittest.TestCase):
         every local check on 3.13 stayed green. Grepping the source is cheap
         insurance against a version this machine may not have installed."""
         import glob
-        offenders = re.compile(r"(?:\}|\*|\+|\?)\+(?![^\s]*['\"]\s*[,)])|\(\?>")
-        for path in glob.glob(os.path.join(BIN_DIR, "*.py")) + [CLI]:
+        # Atomic groups, and possessive quantifiers in all four spellings.
+        offenders = (
+            ("atomic group (?>...)", re.compile(r"\(\?>")),
+            ("possessive {n,m}+", re.compile(r"\{\d+(?:,\d*)?\}\+")),
+            ("possessive *+", re.compile(r"(?<!\\)\*\+")),
+            ("possessive ++", re.compile(r"(?<![\\+])\+\+")),
+            ("possessive ?+", re.compile(r"(?<!\\)\?\+")),
+        )
+        for path in sorted(glob.glob(os.path.join(BIN_DIR, "*.py")) + [CLI]):
             src = open(path, encoding="utf-8").read()
             for lineno, line in enumerate(src.splitlines(), 1):
-                if "re.compile" not in line and not line.strip().startswith('r"'):
+                if "re.compile" not in line and not line.strip().startswith(('r"', 'rf"')):
                     continue
-                if "(?>" in line or re.search(r"\{\d+(?:,\d*)?\}\+", line):
-                    self.fail(f"{os.path.basename(path)}:{lineno} uses regex syntax "
-                              f"that needs Python 3.11: {line.strip()[:70]}")
+                for label, rx in offenders:
+                    if rx.search(line):
+                        self.fail(f"{os.path.basename(path)}:{lineno} uses {label}, "
+                                  f"which needs Python 3.11: {line.strip()[:70]}")
 
     def test_unreadable_quota_log_refuses_rather_than_allows(self):
         import egress_cap as cap
