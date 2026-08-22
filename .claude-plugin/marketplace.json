@@ -1,5 +1,6 @@
 {
   "name": "coverloop",
+  "description": "Coverloop — the safety layer for AI-written production code: risk-tiered gates, independent cross-lineage review, and evidence bound to the commit.",
   "owner": {
     "name": "Daniel Siman Tov",
     "url": "https://github.com/danielsimisi-coder/coverloop"
