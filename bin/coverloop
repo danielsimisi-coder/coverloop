@@ -118,11 +118,11 @@ TIERS = ("L0", "L1", "L2", "L3")
 #        `models/`, `model.ts` and `Schema.ts` still match: only the HUMP form is
 #        restricted, because that is the only form the collision takes.
 def _kw(words):
-    return f"(?:{words})(?=(?-i:[A-Z])|[/._-]|$)"
+    return rf"(?:{words})(?=(?-i:[A-Z])|[/._\-\s]|$)"
 
 
 def _kws(words):
-    return f"(?:(?-i:{words})(?=(?-i:[A-Z]))|(?:{words})(?=[/._-]|$))"
+    return rf"(?:(?-i:{words})(?=(?-i:[A-Z]))|(?:{words})(?=[/._\-\s]|$))"
 
 
 RISK_RULES = (
@@ -130,16 +130,16 @@ RISK_RULES = (
     ("L3", r"(^|/)migrations?/", "database migration"),
     ("L3", r"\.sql$", "raw SQL"),
     ("L3", r"(^|/)(auth|authn|authz|authentication|authorization|authorisation"
-           r"|rls|permissions?|policies|policy|acl)(?=(?-i:[A-Z])|[/._-]|$)",
+           r"|rls|permissions?|policies|policy|acl)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "authentication / authorisation / RLS"),
     ("L3", r"(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
-           r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._-]|$)",
+           r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "money path"),
-    ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._-]|$)|(^|/)\.env",
+    ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._\-\s]|$)|(^|/)\.env",
      "secrets / credentials"),
     ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)",
      "CI / deploy configuration"),
-    ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._-]|$)",
+    ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "worker / cron / queue"),
     ("L3", r"(^|/)" + _kws("schemas?|models?")
            + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json)$",
@@ -191,9 +191,34 @@ IRREVERSIBLE_RE = re.compile(
     r"(^|/)migrations?/"                                  # schema migrations
     r"|\.sql$"                                            # raw SQL
     r"|(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
-    r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._-]|$)"
-    r"|(^|/)(rls|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._-]|$)",
+    r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._\-\s]|$)"
+    r"|(^|/)(rls|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._\-\s]|$)",
     re.I)
+
+
+def _git_paths(args, cwd):
+    """Git path output, parsed losslessly. Returns None if git failed.
+
+    Two ways the old `--name-only` + splitlines() collection lost paths, and both
+    are classifier EVASION, not cosmetics:
+
+      * rename detection reported only the DESTINATION, so moving
+        src/authGuard.ts to src/guard.ts made an auth change look like an
+        unrecognised source file. `--no-renames` reports both sides.
+      * git C-quotes any name containing a newline or tab, and splitlines() then
+        tore that single path into two meaningless fragments. `-z` emits raw
+        names separated by NUL, so there is nothing to quote and nothing to tear.
+    """
+    # `--no-renames` is a diff option; ls-files rejects it, and appending it
+    # blindly made every collection return None — which the caller then, quite
+    # correctly, read as "cannot determine the paths" and held at L1. Correct
+    # fail-closed behaviour, wrong cause, and it would have masked the evasion
+    # fix it was meant to deliver.
+    extra = ["--no-renames", "-z"] if args and args[0] == "diff" else ["-z"]
+    out = git(args + extra, cwd=cwd)
+    if out is None:
+        return None
+    return [p for p in out.split("\0") if p.strip()]
 
 
 def _changed_paths_for_gate(root, args):
@@ -201,14 +226,13 @@ def _changed_paths_for_gate(root, args):
     else the working tree plus untracked files (local)."""
     base = getattr(args, "base", None)
     if base:
-        out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
+        out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
-            out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
-    else:
-        tracked = git(["diff", "--name-only", "HEAD"], cwd=root) or ""
-        untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root) or ""
-        out = (tracked + "\n" + untracked).strip()
-    return [p for p in (out or "").splitlines() if p.strip()]
+            out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
+        return out or []
+    tracked = _git_paths(["diff", "--name-only", "HEAD"], root) or []
+    untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root) or []
+    return list(tracked) + list(untracked)
 
 
 def _gate_floor_paths(root, args, report, sha):
@@ -225,31 +249,31 @@ def _gate_floor_paths(root, args, report, sha):
     """
     base = getattr(args, "base", None)
     if base:
-        out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
+        out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
-            out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
+            out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
         if out is None:
             # An unresolvable --base is a caller error, not an all-clear. Reading
             # it as "no files changed" turned a typo into a passing gate.
             return [], True
-        return [p for p in out.splitlines() if p.strip()], False
+        return out, False
 
-    tracked = git(["diff", "--name-only", "HEAD"], cwd=root)
-    untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root)
+    tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
+    untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
     if tracked is None or untracked is None:
         return [], True
-    paths = [p for p in (tracked + "\n" + untracked).splitlines() if p.strip()]
+    paths = list(tracked) + list(untracked)
 
     # ...plus whatever the evidence does not already cover.
     prior = (report or {}).get("commit")
     rng = f"{prior}..{sha}" if prior and prior != sha else (None if prior else f"{sha}^..{sha}")
     if rng:
-        out = git(["diff", "--name-only", rng], cwd=root)
+        out = _git_paths(["diff", "--name-only", rng], root)
         if out is None:
             # No parent (root commit) is the one benign case: list the commit's
             # own files rather than guessing.
-            out = git(["show", "--name-only", "--pretty=format:", sha], cwd=root) or ""
-        paths += [p for p in out.splitlines() if p.strip()]
+            out = _git_paths(["show", "--name-only", "--pretty=format:", sha], root) or []
+        paths += out
     return sorted(set(paths)), False
 
 
@@ -1529,32 +1553,21 @@ def cmd_classify(args):
         paths = list(args.paths)
         source = "explicit paths"
     else:
+        # ONE collector, shared with the gate. This block used to carry its own
+        # copy of the same git calls — a third one — and the copies drifted: the
+        # gate learned to parse NUL-separated names while `classify` kept
+        # splitting lines, so the very same repo reported different paths
+        # depending on which command you ran. Duplicated collection logic is how
+        # a fix lands in one place and quietly misses the other.
         root = repo_root()
         base = getattr(args, "base", None)
-        if base:
-            out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
-            source = f"diff {base}...HEAD"
-            if out is None:
-                # Not a merge-base situation (e.g. base is not an ancestor);
-                # fall back to a plain two-dot diff rather than silently
-                # classifying nothing.
-                out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
-                source = f"diff {base} HEAD"
-        else:
-            # Default: the working tree against HEAD, plus untracked files —
-            # AI-written files are untracked by default, and missing them would
-            # be exactly the silent under-classification this command exists to
-            # prevent.
-            tracked = git(["diff", "--name-only", "HEAD"], cwd=root) or ""
-            untracked = git(["ls-files", "--others", "--exclude-standard"],
-                            cwd=root) or ""
-            out = (tracked + "\n" + untracked).strip()
-            source = "working tree vs HEAD (incl. untracked)"
-        if out is None:
+        paths = _changed_paths_for_gate(root, args)
+        if base and not paths:
             print("coverloop classify: cannot read the diff — is this a git repo "
                   "with the given base?", file=sys.stderr)
             sys.exit(2)
-        paths = [p for p in out.splitlines() if p.strip()]
+        source = (f"diff {base}...HEAD" if base
+                  else "working tree vs HEAD (incl. untracked)")
 
     tier, reasons = classify_paths(paths)
 
@@ -1606,8 +1619,18 @@ def cmd_gate(args):
     # exact fail-open v2.10 claimed to close. The floor now runs unconditionally:
     # there is no flag to switch it off, because a switch is the hole.
     auto_floor, auto_reasons = None, []
+    auto_paths, unknown = [], True
     try:
         auto_paths, unknown = _gate_floor_paths(root, args, report, sha)
+        if unknown and getattr(args, "base", None):
+            # Substituting an L1 floor let a valid L1 report gate successfully
+            # over an unresolvable base — the caller believes they reviewed a
+            # range that was never read. A base git cannot resolve is a caller
+            # error; say so and stop.
+            print(f"coverloop gate: cannot resolve --base {args.base!r} — nothing "
+                  f"was classified. Fix the ref (in CI, fetch the base branch "
+                  f"first).", file=sys.stderr)
+            sys.exit(2)
         if unknown:
             auto_floor = "L1"
             auto_reasons = ["could not determine the changed paths; floor held at L1"]
@@ -1693,7 +1716,12 @@ def cmd_gate(args):
                           or args.require_executed)
     human_required = True
     if tier == "L3" and getattr(args, "human_gate_scope", "all") == "irreversible":
-        _changed = _changed_paths_for_gate(root, args)
+        # The SAME path set the floor was derived from — including the committed
+        # range. This used to call the worktree-only collector, so after an
+        # attestation the only "changed" path was the untracked report itself;
+        # that matches nothing irreversible, and a committed authz change was
+        # waved through without the exemption ever looking at it.
+        _changed = auto_paths if not unknown else []
         # No visible change set (a bare HEAD check) is NOT evidence of safety:
         # fall back to demanding the human.
         human_required = (not _changed) or any(IRREVERSIBLE_RE.search(p) for p in _changed)

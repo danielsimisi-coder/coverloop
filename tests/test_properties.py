@@ -1176,5 +1176,100 @@ class ThirdRoundRegressions(unittest.TestCase):
             with open(log) as fh:
                 self.assertEqual(sum(1 for line in fh if line.strip()), 5)
 
+
+class FourthRoundRegressions(unittest.TestCase):
+    """Path collection. Three copies of the same git calls had drifted apart, and
+    two of them lost paths in ways an author could exploit."""
+
+    def _repo(self, d):
+        run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+        run("git", "init", "-q", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "t")
+        os.makedirs(os.path.join(d, "src"), exist_ok=True)
+        open(os.path.join(d, "README.md"), "w").write("x\n")
+        return run
+
+    def test_a_rename_cannot_hide_the_dangerous_name(self):
+        # `git diff --name-only` reports only the DESTINATION of a rename, so
+        # moving src/authGuard.ts to src/guard.ts turned an auth change into an
+        # unrecognised source file. Renaming your way past the floor is the
+        # cheapest evasion there is.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            open(os.path.join(d, "src", "authGuard.ts"), "w").write("export const x = 1\n")
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            run("git", "mv", "src/authGuard.ts", "src/guard.ts")
+            run("git", "commit", "-qm", "rename")
+            r = subprocess.run([CLI, "gate", "--min-tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertIn("L3", r.stdout + r.stderr,
+                          "a rename hid the auth origin from the floor")
+
+    def test_a_path_git_would_quote_is_not_torn_in_half(self):
+        # git C-quotes names containing a newline; splitting on lines then tore
+        # one path into two meaningless fragments, neither of which matched.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            weird = os.path.join(d, "src", "auth\nGuard.ts")
+            try:
+                open(weird, "w").write("x\n")
+            except OSError:
+                self.skipTest("filesystem rejects newlines in names")
+            run("git", "add", "-A")
+            r = subprocess.run([CLI, "classify", "--quiet"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), "L3")
+
+    def test_classify_and_gate_collect_the_same_paths(self):
+        # The two commands each had their own copy of the collection logic, so a
+        # fix to one silently missed the other. This is the property that keeps
+        # them honest, whatever the collector does next.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            open(os.path.join(d, "src", "authGuard.ts"), "w").write("x\n")
+            c = subprocess.run([CLI, "classify", "--quiet"], cwd=d,
+                               capture_output=True, text=True).stdout.strip()
+            g = subprocess.run([CLI, "gate", "--min-tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertEqual(c, "L3")
+            self.assertIn("L3", g.stdout + g.stderr)
+
+    def test_unresolvable_base_is_a_usage_error_not_an_L1_floor(self):
+        # Substituting an L1 floor let a valid L1 report gate successfully over a
+        # base that was never read — the caller believes a range was reviewed.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            r = subprocess.run([CLI, "gate", "--min-tier", "L0", "--base", "no-such-ref"],
+                               cwd=d, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, r.stderr + r.stdout)
+            self.assertIn("cannot resolve", r.stderr)
+
+    def test_lock_failure_refuses_rather_than_racing(self):
+        import egress_cap as cap
+        old = os.environ.copy()
+        with tempfile.TemporaryDirectory() as d:
+            # A directory where the lock file cannot be created.
+            os.environ.update(COVERLOOP_EGRESS_LOG=os.path.join(d, "ro", "eg.log"),
+                              COVERLOOP_DAILY_REVIEW_CAP="5")
+            os.makedirs(os.path.join(d, "ro"))
+            os.chmod(os.path.join(d, "ro"), 0o500)
+            os.environ.pop("COVERLOOP_ALLOW_UNLOCKED_CAP", None)
+            try:
+                with self.assertRaises(SystemExit) as ctx:
+                    cap.reserve_daily_slot(lambda: None)
+                self.assertEqual(ctx.exception.code, 4)
+            finally:
+                os.chmod(os.path.join(d, "ro"), 0o700)
+                os.environ.clear()
+                os.environ.update(old)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -2,6 +2,34 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — round four: path collection (PROTOCOL v2.10.3)
+
+The floor is only as good as the list of paths it is handed, and that list was
+being built three separate times by three copies of the same git calls. The
+copies drifted, and two of them lost paths in ways an author could exploit.
+
+- **A rename hid the dangerous name.** `git diff --name-only` reports only the
+  destination, so moving `src/authGuard.ts` to `src/guard.ts` turned an auth
+  change into an unrecognised source file. Collection now passes `--no-renames`
+  and both sides are seen.
+- **A path git would quote was torn in half.** Names containing a newline or tab
+  are C-quoted, and splitting on lines produced two fragments that matched
+  nothing. Collection is now NUL-separated. Whitespace also counts as a keyword
+  boundary, so a weird name can only classify higher, never lower.
+- **classify and gate now share one collector.** They had drifted to the point
+  where the same repo reported different paths depending on which command ran,
+  and a test now asserts they agree.
+- **An unresolvable `--base` is a usage error.** It used to soften to an L1
+  floor, so a valid L1 report gated successfully over a range that was never
+  read.
+- **The narrowed human stop judges the committed range.** It was reading the
+  worktree only, so after an attestation the sole visible path was the untracked
+  report — which matches nothing irreversible, waving a committed authz change
+  through without ever looking at it.
+- **A cap that cannot lock now refuses.** The fallback silently recreated the
+  race at the exact moment the guarantee mattered. `COVERLOOP_ALLOW_UNLOCKED_CAP=1`
+  opts back in, deliberately.
+
 ## 2026-08-22 — rounds three and four (PROTOCOL v2.10.2)
 
 - **The floor stopped crying danger at UI components.** The camelCase boundary that

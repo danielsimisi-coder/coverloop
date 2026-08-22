@@ -119,9 +119,20 @@ def reserve_daily_slot(record_attempt):
                 fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
         return
     except OSError as exc:
+        # Falling back to unlocked check-then-record recreates exactly the race
+        # this function exists to close, and does so silently at the moment the
+        # guarantee is most needed. Default to refusing; the operator can opt
+        # back into the weaker behaviour, but they have to say so.
+        if os.environ.get("COVERLOOP_ALLOW_UNLOCKED_CAP") != "1":
+            print(f"egress cap: cannot lock the quota log ({exc}); refusing to "
+                  f"send rather than allow parallel reviewers past the cap. Set "
+                  f"COVERLOOP_ALLOW_UNLOCKED_CAP=1 to accept that risk, or "
+                  f"COVERLOOP_DAILY_REVIEW_CAP=0 to disable the cap.",
+                  file=sys.stderr)
+            sys.exit(4)
         print(f"egress cap: proceeding without a lock ({exc}); the daily cap is "
-              f"still enforced but is not safe against reviewers running in "
-              f"parallel.", file=sys.stderr)
+              f"still enforced but is NOT safe against reviewers running in "
+              f"parallel (COVERLOOP_ALLOW_UNLOCKED_CAP=1).", file=sys.stderr)
     _check_and_record(cap, record_attempt)
 
 
