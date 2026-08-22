@@ -1,7 +1,7 @@
-# Coverloop — Multi-Model Production Protocol — v2.7.3
+# Coverloop — Multi-Model Production Protocol — v2.10.0
 
-> **PROTOCOL_VERSION: v2.7.3** (full multi-lineage audit hardening) · **CONTRACT_VERSION: v2.6** (the Operating Contract block inlined in each project's `CLAUDE.md`; bumps only when the contract's CONTENT changes — see §13. v2.5 made it version-agnostic; **v2.6 is the first genuine content change since** — it adds GPT-5.6 Sol + per-tier effort routing to the roster and the off-policy review rule, so it triggers a one-time fleet contract resync). History: [`CHANGELOG.md`](CHANGELOG.md).
-> **v2.7.3 in one line:** a full multi-lineage audit (Claude + real GPT-5.6 Sol + real GLM, every finding adversarially verified) closed 4 P1s and hardened the rest — no P0s: a laundered failed-capture forge (withheld-marker check now source-agnostic), the `_KEY` secret-family the filter missed, an untracked-file fail-open in the Stop hook, and an honestly-labeled `--require-executed` ceiling; plus symlink-safe evidence writes, monotonic tier floors, an opt-in `--require-clean-tree`, and shape-guarded reports. **v2.7.2 kept:** off-policy review + Sol effort routing (high L2 / xhigh L3 / max deadlock, never ultra) + PII redaction. v2.7 kept: the fail-closed commit-bound gate as a required CI check.
+> **PROTOCOL_VERSION: v2.10.0** (deterministic risk floor) · **CONTRACT_VERSION: v2.8** (the Operating Contract block inlined in each project's `CLAUDE.md`; bumps only when the contract's CONTENT changes — see §13. v2.5 made it version-agnostic; v2.6 added GPT-5.6 Sol + per-tier effort routing and the off-policy review rule; v2.7 added §9b (next-task model + effort recommendation); **v2.8 adds §2a — the risk tier is no longer self-declared: `coverloop classify` derives a deterministic floor from the changed paths and the gate takes the MAX**, so it triggers a one-time fleet contract resync). History: [`CHANGELOG.md`](CHANGELOG.md).
+> **v2.10.0 in one line:** `coverloop classify` turns the risk tier from a declaration into a **derived floor** — migrations, auth/RLS, money, secrets, CI/deploy and workers are L3 by path, unrecognised files are L1 (never L0), and nothing may lower a deterministic floor. **v2.9.0 kept:** every response that ends with a next task now closes with a one-line **model + effort recommendation** for that task (§9b) — so the operator never burns a frontier model on a mechanical job, nor a cheap one on an L3. **v2.7.3 kept:** a full multi-lineage audit (Claude + real GPT-5.6 Sol + real GLM, every finding adversarially verified) closed 4 P1s and hardened the rest — no P0s: a laundered failed-capture forge (withheld-marker check now source-agnostic), the `_KEY` secret-family the filter missed, an untracked-file fail-open in the Stop hook, and an honestly-labeled `--require-executed` ceiling; plus symlink-safe evidence writes, monotonic tier floors, an opt-in `--require-clean-tree`, and shape-guarded reports. **v2.7.2 kept:** off-policy review + Sol effort routing (high L2 / xhigh L3 / max deadlock, never ultra) + PII redaction. v2.7 kept: the fail-closed commit-bound gate as a required CI check.
 > **MODEL_ROSTER_LAST_VERIFIED: 2026-07-02** (GLM full-ZDR re-verified via install self-tests on both VPS users; M3 `data_collection:deny` verified 2026-06-28, enabled for your-vps-user + your-vps-user) — endpoint availability on these dates, not a permanent fact. Re-verify with `glm-review --zdr-selftest` / `m3-review --privacy-selftest` when reusing later.
 > **Canonical location:** project-root `CLAUDE.md` (auto-loaded by Claude Code each session). For Codex CLI and other agents, symlink `AGENTS.md -> CLAUDE.md` so all tools read one source of truth (a symlink, not a fork, to prevent drift). If symlinks are not supported or unsafe for the repo/tooling, `AGENTS.md` must contain ONLY a short pointer to `CLAUDE.md` (e.g. "See CLAUDE.md — single source of truth") and must never become a fork. Helper commands MUST be invoked by ABSOLUTE path inside Claude Code (it does not inherit the terminal `~/bin` PATH); record the resolved absolute paths for `glm-*`/`m3-*` in the project Risk Map on first run.
 
@@ -30,7 +30,7 @@ Default to the LIGHTEST safe row; when unsure between two rows pick the heavier 
 2. **Load memory.** Read the project's **git-tracked** memory (`docs/MEMORY.md` or `.agent/memory/` — see §10a). Machine-local Claude memory does NOT travel between the Mac / your VPS / a second VPS — durable lessons must live in the repo or they never reach the other sessions.
 3. **Read the Risk Map + `docs/REVIEW_LEDGER.md`** (skip findings already marked rejected/wontfix).
 4. **Resolve helper paths** (`glm-*`/`m3-*`, §0) and record them in the Risk Map.
-5. **Restate the Task Card + risk tier (§4)** before touching code.
+5. **Restate the Task Card + risk tier (§4)** before touching code. **Do not hand-pick the tier alone — run `coverloop classify` and take the MAX** of what it says and your own judgement (§2a).
 
 **Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex** gates diffs (line-level correctness) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **M3 (`data_collection:deny`, L3 only)** optional 2nd auditor (value is in *divergence*) · **the operator** gates risk. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
@@ -101,6 +101,22 @@ Before every task, classify risk first. Do not run the full heavy loop for every
 If a Level-3 trigger is present and the declared level is below 3, that is a protocol violation, not a judgment call.
 
 ---
+
+## 2a. Deterministic risk floor — `coverloop classify` (the tier is no longer just declared)
+
+Every gate in this protocol keys off the risk tier — so a change mislabelled L1 skips the L3 gates **silently**, with no alarm and no evidence that anything was skipped. A self-declared tier was the one place the whole chain could be defeated by a typo or by optimism, and `docs/GATE.md` has always been honest that the tier is self-declared unless CI supplies a floor. `coverloop classify` closes that: it derives a floor from **the paths that actually changed**.
+
+```bash
+coverloop classify                       # explain the floor and why
+coverloop classify --base origin/main    # classify a branch instead of the worktree
+coverloop gate --min-tier "$(coverloop classify --quiet)"   # wire it — the floor cannot be forgotten
+```
+
+**Floors (path-based, first match per file, highest tier wins):** migrations/`.sql`/schema, auth·authz·RLS·permissions, billing·payments·checkout, secrets·`.env`, CI/deploy config (`.github/workflows`, Dockerfile, `vercel.json`, `fly.toml`), workers·cron·queues → **L3**. API/routes/handlers/middleware, shared state (hooks/context/store), dependency manifests → **L2**. Docs, stylesheets, repo metadata → **L0**. **Anything unrecognised → L1, never L0 — silence is not evidence of safety.** 10+ changed files forces at least L2: breadth is itself a risk signal.
+
+**The rules are path-based on purpose.** Paths are cheap, stable, and reviewable, and someone dodging L3 by renaming a migration out of `migrations/` has to do something **visible in the diff**. Content sniffing was deliberately rejected: it is easy to defeat with formatting and produces false negatives that read like safety.
+
+**Direction is one-way.** `classify` produces a FLOOR: `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier, and `attest --tier` already refuses to downgrade. So AI or a human may **raise** a tier; **neither may lower a deterministic floor**. Over-classification is not free either — a floor that cries L2 at a shell script trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions.
 
 ## 3. Model Roster
 
@@ -273,6 +289,32 @@ A task is CONVERGED and review STOPS when ALL hold: (1) tests/typecheck/lint/bui
 
 ---
 
+## 9b. Next-task model recommendation (MANDATORY — every response)
+
+**Every response that ends with a next task MUST close with a one-line model recommendation:** which Claude Code model and reasoning effort to run that task on. The operator chooses the model *before* spending the task — a frontier model on a mechanical job is pure waste, and a cheap model on an L3 is a correctness risk. **No next task ⇒ no line** (never pad a response to satisfy the rule).
+
+Format — the last line of the response:
+
+> ▸ **Next:** `<task, ≤8 words>` → **`<model>` · `<effort>` effort** — `<why, ≤12 words>`
+
+| Next task looks like | Model | `/model` id | Effort |
+|---|---|---|---|
+| **L0** — copy/comments/CSS, renames, formatting, doc tweaks, log triage, mechanical sweeps | **Haiku 4.5** | `claude-haiku-4-5-20251001` | low |
+| **L1** — isolated component, small bug fix, contained refactor, tests against a written spec | **Sonnet 5** | `claude-sonnet-5` | medium |
+| **L2** — product flow, multi-file feature, non-trivial refactor, reviewing a moderate diff | **Sonnet 5** | `claude-sonnet-5` | high |
+| **L3** — money/auth·RLS, migrations, schema, concurrency, deploy order; architecture design; hard debugging | **Opus 5** | `claude-opus-5` | high → xhigh |
+| **Deadlock** — reviewers disagree, or 2+ failed attempts on the same bug | **Opus 5** | `claude-opus-5` | max (ONE shot, then escalate to the operator) |
+
+Binding rules:
+1. **Risk first, cost second.** Classify the tier per §2 (tie → heavier), *then* read the model off the tier. Never downgrade a genuine L3 to save tokens — per the DECISION CARD, "MANDATORY items cannot be skipped to save tokens."
+2. **Effort is a dial, not a default** (§9.7): drop it for mechanical stages even on a capable model, and don't spend `xhigh`/`max` when a high pass already produced a clean, well-evidenced result (§9).
+3. **Avoid Fable 5 for routine work.** It is capped at ~50% of the weekly limit and draws down faster than Opus; the fleet moved off it 2026-07-27 after a session hit a hard "You've reached your Fable 5 limit" wall. Use only when the operator asks for it.
+4. **Several next tasks?** One line each (max 3), or one line for the heaviest with the others named.
+5. **Flag when it is cheaper than it sounds.** If a scary-sounding task is really L0/L1 ("fix the migration" = a typo in a comment), recommend the cheap model and say so — surfacing that gap is the entire point of this rule.
+6. **Recommend, never switch.** State the recommendation; the operator runs `/model`. Do not change the session's model on your own.
+
+---
+
 ## 10. Final Report Format
 
 For risky work, emit:
@@ -287,10 +329,13 @@ billing/auth/data_behavior_changed: yes|no
 risks_remaining: ...
 gates_still_required: ...
 next_action: ...
+next_model: <model> · <effort>   # §9b — omit ONLY when there is no next action
 safe_to_pause: yes|no
 ```
 
 Never leave the reader thinking something is live when it is only merged.
+
+**§9b applies to every response, not just this report block:** whenever a reply ends with a next task, close it with the one-line model + effort recommendation.
 
 **After the report, run `reflect-and-save`** (Section 10a): persist any durable lesson to memory.
 

@@ -108,7 +108,9 @@ You ask for a routine change. It touches the database → Coverloop treats it as
 >
 > **You:** never even saw the bug.
 
-Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop saved you** — because every bug has to find a gap, and Coverloop covers every gap.
+Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop saved you** — because this bug had to slip past a reviewer from a different lineage, an adversarial red-team, *and* a test that actually ran. It didn't.
+
+That is the honest claim, and it is the only one worth making: **Coverloop does not make AI coding safe. It makes unsafe assumptions harder to ship unnoticed.** Bugs still get through — every reviewer here misses things, and the [c-CRAB benchmark](https://arxiv.org/abs/2603.23448) found leading review agents solve only ~40% of review tasks between them. What the loop changes is how many independent things a bug has to defeat on its way out, and whether the evidence that it was checked is still true at the commit you ship.
 
 ---
 

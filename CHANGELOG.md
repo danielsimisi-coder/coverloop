@@ -2,6 +2,68 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — `coverloop classify`: the risk tier stops being self-declared (PROTOCOL v2.10.0, CONTRACT v2.8)
+
+Every gate keys off the risk tier, but the tier was **declared** at `init`. A change mislabelled L1
+skipped the L3 gates **silently** — no alarm, no evidence that anything was skipped. That was the one
+place the whole chain could be defeated by a typo or by optimism, and `docs/GATE.md` had always been
+honest that the tier is self-declared unless CI supplies a floor.
+
+**New `coverloop classify`** derives a FLOOR from the paths that actually changed:
+migrations/`.sql`/schema, auth·authz·RLS·permissions, billing·payments·checkout, secrets·`.env`,
+CI/deploy config, workers·cron·queues -> **L3**; API/routes/middleware, shared state, dependency
+manifests -> **L2**; docs/styles/repo metadata -> **L0**; **anything unrecognised -> L1, never L0**
+(silence is not evidence of safety); **10+ files -> at least L2** (breadth is itself a risk signal).
+`--base REF` classifies a branch, `--quiet` prints just the tier for
+`coverloop gate --min-tier "$(coverloop classify --quiet)"`. Reasons are printed with the matching
+file, so the verdict is auditable rather than asserted.
+
+**Direction is one-way.** `classify` emits a floor; `gate` already takes the MAX over every floor and
+the report's tier, and `attest --tier` already refuses to downgrade. AI or human may **raise** a tier;
+neither may lower a deterministic floor.
+
+**Two deliberate design choices.** (1) **Path-based, not content-sniffing**: paths are cheap, stable and
+reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in
+the diff*; content heuristics are easy to defeat with formatting and yield false negatives that read
+like safety. (2) **App-code rules are scoped to source extensions** — unscoped, `hooks/` matched this
+repo's own shell hooks and over-classified them L2. Over-classification is not free: a floor that cries
+L2 at a shell script trains people to bypass the gate, and a bypassed gate protects nothing. That
+false positive was caught while building the rules and is pinned by a regression test.
+
+Wired into the contract (§2a), the Session Start ritual, and `hooks/session-contract.sh` so it survives
+compaction. 10 new tests (163 total, green).
+
+**Honesty fix in the same release.** The README claimed *"every bug has to find a gap, and Coverloop
+covers every gap."* That is false and, in a safety tool, actively harmful — it manufactures the exact
+confidence the protocol exists to withhold. Replaced with the honest claim: **Coverloop does not make
+AI coding safe; it makes unsafe assumptions harder to ship unnoticed** — cited against
+[c-CRAB](https://arxiv.org/abs/2603.23448), which found leading review agents solve only ~40% of review
+tasks between them. `docs/EGRESS_SANDBOX.md` likewise softened "the core privacy guarantee" to "the core
+privacy controls", pointing at `redact()` and its documented residual false-negatives.
+
+## 2026-07-27 — §9b next-task model recommendation (PROTOCOL v2.9.0, CONTRACT v2.7)
+
+Operator-directed. Every response that ends with a next task must now close with ONE line naming the
+Claude Code **model + reasoning effort** to run that task on, so a task is never spent on a model that
+costs far more than it needs (or a cheap one on an L3).
+
+**New §9b** — format `▸ Next: <task> → <model> · <effort> effort — <why>`, with a routing table tied to
+the §2 risk tiers: L0 mechanical → Haiku 4.5/low · L1 → Sonnet 5/medium · L2 → Sonnet 5/high ·
+L3 (money/auth·RLS, migrations, schema, concurrency, architecture, hard debugging) → Opus 5/high→xhigh ·
+deadlock → Opus 5/max (one shot, then escalate). Binding rules: classify risk FIRST (tie → heavier) and
+read the model off the tier — **never downgrade a real L3 to save tokens**; effort is a dial, not a
+default; **recommend only, never self-switch the model** (the operator runs `/model`); no next task ⇒ no
+line. It also flags the inverse case — a scary-sounding task that is really L0/L1 — since surfacing that
+gap is the point of the rule.
+
+**Fable 5 deprecated for routine work:** capped at ~50% of the weekly limit and draws down faster than
+Opus; the fleet moved to `claude-opus-5` on 2026-07-27 after a live session hit a hard
+"You've reached your Fable 5 limit" wall (Fable sessions were degraded, not merely "a different model").
+
+CONTRACT_VERSION v2.6 → **v2.7** (contract content changed ⇒ one-time per-project resync).
+Wired into `hooks/session-contract.sh` so it re-injects at session start **and after every compaction** —
+the anti-drift path, since a rule that lives only in a doc read once is exactly what compaction discards.
+
 ## 2026-07-15 — secret-filter: scan()-side FP gate so review models can read auth code (v2026-07-15q)
 
 Operator-directed maintenance (MusicArcademy PR-21 gate). `scan()` structurally could not review

@@ -82,6 +82,103 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 REPORTS_DIR = os.path.join(CONFIG_DIR, "reports")
 TIERS = ("L0", "L1", "L2", "L3")
 
+# ---------------------------------------------------------------------------
+# Deterministic risk classification (the tier FLOOR, derived from the change
+# itself).
+#
+# Why this exists: every gate below keys off `risk_tier`, but that tier was
+# self-declared at `init`. A change mislabelled L1 silently skips the L3 gates —
+# no alarm, no evidence that anything was skipped. This is the one place the
+# whole chain could be defeated by a typo or by optimism. So the tier a human
+# (or an AI) declares is now only a FLOOR CANDIDATE: `classify` reads the paths
+# that actually changed and emits its own floor, and `gate --min-tier` takes the
+# MAX. Classification can therefore only ever RAISE the requirement.
+#
+# Rules are PATH-based on purpose: paths are cheap, stable, and reviewable, and
+# an attacker who renames a migration out of `migrations/` to dodge L3 has to do
+# something visible in the diff. Content sniffing was deliberately NOT used —
+# it is easy to defeat with formatting and produces false negatives that read as
+# safety. Deliberately blunt beats subtly wrong here.
+#
+# Ordering: first match wins per file, HIGHEST tier over all files wins overall.
+# Anything unrecognised is L1, never L0 — an unknown file is not evidence of
+# safety.
+RISK_RULES = (
+    # (tier, compiled path pattern, human-readable reason)
+    ("L3", r"(^|/)migrations?/", "database migration"),
+    ("L3", r"\.sql$", "raw SQL"),
+    ("L3", r"(^|/)(auth|authz|authentication|rls|permissions?|policies)(/|[._-])",
+     "authentication / authorisation / RLS"),
+    ("L3", r"(^|/)(billing|payments?|invoic|checkout|stripe|cardcom|subscription)",
+     "money path"),
+    ("L3", r"(^|/)(secrets?|credentials?|keys?)(/|[._-])|(^|/)\.env",
+     "secrets / credentials"),
+    ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)",
+     "CI / deploy configuration"),
+    ("L3", r"(^|/)(workers?|cron|jobs?|queue|scheduler)(/|[._-])",
+     "worker / cron / queue"),
+    ("L3", r"(^|/)(schema|models?)(/|[._-])", "schema / data model"),
+    # L2 — product surface and shared contracts: wide blast radius, no direct
+    # money/auth authority.
+    # NOTE: these two are scoped to APPLICATION SOURCE extensions on purpose.
+    # Unscoped, `hooks/` matched this protocol's own shell hooks and `api/`
+    # would match any stray text file — over-classification is not free: a
+    # floor that cries L2 at documentation trains people to bypass the gate,
+    # and a bypassed gate protects nothing.
+    ("L2", r"(^|/)(api|routes?|handlers?|controllers?|middleware)(/|[._-])"
+           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
+     "API surface"),
+    ("L2", r"(^|/)(hooks?|contexts?|providers?|store|state)(/|[._-])"
+           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
+     "shared application state"),
+    ("L2", r"(^|/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements.*\.txt|pyproject\.toml)$",
+     "dependency manifest"),
+    # L0 — provably inert: prose and styling only. Anything else falls through
+    # to the L1 default.
+    ("L0", r"\.(md|mdx|txt|rst|adoc)$", "documentation"),
+    ("L0", r"\.(css|scss|sass|less)$", "stylesheet"),
+    ("L0", r"(^|/)(LICENSE|CODEOWNERS|\.gitignore|\.editorconfig)$", "repo metadata"),
+)
+_RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
+
+# Above this many changed files a change is too broad to be L1 regardless of
+# what the individual paths look like — breadth is itself a risk signal.
+BREADTH_L2_FILES = 10
+
+
+def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
+    """Derive the deterministic tier FLOOR for a set of changed paths.
+
+    Returns (tier, reasons) where reasons is an ordered, de-duplicated list of
+    "<tier>: <why> (<example path>)" strings — the audit trail for the verdict.
+    An empty change set is L0 with no reasons; it asserts nothing.
+    """
+    paths = [p.strip() for p in paths if p and p.strip()]
+    if not paths:
+        return "L0", []
+    tier = "L0"
+    reasons, seen = [], set()
+    for path in paths:
+        matched = None
+        for rule_tier, rx, why in _RISK_RULES_C:
+            if rx.search(path):
+                matched = (rule_tier, why)
+                break
+        # Unrecognised => L1. Silence is not safety.
+        if matched is None:
+            matched = ("L1", "source change (no specific rule matched)")
+        rule_tier, why = matched
+        tier = tier_max(tier, rule_tier)
+        key = (rule_tier, why)
+        if key not in seen:
+            seen.add(key)
+            reasons.append(f"{rule_tier}: {why} ({path})")
+    if len(paths) >= breadth_threshold:
+        tier = tier_max(tier, "L2")
+        reasons.append(f"L2: breadth — {len(paths)} files changed "
+                       f"(>= {breadth_threshold})")
+    return tier, reasons
+
 # A committed EVIDENCE ARTIFACT under .coverloop/reports/ — EXACT name shapes
 # only: <40-hex commit sha>.json, or <sha>.<reviewer>.log. Anything else under
 # reports/ (e.g. .coverloop/reports/backdoor.py) is a NORMAL code file: not
@@ -1161,6 +1258,59 @@ def verify_commit_signature(root, sha, signers_file=None):
                    "or drop --require-signed-commit")
 
 
+def cmd_classify(args):
+    """Print the deterministic tier floor for the current change.
+
+    Designed to be piped straight into the gate, so the floor cannot be
+    forgotten:  coverloop gate --min-tier "$(coverloop classify --quiet)"
+    """
+    root = repo_root()
+    if getattr(args, "paths", None):
+        paths = list(args.paths)
+        source = "explicit paths"
+    else:
+        base = getattr(args, "base", None)
+        if base:
+            out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
+            source = f"diff {base}...HEAD"
+            if out is None:
+                # Not a merge-base situation (e.g. base is not an ancestor);
+                # fall back to a plain two-dot diff rather than silently
+                # classifying nothing.
+                out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
+                source = f"diff {base} HEAD"
+        else:
+            # Default: the working tree against HEAD, plus untracked files —
+            # AI-written files are untracked by default, and missing them would
+            # be exactly the silent under-classification this command exists to
+            # prevent.
+            tracked = git(["diff", "--name-only", "HEAD"], cwd=root) or ""
+            untracked = git(["ls-files", "--others", "--exclude-standard"],
+                            cwd=root) or ""
+            out = (tracked + "\n" + untracked).strip()
+            source = "working tree vs HEAD (incl. untracked)"
+        if out is None:
+            print("coverloop classify: cannot read the diff — is this a git repo "
+                  "with the given base?", file=sys.stderr)
+            sys.exit(2)
+        paths = [p for p in out.splitlines() if p.strip()]
+
+    tier, reasons = classify_paths(paths)
+
+    if getattr(args, "quiet", False):
+        print(tier)
+        return
+
+    print(f"coverloop classify: {tier}  ({len(paths)} file(s), {source})")
+    for r in reasons:
+        print(f"  - {r}")
+    if not reasons:
+        print("  - no files changed; this asserts nothing")
+    print("\nThis is a FLOOR, not a verdict: the gate takes the MAX of this, any "
+          "other --min-tier, and the report's own tier. It can only raise.")
+    print(f'Wire it:  coverloop gate --min-tier "$(coverloop classify --quiet)"')
+
+
 def cmd_gate(args):
     root = repo_root()
     sha = head_sha(root)
@@ -1335,6 +1485,16 @@ def main(argv=None):
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
     pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
     pi.set_defaults(fn=cmd_init)
+
+    pc = sub.add_parser("classify",
+                        help="derive the deterministic tier FLOOR from the changed paths")
+    pc.add_argument("--base", metavar="REF",
+                    help="classify REF...HEAD instead of the working tree (e.g. origin/main)")
+    pc.add_argument("--quiet", "-q", action="store_true",
+                    help="print only the tier, for piping into gate --min-tier")
+    pc.add_argument("paths", nargs="*",
+                    help="classify these paths instead of reading git")
+    pc.set_defaults(fn=cmd_classify)
 
     pa = sub.add_parser("attest", help="record evidence for the HEAD commit")
     pa.add_argument("--tier", choices=TIERS, help="risk tier of this change (monotonic — attest can only raise it)")

@@ -2,7 +2,8 @@
 
 This is the one v2.3 tripwire the install scripts **cannot** apply for you: it needs root and is
 machine-specific, so getting it wrong can lock the box out of the network. Treat it as **belt-and-
-suspenders**, not a prerequisite — the core privacy guarantee is already enforced at the tool layer.
+suspenders**, not a prerequisite — the core privacy controls already run at the tool layer (`redact()`
+on every packet before egress; its documented residual false-negatives are in `CHANGELOG.md`).
 
 ## What already protects you (no root needed — shipped by install.sh)
 - The worker runs as a **non-root user** (e.g. `your-vps-user` / `your-vps-user`), not root.

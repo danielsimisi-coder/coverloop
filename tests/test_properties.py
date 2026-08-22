@@ -651,3 +651,80 @@ class DailyReviewCap(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+def _load_coverloop():
+    """Load bin/coverloop as a module (it has no .py extension)."""
+    import importlib.util
+    spec = importlib.util.spec_from_loader("coverloop_mod", loader=None)
+    mod = importlib.util.module_from_spec(spec)
+    with open(CLI) as fh:
+        src = fh.read()
+    mod.__dict__["__name__"] = "coverloop_mod"
+    mod.__dict__["__file__"] = CLI  # the script resolves its own dir from this
+    exec(compile(src, CLI, "exec"), mod.__dict__)
+    return mod
+
+
+class DeterministicClassify(unittest.TestCase):
+    """The tier FLOOR derived from paths. These assert the SAFETY direction:
+    dangerous paths must never classify below their tier, and an unrecognised
+    path must never be treated as inert."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _cls(self, *paths):
+        return self.mod.classify_paths(list(paths))[0]
+
+    def test_migration_is_L3_however_it_is_labelled(self):
+        for p in ("supabase/migrations/20260803_x.sql", "db/migration/001.py",
+                  "server/migrations/add_col.ts"):
+            self.assertEqual(self._cls(p), "L3", p)
+
+    def test_money_auth_secrets_ci_worker_are_L3(self):
+        cases = ("src/billing/charge.ts", "app/auth/session.ts",
+                 "lib/rls/policies.sql", "config/secrets/keys.ts",
+                 ".github/workflows/deploy.yml", "src/worker/cron.ts",
+                 "prisma/schema.prisma", ".env.production")
+        for p in cases:
+            self.assertEqual(self._cls(p), "L3", p)
+
+    def test_unknown_source_is_L1_never_L0(self):
+        # Silence is not safety: a file no rule recognises is still code.
+        self.assertEqual(self._cls("src/mystery.ts"), "L1")
+        self.assertEqual(self._cls("weird/thing.bin"), "L1")
+
+    def test_docs_and_styles_only_are_L0(self):
+        self.assertEqual(self._cls("README.md", "docs/GATE.md", "app.css"), "L0")
+
+    def test_highest_tier_wins_across_files(self):
+        # One dangerous file drags the whole change up.
+        self.assertEqual(self._cls("README.md", "db/migrations/1.sql"), "L3")
+
+    def test_breadth_alone_forces_at_least_L2(self):
+        docs = [f"docs/page{i}.md" for i in range(12)]
+        self.assertEqual(self._cls(*docs), "L2")
+
+    def test_breadth_never_lowers_a_higher_tier(self):
+        paths = [f"docs/p{i}.md" for i in range(12)] + ["src/auth/login.ts"]
+        self.assertEqual(self.mod.classify_paths(paths)[0], "L3")
+
+    def test_empty_change_asserts_nothing(self):
+        tier, reasons = self.mod.classify_paths([])
+        self.assertEqual(tier, "L0")
+        self.assertEqual(reasons, [])
+
+    def test_protocol_shell_hooks_are_not_app_state(self):
+        # Regression: `hooks/` once matched this repo's own shell hooks and
+        # over-classified them as shared application state. Over-classification
+        # is friction, and friction gets the gate bypassed.
+        self.assertEqual(self._cls("hooks/pre-risky-git.sh"), "L1")
+        self.assertEqual(self._cls("src/hooks/useAuth.ts"), "L2")
+
+    def test_reasons_name_the_rule_and_the_file(self):
+        tier, reasons = self.mod.classify_paths(["db/migrations/1.sql"])
+        self.assertEqual(tier, "L3")
+        self.assertTrue(any("migration" in r and "1.sql" in r for r in reasons),
+                        reasons)
