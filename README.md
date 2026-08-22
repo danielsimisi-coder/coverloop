@@ -22,7 +22,7 @@ You let Claude write a migration, a Stripe webhook, an RLS policy. It says *"don
 
 **That is the problem.** Not that AI writes bad code — it mostly doesn't — but that on the ~10% of changes that can delete data, leak a tenant's rows, or break checkout, **the only reviewer is the author**, and it is an author with no stake in being wrong.
 
-Coverloop makes those changes earn their way out: it works out how dangerous the change is **from the diff itself**, sends it cold to a reviewer from a different lab, gives your tests the deciding vote, and **stops** on the ones that can hurt until you say go. On everything else it stays out of your way — a CSS tweak never calls a model.
+Coverloop makes those changes earn their way out: it works out how dangerous the change is **from the files it touches**, sends it cold to a reviewer from a different lab, gives your tests the deciding vote, and **stops** on the ones that can hurt until you say go. On everything else it stays out of your way — a CSS tweak never calls a model.
 
 ---
 
@@ -34,8 +34,14 @@ The question nobody answers on pages like this. Measured, on this repo:
 |---|---|---|
 | `coverloop classify` — how risky is this change? | **0.5 s** | free |
 | `coverloop gate` — is the evidence complete? | **0.5 s** | free |
-| An independent red-team pass on a real diff | **~14 s** | ~2¢ |
-| A full L3 change (tests + gate + red-team + your approval) | your test suite **+ ~30 s** | ~5–10¢ |
+| **L1** — tests, typecheck, no model call | your test suite | free |
+| **L2** — adds an independent diff gate | **+ ~14 s** | on your ChatGPT plan, not per-token |
+| **L3** — adds a red-team pass and hashed evidence | **+ ~30 s** | ~2–4¢ |
+| **L3, the part that costs you** — reading the diff and approving it | **however long you take** | your attention |
+
+That last row is the real price, and no table can shrink it. Everything above it is machine time you can ignore; the human gate is the one thing Coverloop deliberately will not do for you.
+
+**You also need a ChatGPT account** for the independent gate (see [below](#-the-independent-gate-needs-its-own-account-and-thats-deliberate)) — realistically a paid one if you ship daily. That is a recurring cost this page would be dishonest to leave out of a section called "what it actually costs you".
 
 **And how often does that happen?** Here is `classify` run over the last 40 real commits of three production repos:
 
@@ -45,22 +51,24 @@ The question nobody answers on pages like this. Measured, on this repo:
 | Music app — game logic, UI, no money path | 8% | 45% | 47% | **0%** |
 | Music app — second codebase | 18% | 40% | 40% | **2%** |
 
-Read that honestly: **if your product is billing plus auth plus migrations, roughly half your commits will take the long path.** That is not the tool being paranoid — those are the commits that can cost you a customer. The other half cost you a second and a half, total.
+Read that honestly, because it is the most important thing on this page: **if your product is billing plus auth plus migrations, roughly half your commits will stop and wait for you.** Not half your *time* — the machine part is seconds — but half of them will ask for a human decision.
 
-If your app has no money and no auth, Coverloop is nearly silent — and you should probably only install it when that changes.
+Whether that is a good trade depends on something only you know: how often *you* would have caught it anyway. If the answer is "usually", Coverloop is buying you very little and you should not install it. If the answer is "I merge what Claude says is done because I can't read every diff", that 47% is the number that was already invisible.
+
+**And if your app has no money path and no auth**, the picture inverts: L3 essentially never fires, most changes land in L1/L2, and the whole loop costs you a diff review that a model does in fourteen seconds.
 
 ---
 
 ## ⚡ Install
 
-**As a Claude Code plugin — two commands, one credential.** Inside Claude Code:
+**Two commands to install.** Inside Claude Code:
 
 ```
 /plugin marketplace add danielsimisi-coder/coverloop
 /plugin install coverloop@coverloop
 ```
 
-Paste your [OpenRouter key](https://openrouter.ai/keys) when it asks (a few ¢ per review; **only L2/L3 changes call a model at all**). It goes to your OS keychain — no key file, no `chmod`, nothing key-shaped in your repo. Then, in any project:
+Paste your [OpenRouter key](https://openrouter.ai/keys) when it asks — Claude Code stores it in your OS keychain, so there's no key file and no `chmod`. Then, in any project:
 
 ```bash
 coverloop doctor      # what's installed, what's missing, and the exact fix for each
@@ -175,13 +183,13 @@ Different training lineages catch different things — that's the whole point of
 
 ## 🐛 Real bugs it caught
 
-Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — a few:
+These are bugs the loop caught **in its own tooling**, before they merged. That is circular evidence and you should read it as such — it shows the *class* of bug multi-model review finds, not that it will find bugs in your app. [Real-project numbers are below.](#and-what-it-looks-like-on-someone-elses-product)
 
 > **The self-audit that says it best:** on an already-public, 80-test release, a full multi-lineage pass (Claude + GPT-5.6 Sol + GLM-5.2, 42 agents, every finding verified against the code) found **0 critical and 4 real high-severity bugs** — including one where a *failed* review could be laundered into a passing one by editing a single digit. The fixes were then reviewed by GPT-5.6, which caught **3 more bugs in the fixes themselves.** All closed, all regression-locked (90 tests). *This is what "no model is an authority" looks like in practice.*
 
 | The bug | Who caught it | What it would've done |
 |---|---|---|
-| **Two rival labs, one catch:** GPT-5.6 Sol **and** GLM-5.2 *independently* reached the exact same fix on the gate's own evidence code — a forged reviewer entry could otherwise pass the strictest check | **Sol + GLM** (cross-lineage) | The strongest signal a finding is real: convergence across training lineages, not a shared hallucination ([transcripts above](#-watch-it-catch-a-bug)) |
+| **Two rival labs, one catch:** GPT-5.6 Sol **and** GLM-5.2 *independently* reached the exact same fix on the gate's own evidence code — a forged reviewer entry could otherwise pass the strictest check | **Sol + GLM** (cross-lineage) | The strongest signal a finding is real: convergence across training lineages, not a shared hallucination (transcripts below) |
 | The privacy tool was **committing your home-directory username** (and emails, session IDs) into review transcripts in git — secrets were redacted, personal identifiers weren't | **Codex/Sol** (parity audit) | A "privacy" tool quietly leaking PII into your public history |
 | **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **All 17 tests that existed then were green.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
 | A model call **sent your data before** the privacy guard's failure-check ran; and an exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | A payload leaving your machine even when it should've been blocked — routed to a non-ZDR endpoint without you knowing |
@@ -327,6 +335,6 @@ Issues and PRs welcome — especially new reviewer adapters and risk-map templat
 
 <br/>
 
-⭐ **If that question keeps you up too, star it** — it helps other builders sleep.
+⭐ **If that question keeps you up too, star it.**
 
 </div>
