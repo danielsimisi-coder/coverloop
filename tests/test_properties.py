@@ -728,3 +728,15 @@ class DeterministicClassify(unittest.TestCase):
         self.assertEqual(tier, "L3")
         self.assertTrue(any("migration" in r and "1.sql" in r for r in reasons),
                         reasons)
+
+    def test_explicit_paths_need_no_git_repo(self):
+        """Regression: `coverloop classify <path>` must work outside a checkout.
+        It classifies the strings it is given; requiring a repo made the command
+        unusable from a home directory (found in the field, 2026-08-22)."""
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as d:  # deliberately NOT a git repo
+            out = subprocess.run([sys.executable, CLI, "classify", "--quiet",
+                                  "db/migrations/1.sql"],
+                                 cwd=d, capture_output=True, text=True, timeout=30)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.strip(), "L3", out.stdout + out.stderr)

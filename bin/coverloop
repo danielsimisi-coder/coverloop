@@ -1264,11 +1264,15 @@ def cmd_classify(args):
     Designed to be piped straight into the gate, so the floor cannot be
     forgotten:  coverloop gate --min-tier "$(coverloop classify --quiet)"
     """
-    root = repo_root()
     if getattr(args, "paths", None):
+        # Explicit paths are a PURE classification — no repo needed. Requiring
+        # one made `coverloop classify <path>` unusable outside a checkout,
+        # which is exactly where someone first tries it (found in the field on
+        # the VPS the day this shipped).
         paths = list(args.paths)
         source = "explicit paths"
     else:
+        root = repo_root()
         base = getattr(args, "base", None)
         if base:
             out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
