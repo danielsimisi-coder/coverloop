@@ -4,36 +4,50 @@
 
 <h3>Never let the model that wrote the code be the one that approves it.</h3>
 
-**AI writes your production code in minutes — and can ship a production outage just as fast.**
-Coverloop is the **safety layer** that lets founders keep AI's speed without betting the company on it.
+**A CLI and Claude Code plugin that stops a commit until independent models and your own tests have signed off — and only for the changes that can actually hurt you.**
 
 <br/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
-[![For AI-coding founders](https://img.shields.io/badge/for-AI--coding%20founders-7C7CFF?style=flat-square)](#who-its-for)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
-[![Reviewers](https://img.shields.io/badge/reviewers-Codex%20·%20GLM%20·%20M3-22C7E6?style=flat-square)](#why-it-works)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-34E0B4?style=flat-square)](#contributing)
+[![Tests](https://img.shields.io/badge/tests-172%20passing-34E0B4?style=flat-square)](tests/)
 
-[**Install**](#-install-in-60-seconds) · [**See it catch a bug**](#-watch-it-catch-a-bug) · [**Why it works**](#why-it-works) · [**The clever bits**](#-the-clever-bits)
+[**Install**](#-install) · [**Real bugs it caught**](#-real-bugs-it-caught) · [**What it costs you**](#-what-it-actually-costs-you) · [**What runs on your machine**](#-what-actually-runs-on-your-machine)
 
 </div>
 
 ---
 
-## The 3am question
+You let Claude write a migration, a Stripe webhook, an RLS policy. It says *"done, all tests pass."* It is the only thing that checked.
 
-> *"Did the AI just open a security hole, drop a column, or break checkout — and I won't find out until a customer does?"*
+**That is the problem.** Not that AI writes bad code — it mostly doesn't — but that on the ~10% of changes that can delete data, leak a tenant's rows, or break checkout, **the only reviewer is the author**, and it is an author with no stake in being wrong.
 
-You shipped fast because AI wrote most of it. But **one model reviewing its own work is a model grading its own exam.** Coverloop makes a change earn its way to production: one model builds it, **independent** models attack it from every angle, your tests get the deciding vote, and **you** hold the gate on anything that can hurt.
+Coverloop makes those changes earn their way out: it works out how dangerous the change is **from the diff itself**, sends it cold to a reviewer from a different lab, gives your tests the deciding vote, and **stops** on the ones that can hurt until you say go. On everything else it stays out of your way — a CSS tweak never calls a model.
 
-|  | 😬 Without Coverloop | ✅ With Coverloop |
+---
+
+## ⏱️ What it actually costs you
+
+The question nobody answers on pages like this. Measured, on this repo:
+
+| | wall-clock | money |
 |---|---|---|
-| **Path to prod** | `AI writes code → deploy → 🤞 hope` | `AI writes → Codex → GLM → tests → you → deploy` |
-| **Who reviews** | the model that wrote it | independent models + your tests + you |
-| **You find bugs** | from an angry customer | before merge |
-| **Secrets** | pasted into calls by accident | blocked at the tool layer |
-| **At 3am** | you're awake | you're asleep |
+| `coverloop classify` — how risky is this change? | **0.5 s** | free |
+| `coverloop gate` — is the evidence complete? | **0.5 s** | free |
+| An independent red-team pass on a real diff | **~14 s** | ~2¢ |
+| A full L3 change (tests + gate + red-team + your approval) | your test suite **+ ~30 s** | ~5–10¢ |
+
+**And how often does that happen?** Here is `classify` run over the last 40 real commits of three production repos:
+
+| Repo | L0 | L1 | L2 | **L3 (the full stop)** |
+|---|---:|---:|---:|---:|
+| Call platform — billing, auth, worker, migrations | 5% | 33% | 15% | **47%** |
+| Music app — game logic, UI, no money path | 8% | 45% | 47% | **0%** |
+| Music app — second codebase | 18% | 40% | 40% | **2%** |
+
+Read that honestly: **if your product is billing plus auth plus migrations, roughly half your commits will take the long path.** That is not the tool being paranoid — those are the commits that can cost you a customer. The other half cost you a second and a half, total.
+
+If your app has no money and no auth, Coverloop is nearly silent — and you should probably only install it when that changes.
 
 ---
 
@@ -72,6 +86,23 @@ Same tool, more steps — and you own the `PATH` and file modes yourself. `cover
 > **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
 > Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
 
+### 🔍 What actually runs on your machine
+
+A safety tool that won't say what it executes is asking for the blind trust it exists to remove. So, precisely:
+
+| Runs on its own | What it does |
+|---|---|
+| at session start, and after every context compaction | **Prints text.** Re-states the standing rules so a long session doesn't quietly drop your standards. |
+| before a Bash call containing push / merge / migrate / deploy | **Prints a reminder** of what this tier still owes. It does not block and changes nothing. |
+| when Claude finishes a turn | Checks whether the repo has tests that should have run. |
+| after a failed tool call | Captures the error text so the loop can learn from it. |
+
+**None of them touch the network. None of them send your code anywhere.** The first two are elaborate `echo`s.
+
+Everything else — `classify`, `gate`, the reviewers — is a command **you or your agent runs**, and every run goes through Claude Code's normal Bash approval. The plugin puts them on your `PATH`; it does not get to fire them.
+
+Your code leaves your machine **only** when a reviewer is explicitly invoked, and only after the secret filter has stripped values from the packet. `coverloop gate` sends nothing at all — it reads local files and git metadata.
+
 ### 🕵️ The independent gate needs its own account — and that's deliberate
 
 The reviewer that gates your diff must come from a **different lineage than the builder**. That means the [Codex CLI](https://developers.openai.com/codex/cli), signed in with your ChatGPT account:
@@ -86,7 +117,7 @@ npm i -g @openai/codex && codex login
 
 ### 🔒 Make it unskippable — `coverloop gate`
 
-Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any code change after attestation invalidates the evidence by construction.**
+Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any *committed* code change after attestation invalidates the evidence by construction** — for *uncommitted* edits you need `gate --require-clean-tree`, which is opt-in.
 
 ```bash
 coverloop init                                  # once per repo
@@ -138,35 +169,11 @@ Different training lineages catch different things — that's the whole point of
 
 </details>
 
-> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). The risk tier is self-declared unless CI pins a floor (`--min-tier L2`). Human approval is *named*, not GitHub-authenticated (that's on the roadmap) — but `gate --require-signed-commit` adds **cryptographic provenance**: it demands HEAD carry a git-verifiable signature from a *trusted* key (checked against your git trust, or a **repo-committed signer policy** read from the committed tree), so evidence can't be replayed onto a forged or unsigned commit. Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). `coverloop classify` derives a tier floor from the changed paths and the gate takes the MAX, so a tier can be raised but never lowered; what `classify` cannot see is intent — a genuinely dangerous change in an innocuous-looking file still needs you to raise it. Human approval is *named*, not GitHub-authenticated (that's on the roadmap) — but `gate --require-signed-commit` adds **cryptographic provenance**: it demands HEAD carry a git-verifiable signature from a *trusted* key (checked against your git trust, or a **repo-committed signer policy** read from the committed tree), so evidence can't be replayed onto a forged or unsigned commit. Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
 
 ---
 
-## 🎬 Watch it catch a bug
-
-You ask for a routine change. It touches the database → Coverloop treats it as **dangerous (L3)** and the full loop kicks in:
-
-> **You:** *"Rename the `status` column to `state` and migrate the data."*
->
-> **🤖 Builder** writes a migration — but it **drops** the old column instead of renaming it.
->
-> **🔍 Codex:** *"Wait — this migration is destructive and has no rollback."*
->
-> **🧠 GLM:** *"That rollback is impossible. Once this runs, the data is gone."*
->
-> **✅ Tests:** ❌ the migration test fails in a prod-like run.
->
-> **🛑 Coverloop:** stops the loop and asks **you** to approve before anything touches the database.
->
-> **You:** never even saw the bug.
-
-Claude didn't save you. Codex didn't save you. GLM didn't save you. **The loop saved you** — because this bug had to slip past a reviewer from a different lineage, an adversarial red-team, *and* a test that actually ran. It didn't.
-
-That is the honest claim, and it is the only one worth making: **Coverloop does not make AI coding safe. It makes unsafe assumptions harder to ship unnoticed.** Bugs still get through — every reviewer here misses things, and the [c-CRAB benchmark](https://arxiv.org/abs/2603.23448) found leading review agents solve only ~40% of review tasks between them. What the loop changes is how many independent things a bug has to defeat on its way out, and whether the evidence that it was checked is still true at the commit you ship.
-
----
-
-## 🐛 Real bugs it caught — in its own code
+## 🐛 Real bugs it caught
 
 Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its own tooling *before* they ever merged — a few:
 
@@ -179,7 +186,24 @@ Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its o
 | **A P0 in `coverloop gate` itself:** committing the evidence report creates a new commit, so CI could never find the evidence for the commit carrying it — the documented flow was impossible. The builder missed it. **All 17 tests that existed then were green.** | **Codex** (diff review) | The flagship enforcement feature would have shipped broken — every CI run failing forever ([see CHANGELOG v2.6](CHANGELOG.md)) |
 | A model call **sent your data before** the privacy guard's failure-check ran; and an exported env var could **silently override** the zero-data-retention routing | **Codex** (diff review) | A payload leaving your machine even when it should've been blocked — routed to a non-ZDR endpoint without you knowing |
 
-*(Have Coverloop caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
+### …and what it looks like on someone else's product
+
+Those are bugs in Coverloop's own machinery, which is a fair thing to be sceptical about — a tool that only finds bugs in itself has an audience of one. So here is the [ledger from a live client project](docs/REVIEW_LEDGER.md): a production call platform with billing, auth, a worker and real customers.
+
+| | count |
+|---|---:|
+| Findings the reviewers raised | **18** |
+| Did **not** survive verification against the code | **12** |
+| Already fixed / won't-fix / a process gate, not a bug | **5** |
+| Real bugs found that nothing else caught | **1** |
+
+**Two-thirds of what the reviewers called P0/P1 was wrong.** That is the number most tools would leave out, and it is the most useful one on this page: it is exactly why nothing here lets a model block your merge on its own say-so, and why every finding has to survive a check against the real code first.
+
+The one that survived: the optional fourth-lineage auditor noticed a status label that mapped one failure reason but not another, so three separate views would have shown customers and staff the wrong outcome. **Tests were green. The other reviewers missed it.**
+
+Twelve false positives bought one real catch. Whether that trade is worth it on *your* codebase is what the ledger is for — and when a reviewer stops earning its place, the protocol tells you to remove it.
+
+*(Caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
 
 ---
 
@@ -200,39 +224,36 @@ Coverloop was **built using Coverloop.** Its reviewers caught real bugs in its o
 
 ---
 
-## 🧠 The clever bits
+## 🧠 Five decisions that make it usable
 
-The non-obvious decisions — each born from a real failure — that make Coverloop actually work instead of just sounding good:
+Most "AI reviewer" setups die the same way: they cry wolf until you stop reading them. These five exist to stop that, and each came out of a real failure — the rest of the machinery is in [`CLAUDE.md`](CLAUDE.md).
 
-- 🎭 **Agreement isn't proof.** Two models agreeing can mean two models hallucinating the *same* thing — so agreement is a triage hint, never a verdict. Findings are checked against real code and tests.
-- 📍 **Every finding must cite `file:line`.** Vague "this looks risky" with no evidence is discarded as noise — killing the over-reporting that makes solo AI reviewers exhausting.
-- 📒 **A false-positive ledger.** Once a finding is judged wrong, it's logged and **never re-raised**. Reviewers stop re-litigating settled points.
-- ✂️ **"Split, don't grind."** If the same real issues keep resurfacing past a round cap, that's a signal the change is **too big** — it tells you to split the PR instead of looping forever.
-- 🎨 **Cosmetic carve-out.** A fix touching only comments/strings/docs (tests provably unaffected) is noted, not pushed through a fresh paid review round.
-- 🧬 **Batch-merge integration gate.** After you merge a stack of PRs, the combined `main` is a state **no single PR's CI ever tested** — so it runs one cumulative review on the union.
-- ✌️ **Two-strikes rule.** If the AI makes you do the same manual workaround twice, it must **stop and fix the root cause** — no death by a thousand papercuts.
-- 🔐 **The agent can't weaken its own safety.** If a sandbox blocks it, it fixes the environment at the root — it's *forbidden* from granting itself a bypass.
-- 🛡️ **Even reading your own database is privacy-bound.** It pulls only the non-personal columns it needs — your customers' data doesn't get swept into a model call.
-- 💸 **Cheap work goes to cheap models.** Bulk reads and sweeps route to cheaper models; the frontier model is saved for the hard parts. Lower bill, same quality.
-- 🧩 **Reviewers get full context, not just the diff** — the #1 cause of false alarms is a reviewer judging 5 lines with no surrounding code.
-- 🔗 **One source of truth, zero drift.** `AGENTS.md` is a symlink to `CLAUDE.md`, so every tool reads the exact same rules.
-- 🧾 **Audit trail with zero exposure.** Every model call is logged as a **hash** — a provable record of what left your machine, without the log ever containing your code or secrets.
-- 🔏 **Provenance, not just claims.** `gate --require-signed-commit` binds the evidence to a git-verifiable signature from a *trusted* key — your git trust, or a **repo-committed signer policy** (read from the committed tree, or with `--signers-ref origin/main` from a **protected ref a PR can't rewrite** — so it can't add its own key and self-authorize) — so a report can't be replayed onto a forged or unsigned commit.
-- ⚛️ **Evidence writes are atomic and race-safe.** Reports are written to a temp file and atomically renamed into place, and concurrent `attest`s are serialized by a lock — so a gate reading mid-write never sees a torn report, and two attests never silently lose each other's evidence.
-- 🧪 **The privacy filter is fuzz-tested against itself.** Property tests and adversarial corpora hammer the secret/PII filter across thousands of seeded inputs — they've already caught real catastrophic-backtracking (ReDoS) holes in the egress path *before* they shipped.
-- 🥶 **Reviews are "cold reads" — by design.** The reviewer sees the change as a fresh artifact in a fresh session, never inside the conversation that wrote it. 2026 research measured this as the single strongest anti-bias lever in AI code review (an evaluator's catch-rate rises sharply when the work isn't in its own context) — cross-vendor review adds a second, independent layer on top.
-- 🎚️ **The judge's thinking dial is never left on "low".** Reviewer reasoning effort is routed by risk tier — high for normal changes, extra-high for money/auth/migrations, maximum for deadlock-breaking — and auto-delegating "ultra" modes are banned for gates: a judge doesn't outsource judgment.
-- 🕳️ **Evidence can't silently vanish into `.gitignore`.** If a repo's `*.log` rule would swallow a review transcript, `attest` refuses to record it — and `init` writes the negation rules so it can't happen in the first place.
-- 🧼 **Committed transcripts are scrubbed twice.** Secrets (keys, tokens, DB URLs) *and* personal identifiers (home-directory usernames, emails, session IDs) are redacted before any transcript touches git — honestly documented as a tripwire, not a DLP guarantee.
-- 🆓 **Upgrades are free.** A versioning split means improving Coverloop never forces your projects to re-sync.
+- 🎭 **Agreement isn't proof.** Two models agreeing can be two models hallucinating the same thing. Agreement is a triage hint; the code and the tests decide.
+- 📍 **A finding without `file:line` is noise.** Reviewers are instructed to cite the line or stay quiet — this is the single biggest cut to the over-reporting that makes solo AI review exhausting.
+- 📒 **A false-positive ledger.** Once a finding is judged wrong it's written down and not raised again. [See what a real one looks like](docs/REVIEW_LEDGER.md) — including the two-thirds-wrong ratio it exists to manage.
+- ✂️ **"Split, don't grind."** If the same real issues keep surfacing past a round cap, the change is too big to review well. It tells you to split the PR instead of looping.
+- 🥶 **Reviews are cold reads.** The reviewer never sees the change inside the conversation that wrote it — it gets a fresh session and a diff. Removing the author's context is the strongest anti-bias lever there is; a different lab is the second.
 
----
+<details>
+<summary><b>The rest of the machinery</b> — provenance, atomic evidence, fuzzed privacy filter, spend cap</summary>
+
+<br/>
+
+- 🔐 **Provenance, not just claims.** `gate --require-signed-commit` demands HEAD carry a git-verifiable signature from a trusted key — checked against your git trust or a repo-committed signer policy, optionally read from a **protected ref a PR can't rewrite**, so a branch can't add its own key and self-authorize.
+- ⚛️ **Evidence writes are atomic and lock-serialized**, so a gate reading mid-write never sees a torn report and two concurrent attests never lose each other's evidence.
+- 🧪 **The privacy filter is fuzz-tested against itself** across thousands of seeded inputs — it has already caught real catastrophic-backtracking (ReDoS) holes in the egress path before they shipped, and an adversarial audit of this repo caught a username shape it was still missing.
+- 🕳️ **Evidence can't vanish into `.gitignore`.** If a repo's `*.log` rule would swallow a transcript, `attest` refuses to record it.
+- 💸 **A daily spend cap.** The reviewer CLIs count what was actually sent today and fail closed past `COVERLOOP_DAILY_REVIEW_CAP` (default 40; `0` disables) — a runaway loop can't drain your budget overnight.
+- 🧬 **Batch-merge integration gate.** After a stack of PRs merges, the combined `main` is a state no single PR's CI tested, so one cumulative review runs on the union.
+- 🎚️ **Effort is chosen per tier, not left on the default.** Reviewer wrappers ship per effort level because a judge left on "low" is worse than no judge.
+
+</details>
 
 ## ♻️ It stops forgetting — and gets smarter
 
 - **Anti-drift:** the rules are inlined in the auto-loaded `CLAUDE.md` and re-injected by a hook **after every context compaction** — so a long session never quietly abandons your standards.
 - **Self-improving memory:** durable lessons are saved to **git-tracked memory** that travels with the repo, so every new session — on any machine — starts smarter than the last.
-- **Privacy at the tool layer:** known **secret** shapes (keys, tokens, DB creds, `.env` assignments) are blocked *before* any send; **PII** shapes (home-dir usernames, emails, session ids) are scrubbed from committed transcripts (a redaction tripwire, not egress-blocked); the most sensitive reviews route only to a zero-data-retention endpoint; a slopsquatting gate blocks hallucinated dependencies.
+- **Privacy at the tool layer:** known **secret** shapes (keys, tokens, DB creds, `.env` assignments) have their **values stripped** before any send, and a packet that still scans as secret-bearing afterwards is refused outright; **PII** shapes (home-dir usernames, emails, session ids) are scrubbed from committed transcripts (a redaction tripwire, not egress-blocked); the most sensitive reviews route only to a zero-data-retention endpoint; a slopsquatting gate blocks hallucinated dependencies.
 
 <details>
 <summary><b>See the mechanics (anti-drift, privacy, memory, versioning)</b></summary>
@@ -241,7 +262,7 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 
 **Anti-drift.** Long sessions "forget" instructions because automatic **context compaction** summarizes away anything read once, and attention decays as the window fills. Coverloop inlines the Operating Contract in the auto-loaded `CLAUDE.md` (re-read after every compaction), a `SessionStart` hook re-injects the standing rules at every start and after every compaction, and a `PreToolUse` hook re-states the gate checklist right before `git push` / `merge` / migration / deploy.
 
-**Privacy.** Tiered egress (public → proprietary → sensitive → secrets/PII, never sent). The most sensitive packets route only to a verified zero-data-retention endpoint; a boundary-aware filter blocks `.env`/keys/tokens/DB URLs before any send; an append-only egress log records a hash of every payload (never the body). Review transcripts committed as evidence are additionally scrubbed of PII shapes — home-directory usernames, emails, session UUIDs — before they touch git (a pattern tripwire, not a full DLP pass, and the docs say exactly that).
+**Privacy.** Tiered egress (public → proprietary → sensitive → secrets/PII, never sent). The most sensitive packets route only to a verified zero-data-retention endpoint; a boundary-aware filter strips `.env`/key/token/DB-URL **values** before any send and refuses a packet that still scans dirty; an append-only egress log records a hash of every payload (never the body). Review transcripts committed as evidence are additionally scrubbed of PII shapes — home-directory usernames, emails, session UUIDs — before they touch git (a pattern tripwire, not a full DLP pass, and the docs say exactly that).
 
 **Self-improving memory.** Durable lessons live in a git-tracked `docs/MEMORY.md` (capped and consolidated, not hoarded); recurring workflows are captured as reusable `SKILL.md` recipes; every review logs one line to a ledger so you can **subtract** any reviewer that isn't catching real bugs.
 
@@ -268,25 +289,9 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 164 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
+tests/                      the gate's own suite — 172 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
-
----
-
-## Who it's for
-
-- 🧑‍🚀 **Solo founders shipping real products with AI** — who can't afford a bug in billing or auth, but also can't afford enterprise ceremony.
-- 🎨 **"Vibe coders"** who want the speed of AI coding **without** the "it looked fine, then prod broke" tax.
-- 🔧 Anyone running **more than one AI coding tool** who wants them to check each other instead of each rubber-stamping its own work.
-
-## Design philosophy
-
-> **No model is an authority.** Findings are claims; code, tests, and runtime are the truth.
-> **Execution beats opinion.** Run the test instead of stacking another reviewer.
-> **Subtract, don't add.** New machinery has to earn its keep — and gets removed when it doesn't.
-> **Privacy is a property of the tools, not the prompt.**
-> **Every rule was born from a real failure**, not a whiteboard — that's what [`CHANGELOG.md`](CHANGELOG.md) is.
 
 ---
 
@@ -300,7 +305,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Which AI coding tool does it work with?</b></summary><br/>Built for <b>Claude Code</b> (auto-loaded <code>CLAUDE.md</code> + hooks), with <b>Codex CLI</b> as the independent diff reviewer. Other agents that read <code>AGENTS.md</code> and support hooks can be adapted.</details>
 
-<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Privacy is a core design goal, with honest limits. Known <b>secret</b> shapes (keys, tokens, DB credentials, <code>.env</code>-style assignments) are blocked at the tool layer <i>before</i> any model call; <b>personal identifiers</b> (usernames, emails, session ids) are redacted from committed transcripts but are not egress-blocked — it's a pattern-based tripwire, not a full DLP guarantee. The most sensitive reviews route only to a zero-data-retention endpoint. The gate itself never sends code anywhere — it only reads local files and git metadata.</details>
+<details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Privacy is a core design goal, with honest limits. Known <b>secret</b> shapes (keys, tokens, DB credentials, <code>.env</code>-style assignments) are stripped from the payload before any model call; <b>personal identifiers</b> (usernames, emails, session ids) are redacted from committed transcripts but are not egress-blocked — it's a pattern-based tripwire, not a full DLP guarantee. The most sensitive reviews route only to a zero-data-retention endpoint. The gate itself never sends code anywhere — it only reads local files and git metadata.</details>
 
 <details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
 

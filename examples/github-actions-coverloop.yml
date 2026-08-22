@@ -27,8 +27,8 @@ jobs:
           #   COVERLOOP_SHA256 = shasum -a 256 bin/coverloop  at that commit
           # Verifying the checksum means a moved tag or a tampered CDN response
           # can't slip modified gate code into your CI.
-          COVERLOOP_SHA: e6b3a4dabfcf24724ff314a4d520540c81b74b06        # v2.8.0 (hardened: R1-R4)
-          COVERLOOP_SHA256: 27caf03a2faef295e0a6d6735937bc2204b93b206213e481de424ea2b8bb35fe
+          COVERLOOP_SHA: 87a2e4b3f005c38e7058e855747337bc4d1b4bb7        # v2.10.0 (adds classify)
+          COVERLOOP_SHA256: a271d7bdab85c5b5506981321255c7ce586f6dcfd4f9af18d74478ee83e8a3ff
           # base_ref via env, NEVER interpolated straight into the shell — a ref
           # name can carry shell metacharacters; ${{ }} inline would let it run.
           BASE_REF: ${{ github.base_ref }}
@@ -46,4 +46,9 @@ jobs:
           #                 --codex-run "<cmd>", or --codex-log <file> to attach
           #                 a review that already ran). Use --require-executed
           #                 to additionally reject attached transcripts.
-          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${BASE_REF}"
+          # The floor is DERIVED from the paths this PR actually changed, so a
+          # migration or an auth file cannot arrive labelled L1. classify only
+          # ever raises; your own --min-tier below is a second floor, not a cap.
+          FLOOR="$(./coverloop classify --quiet --base "origin/${BASE_REF}")"
+          echo "derived risk floor for this PR: ${FLOOR}"
+          ./coverloop gate --ci --min-tier "${FLOOR}" --min-tier L1 --require-transcript --base "origin/${BASE_REF}"
