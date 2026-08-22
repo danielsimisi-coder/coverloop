@@ -1,0 +1,14 @@
+{
+  "name": "coverloop",
+  "owner": {
+    "name": "Daniel Siman Tov",
+    "url": "https://github.com/danielsimisi-coder/coverloop"
+  },
+  "plugins": [
+    {
+      "name": "coverloop",
+      "source": "./",
+      "description": "Never let the model that wrote the code be the one that approves it. Risk-tiered gates, independent cross-lineage review, and evidence bound to the commit."
+    }
+  ]
+}

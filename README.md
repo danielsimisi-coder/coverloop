@@ -37,22 +37,53 @@ You shipped fast because AI wrote most of it. But **one model reviewing its own 
 
 ---
 
-## ⚡ Install in 60 seconds
+## ⚡ Install
+
+**As a Claude Code plugin — two commands, one credential.** Inside Claude Code:
+
+```
+/plugin marketplace add danielsimisi-coder/coverloop
+/plugin install coverloop@coverloop
+```
+
+Paste your [OpenRouter key](https://openrouter.ai/keys) when it asks (a few ¢ per review; **only L2/L3 changes call a model at all**). It goes to your OS keychain — no key file, no `chmod`, nothing key-shaped in your repo. Then, in any project:
+
+```bash
+coverloop doctor      # what's installed, what's missing, and the exact fix for each
+coverloop init        # once per repo
+```
+
+<details>
+<summary><b>Manual install</b> (no plugin — clone + <code>install.sh</code>)</summary>
+
+<br/>
 
 ```bash
 git clone https://github.com/danielsimisi-coder/coverloop.git
 cd coverloop && ./install.sh
-```
-
-✅ **Done.** Add your model key, then verify everything in one command:
-
-```bash
 printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
 ~/bin/protocol-selftest
 ```
 
-> **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key (a few ¢/review) · [Codex CLI](https://developers.openai.com/codex/cli) recommended. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
+Same tool, more steps — and you own the `PATH` and file modes yourself. `coverloop doctor` works either way and will tell you what's still missing.
+
+</details>
+
+> **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
 > Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
+
+### 🕵️ The independent gate — two routes, and the difference is real
+
+The reviewer that gates your diff must come from a **different lineage than the builder** — that's the whole point. You pick how it runs, and Coverloop won't quietly choose the convenient one for you:
+
+| | **A. Codex CLI** | **B. `sol-review`** |
+|---|---|---|
+| Setup | `npm i -g @openai/codex && codex login` | none — uses the key above |
+| Where your diff goes | OpenAI, under **your** ChatGPT subscription — never transits OpenRouter | OpenAI **via OpenRouter** |
+| Privacy routing | outside this loop entirely | `data_collection: deny` — **not full ZDR** |
+| Cost | your existing subscription | ~$0.07 per review |
+
+Measured, not assumed: OpenRouter accepts `provider.zdr=true` for GLM and **refuses it** for both Sol and M3. So **GLM (full ZDR) stays the red-team/auditor for the touchiest code** regardless of which gate route you choose. `coverloop doctor` prints this table with your actual setup filled in.
 
 ### 🔒 Make it unskippable — `coverloop gate`
 
