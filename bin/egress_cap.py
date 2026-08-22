@@ -56,7 +56,12 @@ def sent_today():
                 if rec.get("phase") == "attempt" and str(rec.get("ts", "")).startswith(day):
                     n += 1
     except OSError:
-        return 0
+        # NOT zero. An unreadable quota log used to read as "nothing sent today",
+        # which allowed every request precisely when the accounting was broken.
+        # A quota that silently stops counting is worse than no quota, because the
+        # operator still believes there is a ceiling. Raise and let the caller
+        # fail closed.
+        raise
     return n
 
 
@@ -66,7 +71,13 @@ def enforce_daily_cap():
     cap = _cap()
     if cap <= 0:
         return
-    used = sent_today()
+    try:
+        used = sent_today()
+    except OSError as exc:
+        print(f"egress cap: cannot read the quota log ({exc}); refusing to send. "
+              f"Fix the log at {_log_path()} or set COVERLOOP_DAILY_REVIEW_CAP=0 "
+              f"to disable the cap deliberately.", file=sys.stderr)
+        sys.exit(4)
     if used >= cap:
         sys.stderr.write(
             "coverloop: daily review cap reached (%d/%d reviews sent today). Refusing to send "

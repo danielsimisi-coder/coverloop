@@ -982,5 +982,93 @@ class IndependentReviewRegressions(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0, "L0 claim passed over a migration")
             self.assertIn("L3", r.stderr + r.stdout)
 
+
+class SecondRoundRegressions(unittest.TestCase):
+    """Round two. The first set of fixes was itself reviewed off-policy, and the
+    reviewer showed the headline fix was incomplete: the floor only saw
+    UNCOMMITTED changes, so on the ordinary path — commit, then gate — it saw
+    nothing at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _repo(self, d):
+        run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+        run("git", "init", "-q", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "t")
+        open(os.path.join(d, "README.md"), "w").write("x\n")
+        run("git", "add", "-A")
+        run("git", "commit", "-qm", "init")
+        return run
+
+    def test_floor_sees_a_COMMITTED_migration(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "migrations", "002.sql"), "w").write("drop table users;\n")
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "migrate")   # <- clean tree, the normal case
+            r = subprocess.run([CLI, "gate", "--min-tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0, "L0 passed over a committed migration")
+            self.assertIn("L3", r.stdout + r.stderr)
+
+    def test_unresolvable_base_is_not_an_all_clear(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            r = subprocess.run([CLI, "gate", "--min-tier", "L0", "--base", "no-such-ref"],
+                               cwd=d, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0, "a typo'd --base read as no changes")
+
+    def test_plain_L2_names_are_not_demoted(self):
+        # The L2 rules CONSUMED the separator and then still demanded an
+        # extension dot, so the plainest names of all fell through to L1.
+        for path in ("src/api.ts", "src/apiClient.ts", "src/middleware.ts",
+                     "src/hooks.ts", "src/contextProvider.ts"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L2")
+
+    def test_prose_about_danger_is_not_danger(self):
+        for path in ("docs/authGuide.md", "docs/workerPool.md",
+                     "docs/credentialsGuide.md", "src/auth.css"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L0")
+
+    def test_cardcom_does_not_swallow_a_card_component(self):
+        self.assertEqual(self.mod.classify_paths(["src/CardComponent.tsx"])[0], "L1")
+        for path in ("src/invoice.ts", "src/billingService.ts", "src/chargeback.ts"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L3")
+
+    def test_narrowed_human_stop_still_covers_camelcase_authz(self):
+        # These classify L3 but were EXEMPT from the stop under the narrowed
+        # scope, because the exemption regex kept the old separator boundary —
+        # the one place a missed boundary costs the most.
+        for path in ("src/authorization.ts", "src/authzGuard.ts", "src/rlsPolicy.ts"):
+            with self.subTest(path=path):
+                self.assertTrue(self.mod.IRREVERSIBLE_RE.search(path),
+                                f"{path} would skip the human stop")
+
+    def test_unreadable_quota_log_refuses_rather_than_allows(self):
+        import egress_cap as cap
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "eg.log")
+            open(log, "w").write("x")
+            os.chmod(log, 0o000)
+            env = dict(os.environ, COVERLOOP_EGRESS_LOG=log,
+                       COVERLOOP_DAILY_REVIEW_CAP="40")
+            old = os.environ.copy()
+            os.environ.update(env)
+            try:
+                with self.assertRaises(SystemExit) as ctx:
+                    cap.enforce_daily_cap()
+                self.assertEqual(ctx.exception.code, 4)
+            finally:
+                os.chmod(log, 0o644)
+                os.environ.clear()
+                os.environ.update(old)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -110,7 +110,8 @@ RISK_RULES = (
     ("L3", r"(^|/)(auth|authn|authz|authentication|authorization|authorisation"
            r"|rls|permissions?|policies|policy|acl)(?=(?-i:[A-Z])|[/._-]|$)",
      "authentication / authorisation / RLS"),
-    ("L3", r"(^|/)(billing|payments?|invoic|checkout|stripe|cardcom|subscription)",
+    ("L3", r"(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
+           r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._-]|$)",
      "money path"),
     ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._-]|$)|(^|/)\.env",
      "secrets / credentials"),
@@ -128,10 +129,10 @@ RISK_RULES = (
     # would match any stray text file — over-classification is not free: a
     # floor that cries L2 at documentation trains people to bypass the gate,
     # and a bypassed gate protects nothing.
-    ("L2", r"(^|/)(api|routes?|handlers?|controllers?|middleware)(/|[._-])"
+    ("L2", r"(^|/)(api|routes?|handlers?|controllers?|middleware)(?=(?-i:[A-Z])|[/._-]|$)"
            r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
      "API surface"),
-    ("L2", r"(^|/)(hooks?|contexts?|providers?|store|state)(/|[._-])"
+    ("L2", r"(^|/)(hooks?|contexts?|providers?|store|state)(?=(?-i:[A-Z])|[/._-]|$)"
            r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php)$",
      "shared application state"),
     ("L2", r"(^|/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements.*\.txt|pyproject\.toml)$",
@@ -146,6 +147,8 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 
 # Above this many changed files a change is too broad to be L1 regardless of
 # what the individual paths look like — breadth is itself a risk signal.
+_INERT_RE = re.compile(r"\.(md|mdx|txt|rst|adoc|css|scss|sass|less)$", re.I)
+
 BREADTH_L2_FILES = 10
 
 
@@ -165,8 +168,9 @@ BREADTH_L2_FILES = 10
 IRREVERSIBLE_RE = re.compile(
     r"(^|/)migrations?/"                                  # schema migrations
     r"|\.sql$"                                            # raw SQL
-    r"|(^|/)(billing|payments?|invoic|checkout|charge|stripe|cardcom|subscription)"
-    r"|(^|/)(rls|authz|permissions?|policies)(/|[._-])",
+    r"|(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
+    r"|stripe|cardcom|subscriptions?)(?=(?-i:[A-Z])|[/._-]|$)"
+    r"|(^|/)(rls|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._-]|$)",
     re.I)
 
 
@@ -185,6 +189,48 @@ def _changed_paths_for_gate(root, args):
     return [p for p in (out or "").splitlines() if p.strip()]
 
 
+def _gate_floor_paths(root, args, report, sha):
+    """Every path this gate run is judging, and whether that set is TRUSTWORTHY.
+
+    Returns (paths, unknown). `unknown` means git could not answer, and the caller
+    must fail closed rather than read the resulting empty list as "nothing risky".
+
+    The first cut of the auto-floor asked only for uncommitted changes, which is
+    empty in the ordinary case — you commit, THEN run the gate — so `gate
+    --min-tier L0` still passed over a committed migration. The set therefore
+    also spans the commits the recorded evidence does not cover: from the report's
+    commit to HEAD, or the commit being gated when there is no report at all.
+    """
+    base = getattr(args, "base", None)
+    if base:
+        out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
+        if out is None:
+            out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
+        if out is None:
+            # An unresolvable --base is a caller error, not an all-clear. Reading
+            # it as "no files changed" turned a typo into a passing gate.
+            return [], True
+        return [p for p in out.splitlines() if p.strip()], False
+
+    tracked = git(["diff", "--name-only", "HEAD"], cwd=root)
+    untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root)
+    if tracked is None or untracked is None:
+        return [], True
+    paths = [p for p in (tracked + "\n" + untracked).splitlines() if p.strip()]
+
+    # ...plus whatever the evidence does not already cover.
+    prior = (report or {}).get("commit")
+    rng = f"{prior}..{sha}" if prior and prior != sha else (None if prior else f"{sha}^..{sha}")
+    if rng:
+        out = git(["diff", "--name-only", rng], cwd=root)
+        if out is None:
+            # No parent (root commit) is the one benign case: list the commit's
+            # own files rather than guessing.
+            out = git(["show", "--name-only", "--pretty=format:", sha], cwd=root) or ""
+        paths += [p for p in out.splitlines() if p.strip()]
+    return sorted(set(paths)), False
+
+
 def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
     """Derive the deterministic tier FLOOR for a set of changed paths.
 
@@ -199,7 +245,14 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
     reasons, seen = [], set()
     for path in paths:
         matched = None
-        for rule_tier, rx, why in _RISK_RULES_C:
+        # Prose and styling are inert whatever they are NAMED. The name rules run
+        # first and match anywhere in the path, so docs/authGuide.md,
+        # docs/workerPool.md and docs/credentialsGuide.md were all classified L3 —
+        # a floor that demands a red-team review of a markdown file is a floor
+        # people learn to route around, which costs more than it ever protects.
+        if _INERT_RE.search(path):
+            matched = ("L0", "documentation / styling (inert regardless of name)")
+        for rule_tier, rx, why in (() if matched else _RISK_RULES_C):
             if rx.search(path):
                 matched = (rule_tier, why)
                 break
@@ -1532,8 +1585,11 @@ def cmd_gate(args):
     # there is no flag to switch it off, because a switch is the hole.
     auto_floor, auto_reasons = None, []
     try:
-        auto_paths = _changed_paths_for_gate(root, args)
-        if auto_paths:
+        auto_paths, unknown = _gate_floor_paths(root, args, report, sha)
+        if unknown:
+            auto_floor = "L1"
+            auto_reasons = ["could not determine the changed paths; floor held at L1"]
+        elif auto_paths:
             auto_floor, auto_reasons = classify_paths(auto_paths, BREADTH_L2_FILES)
     except Exception:
         # Never let a classification error pass a change it could not read: an

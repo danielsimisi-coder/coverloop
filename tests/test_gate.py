@@ -91,10 +91,24 @@ class GateTestCase(unittest.TestCase):
             r = run(["gate", "--tier", "L1"], empty)
             self.assertEqual(r.returncode, 2)
 
+    def make_head_inert(self):
+        """Give HEAD a docs-only commit.
+
+        The gate now derives a tier FLOOR from the paths in the range its evidence
+        does not cover, so an L0 assertion has to be made over a genuinely inert
+        change. These tests used to gate a repo whose HEAD touched app.py and
+        still expect L0 to pass — which is precisely the fail-open the floor
+        closes, so the fixture moved rather than the expectation.
+        """
+        with open(os.path.join(self.repo, "NOTES.md"), "a") as fh:
+            fh.write("inert\n")
+        subprocess.run(["git", "add", "NOTES.md"], cwd=self.repo, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "docs"], cwd=self.repo, capture_output=True)
+
     def test_gate_without_tier_or_report_fails(self):
         r = run(["gate"], self.repo)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("no risk tier", r.stderr)
+        self.assertIn("report", (r.stderr + r.stdout).lower())
 
     def test_L1_without_any_report_fails(self):
         code, out = self.gate_json(["--tier", "L1"])
@@ -102,6 +116,7 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(out["verdict"], "fail")
 
     def test_L0_passes_with_no_evidence(self):
+        self.make_head_inert()
         code, out = self.gate_json(["--tier", "L0"])
         self.assertEqual(code, 0)
         self.assertEqual(out["verdict"], "pass")
@@ -1368,6 +1383,7 @@ class GateTestCase(unittest.TestCase):
         """L0 needs no evidence; a signature gate on a no-op would be noise, so
         --require-signed-commit is a no-op at L0 (still PASS while unsigned)."""
         self.init_project()
+        self.make_head_inert()
         r = run(["gate", "--min-tier", "L0", "--require-signed-commit"], self.repo)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
