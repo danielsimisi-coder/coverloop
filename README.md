@@ -41,7 +41,7 @@ The question nobody answers on pages like this. Measured, on this repo:
 
 That last row is the real price, and no table can shrink it. Everything above it is machine time you can ignore; the human gate is the one thing Coverloop deliberately will not do for you.
 
-**You also need a ChatGPT account** for the independent gate (see [below](#-the-independent-gate-needs-its-own-account-and-thats-deliberate)) — realistically a paid one if you ship daily. That is a recurring cost this page would be dishonest to leave out of a section called "what it actually costs you".
+**You also need a ChatGPT account** for the independent gate (see [below](#-the-independent-gate-needs-its-own-account--and-thats-deliberate)) — realistically a paid one if you ship daily. That is a recurring cost this page would be dishonest to leave out of a section called "what it actually costs you".
 
 **And how often does that happen?** Here is `classify` run over the last 40 real commits of three production repos:
 
@@ -193,9 +193,13 @@ Different training lineages catch different things — that's the whole point of
 
 ## 🐛 Real bugs it caught
 
-These are bugs the loop caught **in its own tooling**, before they merged. That is circular evidence and you should read it as such — it shows the *class* of bug multi-model review finds, not that it will find bugs in your app. [Real-project numbers are below.](#and-what-it-looks-like-on-someone-elses-product)
+These are bugs the loop caught **in its own tooling**. Most were caught before they merged; the largest batch was not — it was found in an already-published release, which is the more useful demonstration and the less flattering one. That is circular evidence and you should read it as such — it shows the *class* of bug multi-model review finds, not that it will find bugs in your app. [Real-project numbers are below.](#and-what-it-looks-like-on-someone-elses-product)
 
-> **The self-audit that says it best:** on an already-public, 80-test release, a full multi-lineage pass (Claude + GPT-5.6 Sol + GLM-5.2, 42 agents, every finding verified against the code) found **0 critical and 4 real high-severity bugs** — including one where a *failed* review could be laundered into a passing one by editing a single digit. The fixes were then reviewed by GPT-5.6, which caught **3 more bugs in the fixes themselves.** All closed, all regression-locked (90 tests). *This is what "no model is an authority" looks like in practice.*
+> **The self-audit that says it best.** A release had just shipped claiming that the risk tier was no longer the author's to declare. Running the protocol against that release — a cold diff, a fresh session, a reviewer with no stake in the answer — showed the claim was not yet true, and then kept going. **Seven rounds, 34 defects, every one verified against the code before it was fixed and regression-locked afterwards.** Among them: a rename from `authGuard.ts` to `guard.ts` walked the change straight past the classifier; `--base=--cached` reached `git diff` as a *flag*, so it compared the index, classified nothing, and the gate passed; and `PASSWORD="alpha\nbeta"` redacted only its first line, leaving a tail that then **scanned clean** and would have been transmitted.
+>
+> Two things about that run are worth more than the count. The drift it found is the same *attest-then-drift* failure this repo's own field audit documents — committed by the person who wrote the audit, in the week he wrote it. And the seventh round found **two defects created by the sixth round's fixes**, one of them worse than the bug it replaced: a length cap meant to stop a leak made long secrets fail to match at all, so nothing was redacted and the whole value went out.
+>
+> **It ended without a clean verdict, and that is the honest result.** Findings per round ran 5, 4, 3, 4, 6, 6, 6 — no convergence. The loop was stopped not because the code was finished but because the evidence said the author had become a net-neutral contributor to that surface, which is a thing you can only learn from a reviewer that cannot be talked out of its findings. [The full account is in the CHANGELOG.](CHANGELOG.md)
 
 | The bug | Who caught it | What it would've done |
 |---|---|---|
