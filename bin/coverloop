@@ -107,17 +107,20 @@ RISK_RULES = (
     # (tier, compiled path pattern, human-readable reason)
     ("L3", r"(^|/)migrations?/", "database migration"),
     ("L3", r"\.sql$", "raw SQL"),
-    ("L3", r"(^|/)(auth|authz|authentication|rls|permissions?|policies)(/|[._-])",
+    ("L3", r"(^|/)(auth|authn|authz|authentication|authorization|authorisation"
+           r"|rls|permissions?|policies|policy|acl)(?=(?-i:[A-Z])|[/._-]|$)",
      "authentication / authorisation / RLS"),
     ("L3", r"(^|/)(billing|payments?|invoic|checkout|stripe|cardcom|subscription)",
      "money path"),
-    ("L3", r"(^|/)(secrets?|credentials?|keys?)(/|[._-])|(^|/)\.env",
+    ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._-]|$)|(^|/)\.env",
      "secrets / credentials"),
     ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)",
      "CI / deploy configuration"),
-    ("L3", r"(^|/)(workers?|cron|jobs?|queue|scheduler)(/|[._-])",
+    ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._-]|$)",
      "worker / cron / queue"),
-    ("L3", r"(^|/)(schema|models?)(/|[._-])", "schema / data model"),
+    ("L3", r"(^|/)(schemas?|models?)(?=(?-i:[A-Z])|[/._-]|$)"
+           r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json)$",
+     "schema / data model"),
     # L2 — product surface and shared contracts: wide blast radius, no direct
     # money/auth authority.
     # NOTE: these two are scoped to APPLICATION SOURCE extensions on purpose.
@@ -1518,7 +1521,26 @@ def cmd_gate(args):
     min_floors = getattr(args, "min_tier", None) or []
     tier_floors = getattr(args, "tier", None) or []
     report_tier = (report or {}).get("risk_tier")
-    tier = tier_max(*min_floors, *tier_floors, report_tier)
+
+    # The DETERMINISTIC floor, computed here rather than trusted from the caller.
+    # Until v2.10.1 `classify` was a separate command you had to remember to wire
+    # (`gate --min-tier "$(classify --quiet)"`), which meant the headline promise —
+    # the tier is not the author's to declare — held only for repos that opted in.
+    # An L0 report, or plain `gate --min-tier L0`, passed over a migration. An
+    # independent review of this repo's own release found it, correctly, as the
+    # exact fail-open v2.10 claimed to close. The floor now runs unconditionally:
+    # there is no flag to switch it off, because a switch is the hole.
+    auto_floor, auto_reasons = None, []
+    try:
+        auto_paths = _changed_paths_for_gate(root, args)
+        if auto_paths:
+            auto_floor, auto_reasons = classify_paths(auto_paths, BREADTH_L2_FILES)
+    except Exception:
+        # Never let a classification error pass a change it could not read: an
+        # unreadable diff is treated as unknown, and unknown is not L0.
+        auto_floor, auto_reasons = "L1", ["classification unavailable; floor held at L1"]
+
+    tier = tier_max(*min_floors, *tier_floors, report_tier, auto_floor)
 
     # A corrupt/forged/SHA-mismatched report fails EVERY tier, including L0.
     if malformed:
@@ -1533,6 +1555,12 @@ def cmd_gate(args):
         sys.exit(1)
     if tier not in TIERS:
         fail_usage(f"invalid tier {tier!r} (use L0|L1|L2|L3)")
+
+    if auto_floor and tier_max(report_tier, *min_floors, *tier_floors) != tier:
+        print(f"coverloop gate: risk floor raised to {auto_floor} by the changed paths "
+              f"(not the author's declaration):", file=sys.stderr)
+        for r in auto_reasons[:6]:
+            print(f"  - {r}", file=sys.stderr)
 
     if report is None and tier != "L0":
         _emit(args, sha, tier, False, [check("report", False, why or "no report for HEAD")])

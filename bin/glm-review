@@ -26,7 +26,14 @@ USE_ZDR = True  # ZDR mandatory, NOT env-disableable (Codex P1; protocol Hard Bo
 # and this name. Nothing else about the prompts changes: the ROLE is the point,
 # the lineage is what makes a second opinion worth having.
 REVIEWER_NAME = os.getenv("REVIEWER_NAME", "GLM-5.2")
-EGRESS_LOG = Path.home() / ".config" / "openrouter" / "egress.log"
+# Resolved through the SAME helper the cap reads, so the two can never point
+# at different files. They used to diverge: the cap honoured
+# COVERLOOP_EGRESS_LOG while the reviewers hardcoded the default, so relocating
+# the log left the cap counting a file nobody wrote to — it then read zero usage
+# and allowed every request. A quota that silently stops counting is worse than
+# no quota, because the dashboard still says you are protected.
+EGRESS_LOG = Path(os.environ.get("COVERLOOP_EGRESS_LOG")
+                 or (Path.home() / ".config" / "openrouter" / "egress.log"))
 
 SYSTEMS = {
     "ask": "You are GLM-5.2 as a read-only advisory software engineering specialist. You can only analyze the text provided. You cannot access shell, files, repo, secrets, or commands. Be concise and evidence-based.",

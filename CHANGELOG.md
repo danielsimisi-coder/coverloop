@@ -2,6 +2,43 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — the release reviews itself, and the review found five fail-opens (PROTOCOL v2.10.1)
+
+v2.10.0 shipped `classify` and the claim that the risk tier is no longer the author's
+to declare. Running this repo's own protocol against that release — a cold diff, a fresh
+session, a reviewer with no stake in the answer — showed the claim was not yet true, and
+turned up four more holes. Every one was verified against the code before it was fixed,
+and every one now has a regression test.
+
+- **The gate did not apply its own floor.** `classify` was a command you had to remember
+  to wire, so `gate --min-tier L0` still passed over a migration. The floor now runs
+  inside `gate`, unconditionally. There is deliberately no flag to switch it off — a
+  switch is the hole.
+- **camelCase names fell through to L1.** The boundary required `/`, `.`, `_` or `-`
+  right after the keyword, so `authorization.ts`, `credentialsManager.go`,
+  `workerPool.ts` and `schemaVersion.py` — ordinary auth, credential, worker and schema
+  files — classified as routine. The boundary now also accepts a camelCase hump, and
+  because the rules compile case-insensitively that hump is matched case-sensitively on
+  purpose: without that, `author.ts` and `keyboard.tsx` read as L3, and a floor that
+  cries danger at prose teaches people to bypass the gate.
+- **An escaped quote leaked the tail of a secret.** `PASSWORD="a\" b"` redacted only up
+  to the escaped quote; the remainder stayed in the packet and then scanned *clean*, so
+  the egress tripwire passed it to the network. The value pattern now consumes an escaped
+  pair as a unit, with disjoint branches so the egress path stays linear.
+- **The daily cap could stop counting.** `egress_cap` honoured `COVERLOOP_EGRESS_LOG`
+  while the reviewer CLIs hardcoded the default, so relocating the log left the cap
+  reading a file nobody wrote to — zero usage, every request allowed. Both now resolve
+  through one helper.
+- **The contract promised more than the code did.** The L3 row still read as an
+  unconditional human stop after `--human-gate-scope irreversible` shipped. The row now
+  says what the flag does, what it does not touch (the review, and the tier), and that
+  choosing it is a recorded loosening rather than the default.
+
+The uncomfortable part is the shape of this list: the drift it describes is the same
+attest-then-drift failure this repo's own field audit documents, committed by the person
+who wrote the audit, in the week he wrote it. That is the argument for the gate, not
+against it — the findings came from a reviewer that could not be talked out of them.
+
 ## 2026-08-22 — `coverloop classify`: the risk tier stops being self-declared (PROTOCOL v2.10.0, CONTRACT v2.8)
 
 Every gate keys off the risk tier, but the tier was **declared** at `init`. A change mislabelled L1

@@ -913,5 +913,74 @@ class HumanGateScope(unittest.TestCase):
         self.assertEqual(self.mod.classify_paths([])[0], "L0")
 
 
+
+class IndependentReviewRegressions(unittest.TestCase):
+    """Three fail-opens an off-policy review of the v2.10.0 release found.
+
+    Each was verified against the code before being fixed, and each is the kind
+    that stays invisible: the tool kept reporting success while the guarantee it
+    advertised was not holding.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_escaped_quote_does_not_leak_the_secret_tail(self):
+        # `PASSWORD="a\" b"` used to redact only up to the ESCAPED quote, leaving
+        # the tail in the packet — and the leaked tail then scanned CLEAN, so the
+        # egress tripwire passed it through to the network.
+        raw = 'PASSWORD="correct horse\\" battery staple"'
+        red = F.redact(raw)
+        self.assertNotIn("battery staple", red)
+        self.assertIn("[REDACTED:secret-value]", red)
+
+    def test_escaped_quote_redaction_is_linear(self):
+        # The fix uses an alternation; if its branches overlapped it would be a
+        # ReDoS on scan(), which runs on every outbound review packet.
+        blob = 'PASSWORD="' + ('\\"' * 40000)
+        t0 = time.monotonic()
+        F.scan(blob)
+        F.redact(blob)
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_camelcase_names_reach_their_real_tier(self):
+        # The boundary required `/`, `.`, `_` or `-` right after the keyword, so
+        # ordinary camelCase auth/worker/schema/credential files read as L1.
+        for path in ("authorization.ts", "authenticationService.py",
+                     "workerPool.ts", "schemaVersion.py", "credentialsManager.go",
+                     "authGuard.tsx", "models/user.py"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L3")
+
+    def test_camelcase_boundary_does_not_over_reach(self):
+        # The counter-test that matters more: the first cut of the fix compiled
+        # the hump under re.I, which folds [A-Z] to [A-Za-z] and made the boundary
+        # match ANY continuation — author.ts and keyboard.tsx both read as L3.
+        # A floor that cries L3 at prose trains people to bypass the gate.
+        for path, expect in (("author.ts", "L1"), ("keyboard.tsx", "L1"),
+                             ("monkeyPatch.js", "L1"), ("modelViewer.css", "L0"),
+                             ("authors/index.md", "L0"), ("docs/models.md", "L0")):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], expect)
+
+    def test_gate_applies_the_floor_without_being_asked(self):
+        # `classify` shipped as a command you had to remember to wire, so
+        # `gate --min-tier L0` still passed over a migration. The floor now runs
+        # inside the gate, with no flag to switch it off.
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            open(os.path.join(d, "migrations", "002.sql"), "w").write("drop table users;\n")
+            r = run(CLI, "gate", "--min-tier", "L0")
+            self.assertNotEqual(r.returncode, 0, "L0 claim passed over a migration")
+            self.assertIn("L3", r.stderr + r.stdout)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

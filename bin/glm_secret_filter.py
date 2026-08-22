@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-07-15q"
+FILTER_VERSION = "2026-08-22a"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -77,7 +77,14 @@ ASSIGN_RE = re.compile(
     # so an inner apostrophe in "horse's staple" doesn't cut it short); when
     # unquoted, a bare token. No {3,} floor — TOKEN=x must redact too.
     # (Sol v2.7.3 verify #3)
-    r"\s*[=:]\s*)(?P<q>['\"])?(?P<val>(?(q)[^\r\n]*?(?=(?P=q)|[\r\n]|$)|[^\s'\"]+))")
+    # An ESCAPED quote inside the value used to be read as the closing quote,
+    # so `PASSWORD="a\" b"` redacted only `a\` and left ` b"` in the packet —
+    # and the leaked tail then scanned CLEAN, i.e. it would have been sent.
+    # `\\.` consumes an escaped pair as a unit; the alternative branch excludes
+    # backslash so the two branches are DISJOINT and the match stays linear
+    # (an ambiguous alternation here is a ReDoS on the egress path).
+    r"\s*[=:]\s*)(?P<q>['\"])?"
+    r"(?P<val>(?(q)(?:\\.|[^\\\r\n])*?(?=(?P=q)|[\r\n]|$)|[^\s'\"]+))")
 
 # PII shapes (v2.7.2) — redacted from transcripts before they are COMMITTED to
 # git (redact() only). Deliberately NOT part of scan(): scan() is the egress

@@ -15,7 +15,14 @@ API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.getenv("M3_MODEL", "minimax/minimax-m3")
 MAX_CHARS = int(os.getenv("M3_MAX_CHARS", "120000"))
 MAX_TOKENS = int(os.getenv("M3_MAX_TOKENS", "4000"))
-EGRESS_LOG = Path.home() / ".config" / "openrouter" / "egress.log"
+# Resolved through the SAME helper the cap reads, so the two can never point
+# at different files. They used to diverge: the cap honoured
+# COVERLOOP_EGRESS_LOG while the reviewers hardcoded the default, so relocating
+# the log left the cap counting a file nobody wrote to — it then read zero usage
+# and allowed every request. A quota that silently stops counting is worse than
+# no quota, because the dashboard still says you are protected.
+EGRESS_LOG = Path(os.environ.get("COVERLOOP_EGRESS_LOG")
+                 or (Path.home() / ".config" / "openrouter" / "egress.log"))
 # No-training/no-retention routing, no fallback to a non-compliant provider.
 PROVIDER = {"data_collection": "deny", "allow_fallbacks": False}
 
