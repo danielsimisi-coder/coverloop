@@ -1332,8 +1332,7 @@ def cmd_doctor(args):
 
     # --- the reviewers ---------------------------------------------------
     here = os.path.dirname(os.path.abspath(__file__))
-    for tool, why in (("glm-review", "red-team + audit (full ZDR)"),
-                      ("sol-review", "diff gate via OpenRouter")):
+    for tool, why in (("glm-review", "red-team + audit (full ZDR)"),):
         p = os.path.join(here, tool)
         line(ok if os.path.exists(p) else bad, tool,
              why if os.path.exists(p) else "MISSING from this install")
@@ -1341,25 +1340,19 @@ def cmd_doctor(args):
     # --- the gate: two routes, different privacy, user's call ------------
     codex = _which("codex")
     rows.append("")
-    rows.append("  Independent diff gate — pick ONE (both are supported):")
+    rows.append("  Independent diff gate (a different lineage from the builder):")
     if codex:
-        rows.append(f"    {ok} A. Codex CLI            {codex}")
-        rows.append("         highest privacy: the diff goes to OpenAI under YOUR")
-        rows.append("         ChatGPT subscription and never transits OpenRouter.")
-        rows.append("         Verify sign-in with a REAL call, not `codex login status`:")
+        rows.append(f"    {ok} Codex CLI               {codex}")
+        rows.append("         Verify sign-in with a REAL call — `codex login status`")
+        rows.append("         reports success on a revoked token:")
         rows.append("           codex exec --skip-git-repo-check hi < /dev/null")
     else:
-        rows.append(f"    {bad} A. Codex CLI            not installed")
+        rows.append(f"    {bad} Codex CLI               not installed")
         rows.append("         npm i -g @openai/codex && codex login")
-        rows.append("         Highest privacy, but a second account + browser sign-in.")
-    rows.append(f"    {ok} B. sol-review           no extra install; uses the key above")
-    rows.append("         GPT-5.6 Sol via OpenRouter. Different lineage from the")
-    rows.append("         builder, so it is a genuine second opinion — but its")
-    rows.append("         provider offers data_collection:deny, NOT full ZDR.")
-    rows.append("         GLM (full ZDR) stays the reviewer for the touchiest code.")
-    if not codex:
-        problems.append("choose a gate route: install Codex CLI (A) or use sol-review (B) "
-                        "and accept the documented privacy difference")
+        rows.append("         Needed for L2+ gates. It keeps the diff inside your own")
+        rows.append("         OpenAI account; no OpenAI model on OpenRouter offers")
+        rows.append("         strict zero-data-retention, so there is no shortcut here.")
+        problems.append("npm i -g @openai/codex && codex login   (the L2+ diff gate)")
 
     # --- this repo -------------------------------------------------------
     rows.append("")

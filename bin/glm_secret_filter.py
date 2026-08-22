@@ -92,6 +92,15 @@ PII_PATTERNS = [
     # /Users/Shared — acceptable for transcript hygiene (drop a dir, never leak
     # a username).
     ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(/(?:Users|home)/)([^/\s]+)")),
+    # Same username, dash-encoded. Claude Code slugifies a project path into a
+    # directory name (/Users/alice/x -> -Users-alice-x), and that slug shows up
+    # verbatim in scratch paths inside captured transcripts. The slash pattern
+    # above does not match it, so the username shipped to a PUBLIC repo in
+    # committed evidence — found by an adversarial audit of this repo, 16
+    # occurrences of the maintainer's own name. A privacy tool leaking the one
+    # identifier it advertises removing is the worst kind of miss: it was
+    # invisible precisely because the shape looked nothing like a path.
+    ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(-(?:Users|home)-)([^-\s/]+)")),
     ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
     ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
@@ -365,7 +374,18 @@ def redact(text):
     out = ASSIGN_RE.sub(lambda m: m.group(1) + (m.group(2) or "") + "[REDACTED:secret-value]", out)
     # PII pass (committed-transcript hygiene, v2.7.2): keep the path prefix
     # readable, drop the identifying username; emails/UUIDs replaced whole.
-    out = PII_PATTERNS[0][1].sub(r"\1[REDACTED:user]", out)
-    out = PII_PATTERNS[1][1].sub("[REDACTED:email]", out)
-    out = PII_PATTERNS[2][1].sub("[REDACTED:uuid]", out)
+    # Look each pattern up BY NAME, not by list position. This used to index
+    # PII_PATTERNS[0..2] directly, so adding a pattern anywhere but the end
+    # silently shifted every replacement onto the wrong label — a username came
+    # out tagged [REDACTED:email] and its path prefix was eaten. Fragile
+    # coupling like that turns a one-line addition into a data bug.
+    _pii = {}
+    for _name, _rx in PII_PATTERNS:
+        _pii.setdefault(_name, []).append(_rx)
+    for _rx in _pii.get("pii-user", []):
+        out = _rx.sub(r"\1[REDACTED:user]", out)
+    for _rx in _pii.get("pii-email", []):
+        out = _rx.sub("[REDACTED:email]", out)
+    for _rx in _pii.get("pii-uuid", []):
+        out = _rx.sub("[REDACTED:uuid]", out)
     return out

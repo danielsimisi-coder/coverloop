@@ -45,11 +45,11 @@ You may **raise** a tier. **You may never lower a deterministic floor** — not 
 
 The reviewer sees the change as a **cold artifact** — a diff/files packet in a **fresh** session — never "review what you just wrote" inside the builder's own conversation. Fresh context removes most self-review bias; a **different model lineage** adds a second, smaller layer.
 
-- **Diff gate:** `sol-review --mode redteam` (GPT-5.6 Sol via OpenRouter), or the Codex CLI if installed — see the privacy note below.
+- **Diff gate:** the Codex CLI in a fresh session (`codex exec -m gpt-5.6-sol --sandbox read-only`), with reasoning effort set explicitly — high for L2, xhigh for L3. It defaults to low on its own; a lazy judge is worse than none.
 - **Red-team / consistency audit:** `glm-redteam` / `glm-audit` (full ZDR).
 - Demand **file:line** evidence. A bare verdict is noise.
 
-**Privacy differs by route, and it matters:** GLM runs under full ZDR. Sol and M3 route under `data_collection: deny` — *not* full ZDR. For the touchiest code, prefer GLM and the Codex CLI (which never transits OpenRouter at all).
+**Privacy differs by reviewer, and it matters:** GLM is the only reviewer here on a strict zero-data-retention endpoint. M3 routes under `data_collection: deny` — a weaker promise — which is why it is optional and L3-only. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter.
 
 ## 4. Record evidence, then let the gate decide
 

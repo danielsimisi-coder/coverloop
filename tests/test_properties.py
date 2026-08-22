@@ -664,12 +664,6 @@ class DailyReviewCap(unittest.TestCase):
         self._write(n_today=500)
         os.environ["COVERLOOP_DAILY_REVIEW_CAP"] = "0"
         self.cap.enforce_daily_cap()  # disabled -> no exit
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 def _load_coverloop():
     """Load bin/coverloop as a module (it has no .py extension)."""
     import importlib.util
@@ -788,15 +782,33 @@ class DoctorSetupReport(unittest.TestCase):
             self.assertEqual(out.stderr.strip(), "", out.stderr)
             self.assertTrue(out.stdout.startswith("coverloop doctor"), out.stdout[:80])
 
-    def test_offers_both_gate_routes_with_the_privacy_difference_stated(self):
-        """The two gate routes are not equivalent. A safety tool must show the
-        tradeoff rather than silently pick the convenient one."""
+    def test_names_the_gate_and_why_there_is_no_shortcut(self):
+        """The diff gate needs its own account. Saying only "not installed"
+        loses the user; the report must carry the install line AND the reason
+        the obvious shortcut (route it through the OpenRouter key you already
+        have) is refused — no OpenAI model there offers strict ZDR, and the
+        highest-authority reviewer must not run at the lowest privacy bar."""
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             out = self._run(d, d)
             self.assertIn("Codex CLI", out.stdout)
-            self.assertIn("sol-review", out.stdout)
-            self.assertIn("NOT full ZDR", out.stdout)
+            self.assertIn("npm i -g @openai/codex", out.stdout)
+            self.assertIn("zero-data-retention", out.stdout)
+
+    def test_no_reviewer_is_advertised_that_cannot_actually_run(self):
+        """Regression: a reviewer was shipped and documented that always
+        fail-closed, because its provider has no strict-ZDR endpoint while the
+        engine hard-requires one. Advertising a reviewer that cannot run is an
+        overclaim in a safety tool."""
+        import tempfile, os as _os
+        bindir = _os.path.dirname(CLI)
+        for advertised in ("glm-review",):
+            self.assertTrue(_os.path.exists(_os.path.join(bindir, advertised)),
+                            f"{advertised} is advertised but missing")
+        with tempfile.TemporaryDirectory() as d:
+            out = self._run(d, d)
+            self.assertNotIn("sol-review", out.stdout,
+                             "doctor still advertises a removed reviewer")
 
     def test_does_not_print_the_key_itself(self):
         import tempfile, os as _os
@@ -807,3 +819,53 @@ class DoctorSetupReport(unittest.TestCase):
                 fh.write("sk-or-SECRETVALUE123456")
             out = self._run(d, d)
             self.assertNotIn("SECRETVALUE123456", out.stdout + out.stderr)
+
+class CommittedEvidenceHasNoPII(unittest.TestCase):
+    """A privacy tool must not leak the one identifier it advertises removing.
+
+    Regression: an adversarial audit of this repo found the maintainer's
+    username committed 16 times in a captured transcript. Claude Code
+    slugifies a project path into a directory name (/Users/alice/x ->
+    -Users-alice-x), and the PII pattern only matched the slash form — so the
+    dash-encoded username sailed straight into a PUBLIC repo. It was invisible
+    precisely because the shape looked nothing like a path."""
+
+    def test_dash_encoded_home_paths_are_redacted(self):
+        for raw, must_go in (("-Users-alice-Downloads-proj", "alice"),
+                             ("-home-bob-src", "bob"),
+                             ("/Users/carol/x", "carol"),
+                             ("/home/dave/y", "dave")):
+            out = F.redact(raw)
+            self.assertNotIn(must_go, out, f"username survived redaction: {raw} -> {out}")
+            self.assertIn("[REDACTED:user]", out, out)
+
+    def test_pii_labels_are_not_position_coupled(self):
+        """redact() used to index PII_PATTERNS[0..2], so inserting a pattern
+        shifted every replacement onto the wrong label."""
+        self.assertIn("[REDACTED:user]", F.redact("-Users-alice-x"))
+        self.assertEqual(F.redact("a@b.com"), "[REDACTED:email]")
+
+    def test_no_committed_evidence_contains_a_home_username(self):
+        """Scan the tracked evidence directory for un-redacted home paths."""
+        import subprocess, re as _re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out = subprocess.run(["git", "ls-files", ".coverloop"], cwd=root,
+                             capture_output=True, text=True, timeout=30)
+        pat = _re.compile(r"[-/](?:Users|home)[-/](?!\[REDACTED)[A-Za-z0-9_.]+")
+        offenders = []
+        for rel in out.stdout.split():
+            fp = os.path.join(root, rel)
+            try:
+                with open(fp, encoding="utf-8", errors="replace") as fh:
+                    body = fh.read()
+            except OSError:
+                continue
+            for m in pat.findall(body):
+                # A bare "/Users/" with nothing after it is harmless.
+                if m.rstrip("-/").split("-")[-1].split("/")[-1]:
+                    offenders.append(f"{rel}: {m}")
+        self.assertEqual(offenders[:5], [], f"PII in committed evidence: {offenders[:5]}")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

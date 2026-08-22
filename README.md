@@ -72,18 +72,17 @@ Same tool, more steps — and you own the `PATH` and file modes yourself. `cover
 > **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
 > Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
 
-### 🕵️ The independent gate — two routes, and the difference is real
+### 🕵️ The independent gate needs its own account — and that's deliberate
 
-The reviewer that gates your diff must come from a **different lineage than the builder** — that's the whole point. You pick how it runs, and Coverloop won't quietly choose the convenient one for you:
+The reviewer that gates your diff must come from a **different lineage than the builder**. That means the [Codex CLI](https://developers.openai.com/codex/cli), signed in with your ChatGPT account:
 
-| | **A. Codex CLI** | **B. `sol-review`** |
-|---|---|---|
-| Setup | `npm i -g @openai/codex && codex login` | none — uses the key above |
-| Where your diff goes | OpenAI, under **your** ChatGPT subscription — never transits OpenRouter | OpenAI **via OpenRouter** |
-| Privacy routing | outside this loop entirely | `data_collection: deny` — **not full ZDR** |
-| Cost | your existing subscription | ~$0.07 per review |
+```bash
+npm i -g @openai/codex && codex login
+```
 
-Measured, not assumed: OpenRouter accepts `provider.zdr=true` for GLM and **refuses it** for both Sol and M3. So **GLM (full ZDR) stays the red-team/auditor for the touchiest code** regardless of which gate route you choose. `coverloop doctor` prints this table with your actual setup filled in.
+**Why not route it through the OpenRouter key you already have?** I tried, and shipped it, and then measured it properly: **no OpenAI model on OpenRouter offers strict zero-data-retention** — only `data_collection: deny`, which is a weaker promise. Running your *highest-authority* reviewer at a *lower* privacy bar than your red-team is backwards, so that shortcut was removed rather than documented around. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter at all.
+
+`coverloop doctor` tells you if it's missing and gives you the line above. It's a one-time, two-minute cost.
 
 ### 🔒 Make it unskippable — `coverloop gate`
 
