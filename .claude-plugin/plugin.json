@@ -1,6 +1,6 @@
 {
   "name": "coverloop",
-  "version": "2.10.3",
+  "version": "2.10.4",
   "description": "Never let the model that wrote the code be the one that approves it. Risk-tiered gates, independent cross-lineage review, and evidence bound to the commit.",
   "author": {
     "name": "Daniel Siman Tov",

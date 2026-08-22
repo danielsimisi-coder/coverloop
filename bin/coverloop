@@ -171,8 +171,13 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 
 # Above this many changed files a change is too broad to be L1 regardless of
 # what the individual paths look like — breadth is itself a risk signal.
-_NAMED_NOT_INERT = re.compile(r"(^|/)requirements[^/]*\.txt$", re.I)
-_INERT_RE = re.compile(r"\.(md|mdx|txt|rst|adoc|css|scss|sass|less)$", re.I)
+# Extensions that are inert WHATEVER the file is named. `.txt` is deliberately
+# absent: config/permissions.txt and requirements.txt are plain text that
+# configures real behaviour, and the blanket shortcut was declaring them L0
+# ahead of the rules that call them dangerous. `.txt` falls through to the
+# ordinary rules, where the documentation rule still catches notes.txt — but
+# only after the L3 rules have had their say.
+_INERT_RE = re.compile(r"\.(md|mdx|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
 
@@ -190,13 +195,40 @@ BREADTH_L2_FILES = 10
 # revertible, so stopping a solo founder on every one of them buys less than it
 # costs. This list is deliberately short: the moment it grows to cover
 # "anything that feels important", the stop stops meaning anything.
-IRREVERSIBLE_RE = re.compile(
-    r"(^|/)migrations?/"                                  # schema migrations
-    r"|\.sql$"                                            # raw SQL
-    r"|(^|/)(billing|payments?|invoices?|invoicing|checkout|charges?|chargebacks?"
-    r"|stripe|cardcom|subscriptions?|wallets?|payouts?|refunds?|transfers?|ledgers?)(?=(?-i:[A-Z])|[/._\-\s]|$)"
-    r"|(^|/)(rls|rbac|acls?|authz|authorization|authorisation|permissions?|policies|policy)(?=(?-i:[A-Z])|[/._\-\s]|$)",
-    re.I)
+# Which L3 REASONS are hard to take back. This is derived from the rule that
+# matched, not from a second regex kept in step by hand — the parallel regex
+# drifted from RISK_RULES three separate times (camelCase authz, then `acl`,
+# then alembic/db-migrate directories), each time silently waiving the human
+# stop for exactly the changes `--human-gate-scope irreversible` promises to
+# stop. A rule added above is now covered here automatically, or not at all,
+# and never half-covered.
+IRREVERSIBLE_REASONS = frozenset({
+    "database migration",
+    "raw SQL",
+    "authentication / authorisation / RLS",
+    "money path",
+    "schema / data model",
+})
+
+
+def is_irreversible(path):
+    """True when PATH matches an L3 rule whose consequences are hard to undo."""
+    for rule_tier, rx, why in _RISK_RULES_C:
+        if rx.search(path):
+            return rule_tier == "L3" and why in IRREVERSIBLE_REASONS
+    return False
+
+
+class _IrreversibleShim:
+    """Kept so `IRREVERSIBLE_RE.search(path)` still reads naturally at the two
+    call sites and in the tests; the logic lives in is_irreversible()."""
+
+    @staticmethod
+    def search(path):
+        return is_irreversible(path)
+
+
+IRREVERSIBLE_RE = _IrreversibleShim()
 
 
 def _resolve_commit(ref, cwd):
@@ -300,7 +332,9 @@ def _gate_floor_paths(root, args, report, sha):
     # tests, and sail through: the floor never looked at it. `prior^..sha` also
     # re-covers the evidence commit itself, which is the point: the recorded
     # tier has to match what that commit actually contains.
-    prior = (report or {}).get("commit")
+    # The EARLIEST commit this evidence claims to cover — not the one it was last
+    # rebound to (see origin_commit above).
+    prior = (report or {}).get("origin_commit") or (report or {}).get("commit")
     rng = f"{prior}^..{sha}" if prior and prior != sha else f"{sha}^..{sha}"
     if rng:
         out = _git_paths(["diff", "--name-only", rng], root)
@@ -335,7 +369,7 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
         # dependency manifest that happens to end in .txt, and the blanket inert
         # shortcut demoted it from L2 to L0 — a regression introduced by the fix
         # for documentation false positives.
-        if _INERT_RE.search(path) and not _NAMED_NOT_INERT.search(path):
+        if _INERT_RE.search(path):
             matched = ("L0", "documentation / styling (inert regardless of name)")
         for rule_tier, rx, why in (() if matched else _RISK_RULES_C):
             if rx.search(path):
@@ -925,10 +959,19 @@ def _attest_lock(root):
         except OSError:
             continue
     if fd is None:
-        # Do NOT silently drop the exclusivity contract (Sol + M3 R4): warn loudly
-        # so a lost update can't happen unnoticed on a flock-capable host.
-        sys.stderr.write("coverloop: WARNING — could not create the attest lock; proceeding "
-                         "UNLOCKED. Concurrent `attest` on this machine may lose updates.\n")
+        # Warning loudly was not enough: the body ran anyway, so the "two attests
+        # never lose each other's evidence" guarantee was false at exactly the
+        # moment it mattered, and a lost update leaves NO trace to notice. The
+        # timeout path below already refuses; this path now matches it.
+        if os.environ.get("COVERLOOP_ALLOW_UNLOCKED_ATTEST") != "1":
+            sys.stderr.write(
+                "coverloop: could not create the attest lock; refusing rather than "
+                "risking a lost update. Set COVERLOOP_ALLOW_UNLOCKED_ATTEST=1 to "
+                "accept that risk.\n")
+            sys.exit(1)
+        sys.stderr.write("coverloop: WARNING — proceeding UNLOCKED "
+                         "(COVERLOOP_ALLOW_UNLOCKED_ATTEST=1); concurrent `attest` "
+                         "on this machine may lose updates.\n")
         yield
         return
     try:
@@ -985,6 +1028,12 @@ def _cmd_attest_locked(args, root):
         # files (find_report guarantees that), rebound to the current HEAD.
         anc_sha = report["commit"]
         report = dict(report)
+        # Remember where this evidence ORIGINALLY bound. Overwriting `commit`
+        # alone erased the range: the floor then saw report.commit == HEAD and
+        # classified only HEAD^..HEAD, so a dangerous commit A attested as L0,
+        # followed by an evidence-only commit B, made A invisible. The floor
+        # reads this field, so re-attesting can no longer shrink what it covers.
+        report.setdefault("origin_commit", anc_sha)
         report["commit"] = sha
         # Re-bind any reviewer transcript to the new commit's filename so the
         # gate's commit+reviewer binding still recognizes it. The transcript is
@@ -1680,14 +1729,22 @@ def cmd_gate(args):
                   f"first).", file=sys.stderr)
             sys.exit(2)
         if unknown:
-            auto_floor = "L1"
-            auto_reasons = ["could not determine the changed paths; floor held at L1"]
+            # Softening to L1 let a valid L1 report with green tests pass while
+            # the gate had, by its own admission, failed to read what changed —
+            # a git timeout could hide an L3 path. If the floor cannot be
+            # computed, the gate has nothing to stand on.
+            print("coverloop gate: could not determine the changed paths, so no "
+                  "risk floor could be derived. Refusing rather than guessing "
+                  "(is this a git repo, and is git responding?).", file=sys.stderr)
+            sys.exit(1)
         elif auto_paths:
             auto_floor, auto_reasons = classify_paths(auto_paths, BREADTH_L2_FILES)
-    except Exception:
-        # Never let a classification error pass a change it could not read: an
-        # unreadable diff is treated as unknown, and unknown is not L0.
-        auto_floor, auto_reasons = "L1", ["classification unavailable; floor held at L1"]
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"coverloop gate: classification failed ({exc}); refusing. A change "
+              f"the gate cannot read is not a change it can clear.", file=sys.stderr)
+        sys.exit(1)
 
     tier = tier_max(*min_floors, *tier_floors, report_tier, auto_floor)
 

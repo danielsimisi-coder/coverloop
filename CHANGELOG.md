@@ -2,6 +2,30 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — round five: stop maintaining two lists (PROTOCOL v2.10.4)
+
+Two of the six defects this round were the same disease, and it had already bitten
+twice before: `IRREVERSIBLE_RE` was a second regex that had to agree with
+`RISK_RULES`, and it drifted every time a rule was added — camelCase authz, then
+`acl`, then the alembic and db/migrate directories. Each drift silently waived the
+human stop for exactly the changes `--human-gate-scope irreversible` promises to
+stop. Irreversibility is now DERIVED from the rule that matched, and a property test
+asserts every reason in the set is a reason some rule actually emits.
+
+- **A quoted secret may span lines.** `PASSWORD="alpha\nbeta"` redacted the first
+  line and left the rest — which then scanned clean and would have been sent. The
+  span is capped at 4096 characters so a stray quote cannot swallow a document.
+- **`.txt` is no longer presumed inert.** The shortcut added to stop documentation
+  false positives ran ahead of the risk rules, so `config/permissions.txt` was L0
+  despite `permissions` being an L3 keyword.
+- **Re-attesting can no longer shrink what the floor covers.** Rebinding evidence to
+  a new HEAD overwrote the commit it originally bound to, so a dangerous commit
+  attested L0 became invisible after one evidence-only commit.
+- **An unreadable change set rejects instead of softening to L1.** A git timeout
+  could hide an L3 path while a valid L1 report passed on green tests.
+- **An attest that cannot lock refuses.** Warning loudly and running anyway left the
+  "two attests never lose each other's evidence" guarantee false, with no trace.
+
 ## 2026-08-22 — round four: path collection (PROTOCOL v2.10.3)
 
 The floor is only as good as the list of paths it is handed, and that list was

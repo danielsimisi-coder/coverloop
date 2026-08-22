@@ -1279,5 +1279,84 @@ class FourthRoundRegressions(unittest.TestCase):
                 os.environ.clear()
                 os.environ.update(old)
 
+
+class FifthRoundRegressions(unittest.TestCase):
+    """Six defects, two of them the same disease: a list that had to agree with
+    another list, kept in step by hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_a_quoted_secret_may_span_lines(self):
+        # The quoted branch excluded newlines, so a multi-line value redacted its
+        # first line and left the rest — and the leaked tail scanned CLEAN.
+        for raw, leak in (
+            ('PASSWORD="alpha123\nbeta456"', "beta456"),
+            ('PASSWORD="alpha\\\nbeta"', "beta"),
+            ('API_KEY="one\ntwo\nthree"', "three"),
+        ):
+            with self.subTest(raw=raw):
+                red = F.redact(raw)
+                self.assertNotIn(leak, red)
+                self.assertIn("[REDACTED:secret-value]", red)
+
+    def test_a_stray_quote_cannot_swallow_the_document(self):
+        # The span is capped so an unterminated quote near a secret name does not
+        # redact everything after it.
+        blob = 'PASSWORD="unterminated ' + ("x" * 20000)
+        self.assertGreater(len(F.redact(blob)), 15000)
+
+    def test_irreversible_is_derived_from_the_rules(self):
+        # A parallel regex drifted from RISK_RULES three times, each time waiving
+        # the human stop for changes the option promises to stop. Any L3 rule
+        # whose reason is in IRREVERSIBLE_REASONS is now covered automatically.
+        for path in ("alembic/versions/1.py", "db/migrate/1.rb", "migrations/1.sql",
+                     "src/authorization.ts", "src/rbac.ts", "src/acl.ts",
+                     "src/wallet/transfer.ts", "models/user.py"):
+            with self.subTest(path=path):
+                self.assertTrue(self.mod.is_irreversible(path))
+        for path in ("README.md", "src/worker/job.ts", "src/api.ts"):
+            with self.subTest(path=path):
+                self.assertFalse(self.mod.is_irreversible(path))
+
+    def test_every_irreversible_reason_is_a_real_rule_reason(self):
+        """The property that keeps the derivation honest: a typo in the reason set
+        would silently cover nothing."""
+        rule_reasons = {why for tier, _rx, why in self.mod.RISK_RULES if tier == "L3"}
+        self.assertTrue(self.mod.IRREVERSIBLE_REASONS <= rule_reasons,
+                        self.mod.IRREVERSIBLE_REASONS - rule_reasons)
+
+    def test_txt_is_not_presumed_inert(self):
+        # The blanket .txt shortcut declared config/permissions.txt L0 ahead of
+        # the rule that calls `permissions` an L3 keyword.
+        self.assertEqual(self.mod.classify_paths(["config/permissions.txt"])[0], "L3")
+        self.assertEqual(self.mod.classify_paths(["requirements.txt"])[0], "L2")
+        self.assertEqual(self.mod.classify_paths(["docs/notes.txt"])[0], "L0")
+
+    def test_re_attesting_cannot_shrink_what_the_floor_covers(self):
+        """Dangerous commit A, attested L0; evidence-only commit B; attest again.
+        The rebind used to overwrite the report's commit with HEAD, so the floor
+        classified only HEAD^..HEAD and A became invisible."""
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+            subprocess.run([CLI, "init"], cwd=d, capture_output=True, text=True)
+            os.makedirs(os.path.join(d, "migrations"), exist_ok=True)
+            open(os.path.join(d, "migrations", "002.sql"), "w").write("drop table users;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "A")
+            for _ in range(2):
+                subprocess.run([CLI, "attest", "--tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+                run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            r = subprocess.run([CLI, "gate"], cwd=d, capture_output=True, text=True)
+            self.assertIn("L3", r.stdout + r.stderr,
+                          "re-attesting hid the migration from the floor")
+            self.assertNotEqual(r.returncode, 0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
