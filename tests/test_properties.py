@@ -1051,6 +1051,30 @@ class SecondRoundRegressions(unittest.TestCase):
                 self.assertTrue(self.mod.IRREVERSIBLE_RE.search(path),
                                 f"{path} would skip the human stop")
 
+    def test_email_redaction_is_linear_not_quadratic(self):
+        """The PII pass runs BEFORE the packet size check, so a slow pattern here
+        is a ReDoS no size limit can bound. Measured at 4x per doubling before the
+        fix: 400 KB took 93 seconds."""
+        prev = None
+        for n in (100_000, 200_000, 400_000):
+            blob = "a." * (n // 2) + "@"
+            t0 = time.monotonic()
+            F.redact(blob)
+            took = time.monotonic() - t0
+            self.assertLess(took, 3.0, f"{n} chars took {took:.1f}s")
+            if prev is not None:
+                # Linear growth doubles; quadratic quadruples. 2.5x leaves room
+                # for timer noise on a loaded machine without admitting O(n^2).
+                self.assertLess(took, max(prev * 2.5, 0.25))
+            prev = max(took, 0.02)
+
+    def test_email_redaction_still_catches_real_addresses(self):
+        # The bound is the RFC 5321 local-part limit, not an arbitrary cap — the
+        # counter-test that keeps it from quietly becoming an under-redaction.
+        for addr in ("jane.doe+1@sub.example.co.uk", "a@b.io", "x_y%z@mail.example.com"):
+            with self.subTest(addr=addr):
+                self.assertEqual(F.redact(addr), "[REDACTED:email]")
+
     def test_unreadable_quota_log_refuses_rather_than_allows(self):
         import egress_cap as cap
         with tempfile.TemporaryDirectory() as d:

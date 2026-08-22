@@ -108,7 +108,15 @@ PII_PATTERNS = [
     # identifier it advertises removing is the worst kind of miss: it was
     # invisible precisely because the shape looked nothing like a path.
     ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(-(?:Users|home)-)([^-\s/]+)")),
-    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+    # The local part is POSSESSIVE (`++`). It was an ordinary `+`, which
+    # re-expands and re-contracts at every word boundary when no `@` follows —
+    # quadratic, measured at 4x per input doubling (51 KB of "a." took 1.9s and
+    # a larger probe exceeded ten seconds). That is a ReDoS on the EGRESS path,
+    # and the packet size limit does not bound it because redaction runs BEFORE
+    # the size check. A local part never contains `@`, so giving up backtracking
+    # here costs nothing. The domain half stays backtrackable: it only runs once
+    # an `@` has actually been found, and it needs to give back the final dot.
+    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]{1,64}+@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b")),
     ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
