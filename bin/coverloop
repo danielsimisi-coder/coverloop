@@ -146,6 +146,42 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 BREADTH_L2_FILES = 10
 
 
+# The narrow set: changes a human must personally stop on, because no amount of
+# automated review buys back a mistake here.
+#
+#   1. schema migrations / raw SQL  — can destroy data; there is no undo
+#   2. money paths                  — a wrong number moves real funds
+#   3. authz / RLS / permissions    — a wrong rule shows one customer another's data
+#
+# Everything else at L3 (workers, cron, CI config, deploy wiring, concurrency,
+# env plumbing) is dangerous enough to earn the FULL automated loop — tests,
+# an independent diff gate, a red-team pass, hashed evidence — but it is
+# revertible, so stopping a solo founder on every one of them buys less than it
+# costs. This list is deliberately short: the moment it grows to cover
+# "anything that feels important", the stop stops meaning anything.
+IRREVERSIBLE_RE = re.compile(
+    r"(^|/)migrations?/"                                  # schema migrations
+    r"|\.sql$"                                            # raw SQL
+    r"|(^|/)(billing|payments?|invoic|checkout|charge|stripe|cardcom|subscription)"
+    r"|(^|/)(rls|authz|permissions?|policies)(/|[._-])",
+    re.I)
+
+
+def _changed_paths_for_gate(root, args):
+    """Paths this gate run is judging: the PR range if --base was given (CI),
+    else the working tree plus untracked files (local)."""
+    base = getattr(args, "base", None)
+    if base:
+        out = git(["diff", "--name-only", f"{base}...HEAD"], cwd=root)
+        if out is None:
+            out = git(["diff", "--name-only", base, "HEAD"], cwd=root)
+    else:
+        tracked = git(["diff", "--name-only", "HEAD"], cwd=root) or ""
+        untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root) or ""
+        out = (tracked + "\n" + untracked).strip()
+    return [p for p in (out or "").splitlines() if p.strip()]
+
+
 def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
     """Derive the deterministic tier FLOOR for a set of changed paths.
 
@@ -1109,7 +1145,7 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
 
 
 def evaluate(report, tier, files, require_captured=False, root=None, test_command=None,
-             require_executed=False):
+             require_executed=False, human_gate_required=True):
     """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout."""
     checks = []
 
@@ -1154,13 +1190,36 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
             "red-team/audit is mandatory at L3", require_captured, root, report_commit,
             require_executed))
 
+        # WHO gets stopped, and why it is a choice.
+        #
+        # By default every L3 change waits for a named human. Measured on a real
+        # billing/auth/worker platform that is ~47% of commits — and a gate that
+        # fires on half your work is a gate you learn to rubber-stamp, which is
+        # the same failure this tool warns about for over-classification, one
+        # notch up. `--human-gate-scope irreversible` narrows the STOP (not the
+        # review: tests, diff gate and red-team still run on every L3) to the
+        # changes you cannot take back — schema migrations, money paths, and
+        # authz/RLS policy. On that same repo it took the human stops from 47%
+        # to 25% of commits.
+        #
+        # It is OPT-IN. Silently relaxing an existing user's gate on upgrade
+        # would be exactly the kind of unannounced weakening this project exists
+        # to make impossible.
+        needs_human = human_gate_required
+        why_exempt = ("" if needs_human else
+                      " — scope=irreversible and no migration/money/authz path in "
+                      "this change; the full automated L3 evidence still applies")
+
         hg = report.get("human_gate") if report else None
         hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
-        detail = (
-            f"human gate: approved by {hg.get('approver')!r}" if hg_ok
-            else "human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`"
-        )
-        checks.append(check("human_gate", hg_ok, detail))
+        if not needs_human:
+            checks.append(check("human_gate", True, "human gate: not required" + why_exempt))
+        else:
+            detail = (
+                f"human gate: approved by {hg.get('approver')!r}" if hg_ok
+                else "human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`"
+            )
+            checks.append(check("human_gate", hg_ok, detail))
 
     verdict = all(c["status"] == "pass" for c in checks)
     return verdict, checks
@@ -1421,6 +1480,15 @@ def cmd_classify(args):
 
     tier, reasons = classify_paths(paths)
 
+    human = "required"
+    if tier != "L3":
+        human = "not required (below L3)"
+    elif not any(IRREVERSIBLE_RE.search(p) for p in paths):
+        human = "not required under --human-gate-scope irreversible"
+
+    if getattr(args, "human_gate", False):
+        print("required" if human == "required" else "not-required")
+        return
     if getattr(args, "quiet", False):
         print(tier)
         return
@@ -1430,6 +1498,7 @@ def cmd_classify(args):
         print(f"  - {r}")
     if not reasons:
         print("  - no files changed; this asserts nothing")
+    print(f"\nHuman stop: {human}")
     print("\nThis is a FLOOR, not a verdict: the gate takes the MAX of this, any "
           "other --min-tier, and the report's own tier. It can only raise.")
     print(f'Wire it:  coverloop gate --min-tier "$(coverloop classify --quiet)"')
@@ -1516,7 +1585,15 @@ def cmd_gate(args):
     # and additionally demands a coverloop-EXECUTED capture.
     require_transcript = (args.require_captured or args.require_transcript
                           or args.require_executed)
+    human_required = True
+    if tier == "L3" and getattr(args, "human_gate_scope", "all") == "irreversible":
+        _changed = _changed_paths_for_gate(root, args)
+        # No visible change set (a bare HEAD check) is NOT evidence of safety:
+        # fall back to demanding the human.
+        human_required = (not _changed) or any(IRREVERSIBLE_RE.search(p) for p in _changed)
+
     verdict, checks = evaluate(report, tier, files,
+                               human_gate_required=human_required,
                                require_captured=require_transcript, root=root,
                                test_command=(cfg or {}).get("test_command"),
                                require_executed=args.require_executed)
@@ -1618,6 +1695,9 @@ def main(argv=None):
                         help="derive the deterministic tier FLOOR from the changed paths")
     pc.add_argument("--base", metavar="REF",
                     help="classify REF...HEAD instead of the working tree (e.g. origin/main)")
+    pc.add_argument("--human-gate", action="store_true",
+                    help="print required|not-required instead of the tier — whether a NAMED "
+                         "human approval is needed under --human-gate-scope irreversible")
     pc.add_argument("--quiet", "-q", action="store_true",
                     help="print only the tier, for piping into gate --min-tier")
     pc.add_argument("paths", nargs="*",
@@ -1687,6 +1767,10 @@ def main(argv=None):
                          "policy and self-authorize. Needs the ref fetched. Mutually exclusive with --signers")
     pg.add_argument("--ci", action="store_true", help="CI mode: emit GitHub error annotations")
     pg.add_argument("--json", action="store_true", help="machine-readable verdict")
+    pg.add_argument("--human-gate-scope", choices=["all", "irreversible"], default="all",
+                    help="which L3 changes need a NAMED human approval. all (default) = every "
+                         "L3 change. irreversible = only migrations/SQL, money paths and "
+                         "authz/RLS; the full automated L3 review still runs on everything else")
     pg.set_defaults(fn=cmd_gate)
 
     args = p.parse_args(argv)

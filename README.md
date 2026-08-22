@@ -51,9 +51,19 @@ That last row is the real price, and no table can shrink it. Everything above it
 | Music app — game logic, UI, no money path | 8% | 45% | 47% | **0%** |
 | Music app — second codebase | 18% | 40% | 40% | **2%** |
 
-Read that honestly, because it is the most important thing on this page: **if your product is billing plus auth plus migrations, roughly half your commits will stop and wait for you.** Not half your *time* — the machine part is seconds — but half of them will ask for a human decision.
+Read that honestly, because it is the most important thing on this page: **if your product is billing plus auth plus migrations, roughly half your commits will stop and wait for you.**
 
-Whether that is a good trade depends on something only you know: how often *you* would have caught it anyway. If the answer is "usually", Coverloop is buying you very little and you should not install it. If the answer is "I merge what Claude says is done because I can't read every diff", that 47% is the number that was already invisible.
+That is a real cost, and it cuts against the reason you're here — you want Claude to ship *more* unattended, not less. A stop that fires on half your work is a stop you learn to rubber-stamp by week two, which is the same failure this tool warns about for over-classification, one notch up.
+
+So the stop is adjustable, and the automated review is not:
+
+```bash
+coverloop gate --human-gate-scope irreversible
+```
+
+Every L3 change still gets the whole automated loop — tests, an independent diff gate, a red-team pass, hashed commit-bound evidence. What narrows is **which ones wait for you personally**: only the ones you cannot take back — schema migrations, money paths, and authz/RLS policy. On the same repo, that moved human stops from **47% to 25%** of commits.
+
+It is opt-in, and stays opt-in. Quietly relaxing an existing user's gate on upgrade is precisely the kind of unannounced weakening this project exists to make impossible — so if you want it, you type it.
 
 **And if your app has no money path and no auth**, the picture inverts: L3 essentially never fires, most changes land in L1/L2, and the whole loop costs you a diff review that a model does in fourteen seconds.
 

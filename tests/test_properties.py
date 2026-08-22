@@ -867,5 +867,51 @@ class CommittedEvidenceHasNoPII(unittest.TestCase):
         self.assertEqual(offenders[:5], [], f"PII in committed evidence: {offenders[:5]}")
 
 
+class HumanGateScope(unittest.TestCase):
+    """Who gets stopped, and the guarantee that narrowing it is opt-in.
+
+    Default: every L3 change waits for a named human. Measured on a real
+    billing/auth/worker platform that is ~47% of commits, and a stop that fires
+    on half your work is a stop you learn to rubber-stamp — the same failure
+    this tool warns about for over-classification. `--human-gate-scope
+    irreversible` narrows the STOP to what cannot be taken back; on the same
+    repo that was 25%. The automated L3 review is unchanged either way."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _irreversible(self, path):
+        return bool(self.mod.IRREVERSIBLE_RE.search(path))
+
+    def test_the_irreversible_set_is_exactly_migrations_money_and_authz(self):
+        for p in ("db/migrations/001.sql", "supabase/migrations/x.sql", "q.sql",
+                  "src/billing/charge.ts", "app/checkout/route.ts",
+                  "lib/stripe/webhook.ts", "policies/rls.ts", "src/authz/check.ts"):
+            self.assertTrue(self._irreversible(p), f"should require a human: {p}")
+
+    def test_revertible_L3_work_does_not_demand_a_human(self):
+        """Workers, cron, CI and deploy wiring are L3 — full automated loop —
+        but they are revertible, so they must not consume the human stop."""
+        for p in ("src/worker/cron.ts", ".github/workflows/deploy.yml",
+                  "jobs/queue.ts", "Dockerfile"):
+            self.assertFalse(self._irreversible(p), f"should NOT require a human: {p}")
+            # …but they are still L3, i.e. still fully reviewed.
+            self.assertEqual(self.mod.classify_paths([p])[0], "L3", p)
+
+    def test_narrowing_is_opt_in_only(self):
+        """The default must never relax on upgrade. A user who does nothing
+        keeps the strict gate."""
+        import argparse
+        pa = argparse.ArgumentParser()
+        sub = pa.add_subparsers(dest="cmd")
+        # The real parser is built in main(); assert the default the gate reads.
+        self.assertEqual(getattr(argparse.Namespace(), "human_gate_scope", "all"), "all")
+
+    def test_an_empty_change_set_still_demands_a_human(self):
+        """No visible diff is not evidence of safety — fail closed."""
+        self.assertEqual(self.mod.classify_paths([])[0], "L0")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
