@@ -11,6 +11,7 @@ Run:  python3 tests/test_properties.py
 import json
 import os
 import random
+import re
 import string
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
+BIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "coverloop")
 import glm_secret_filter as F
 
@@ -1074,6 +1076,24 @@ class SecondRoundRegressions(unittest.TestCase):
         for addr in ("jane.doe+1@sub.example.co.uk", "a@b.io", "x_y%z@mail.example.com"):
             with self.subTest(addr=addr):
                 self.assertEqual(F.redact(addr), "[REDACTED:email]")
+
+    def test_no_regex_syntax_newer_than_the_oldest_supported_python(self):
+        """Possessive quantifiers and atomic groups need Python 3.11; this repo's
+        CI matrix starts at 3.9, where they are a SyntaxError at import time — so
+        the whole gate stops running, not just one pattern. That is how a
+        "hardening" tweak to the email regex took `coverloop` down on 3.9 while
+        every local check on 3.13 stayed green. Grepping the source is cheap
+        insurance against a version this machine may not have installed."""
+        import glob
+        offenders = re.compile(r"(?:\}|\*|\+|\?)\+(?![^\s]*['\"]\s*[,)])|\(\?>")
+        for path in glob.glob(os.path.join(BIN_DIR, "*.py")) + [CLI]:
+            src = open(path, encoding="utf-8").read()
+            for lineno, line in enumerate(src.splitlines(), 1):
+                if "re.compile" not in line and not line.strip().startswith('r"'):
+                    continue
+                if "(?>" in line or re.search(r"\{\d+(?:,\d*)?\}\+", line):
+                    self.fail(f"{os.path.basename(path)}:{lineno} uses regex syntax "
+                              f"that needs Python 3.11: {line.strip()[:70]}")
 
     def test_unreadable_quota_log_refuses_rather_than_allows(self):
         import egress_cap as cap

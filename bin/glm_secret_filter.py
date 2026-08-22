@@ -116,7 +116,7 @@ PII_PATTERNS = [
     # the size check. A local part never contains `@`, so giving up backtracking
     # here costs nothing. The domain half stays backtrackable: it only runs once
     # an `@` has actually been found, and it needs to give back the final dot.
-    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]{1,64}+@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b")),
+    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b")),
     ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
