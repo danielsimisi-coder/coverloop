@@ -60,12 +60,34 @@ Reminders are for people who already behave. For everyone else there's an **enfo
 
 ```bash
 coverloop init                                  # once per repo
+coverloop classify                              # what risk is this change, really?
 coverloop attest --tier L2 --tests              # run + record tests
 coverloop attest --codex pass                   # record the independent review
-coverloop gate                                  # exit 0 only if the tier's evidence is complete
+coverloop gate --min-tier "$(coverloop classify --quiet)"   # exit 0 only if the evidence is complete
 ```
 
 Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — or, for the review you **already ran interactively**, `--codex-log <file>` attaches its transcript (redacted, hashed, committed) with **no re-run**. The gate labels each verdict `[captured <hash>]` / `[attached <hash>]` vs `[self-attested]`, so a reviewer can tell a real transcript from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), SHA+checksum-pinned) — and once you also turn on branch protection, a change with missing evidence can't merge without either the evidence or a human explicitly overriding the check (the honest ceiling — see the limits note below and [`docs/GATE.md`](docs/GATE.md)).
+
+### 🎚️ The tier isn't yours to declare — `coverloop classify`
+
+Every gate above keys off the **risk tier**. So if the tier is just *declared*, one mislabel — a typo, a hurry, an optimistic agent — silently skips the whole L3 chain. No alarm. No evidence that anything was skipped. **That is the one place this design could be defeated for free**, so the tier is now *derived*:
+
+```console
+$ coverloop classify
+coverloop classify: L3  (4 file(s), working tree vs HEAD (incl. untracked))
+  - L0: documentation (README.md)
+  - L3: authentication / authorisation / RLS (src/auth/session.ts)
+  - L1: source change (no specific rule matched) (src/ui/Toast.tsx)
+  - L3: database migration (supabase/migrations/20260803_add_col.sql)
+```
+
+Migrations · SQL · schema · auth/RLS · billing · secrets/`.env` · CI-deploy config · workers/cron → **L3**. API routes · shared state · dependency manifests → **L2**. Docs · styles → **L0**. **Anything unrecognised → L1, never L0** — silence is not evidence of safety. **10+ files → at least L2**, because breadth is its own risk.
+
+Three things make this trustworthy rather than decorative:
+
+- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier; `attest --tier` already refuses to downgrade. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
+- **It's path-based on purpose.** Paths are cheap, stable, and reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in the diff*. Content sniffing was rejected: easy to defeat with formatting, and its false negatives read like safety.
+- **Over-classification is treated as a real cost.** A floor that cries L3 at a stylesheet trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions. (That bug was ours: `hooks/` once matched this repo's own shell hooks. It's pinned by a regression test now.)
 
 **Here's the whole idea in one real session** — captured verbatim from Coverloop gating its own repo (only long paths elided). The gate blocks an unreviewed change, the loop earns the evidence (real test run + a GPT-5.6 cross-vendor review, hashed), and the same command opens:
 
@@ -202,7 +224,7 @@ The non-obvious decisions — each born from a real failure — that make Coverl
 ## 📦 What's in the box
 
 ```
-bin/coverloop               the enforceable evidence gate (init / attest / gate)
+bin/coverloop               the enforceable evidence gate (init / classify / attest / gate)
 CLAUDE.md                 the canonical rules (drop into any project root)
 docs/GATE.md                gate docs: schema, tiers, CI wiring, threat model
 docs/OPERATING_CONTRACT.md the block you inline into a project's CLAUDE.md
@@ -216,7 +238,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 130 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
+tests/                      the gate's own suite — 164 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
 
