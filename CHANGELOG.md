@@ -2,6 +2,33 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — round six, and why the loop stopped here (PROTOCOL v2.10.5)
+
+Two of this round's six defects were introduced by the PREVIOUS round's fixes, and
+one of them was worse than the bug it replaced. That is the reason this sequence
+stopped at seven rounds rather than running until a clean verdict.
+
+- **The 4096-character cap made long secrets leak COMPLETELY.** Past the cap the
+  whole match failed, so `redact()` replaced nothing and `scan()` saw no
+  assignment: a 4097-character quoted secret went out whole. The cap now sits
+  beside a line-scoped fallback, so it degrades to over-redaction instead of to
+  silence. The test that had blessed the old behaviour asserted the wrong
+  property and was rewritten.
+- **Irreversibility depended on rule ORDER.** `is_irreversible()` returned on the
+  first matching rule, so `workers/models/user.py` matched the worker rule (L3,
+  reversible) before the schema rule and the human stop was waived for a schema
+  change because of where the file lived. It now asks every rule.
+- **`--signers-ref` was an option-injection surface**, the same class as
+  `--base`: `git show` takes options positionally, so an option-shaped ref could
+  materialise attacker-chosen commit text as the allowed-signers policy.
+- **A failed range lookup became an empty path set**, an all-clear assembled out
+  of a git failure. It now reports unknown, which the gate refuses.
+
+Known limitation, unfixed and documented: without `--base`, the floor covers the
+commit being gated plus everything the recorded evidence does not cover. A FIRST
+attestation taken after an intervening safe commit can therefore miss an earlier
+dangerous one. CI passes `--base` and is unaffected; local runs should too.
+
 ## 2026-08-22 — round five: stop maintaining two lists (PROTOCOL v2.10.4)
 
 Two of the six defects this round were the same disease, and it had already bitten

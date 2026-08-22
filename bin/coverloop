@@ -212,11 +212,15 @@ IRREVERSIBLE_REASONS = frozenset({
 
 
 def is_irreversible(path):
-    """True when PATH matches an L3 rule whose consequences are hard to undo."""
-    for rule_tier, rx, why in _RISK_RULES_C:
-        if rx.search(path):
-            return rule_tier == "L3" and why in IRREVERSIBLE_REASONS
-    return False
+    """True when PATH matches ANY L3 rule whose consequences are hard to undo.
+
+    Checking only the FIRST matching rule made the answer depend on rule ORDER:
+    `workers/models/user.py` hit the worker rule (L3, reversible) before the
+    schema rule (L3, irreversible), so the human stop was waived for a schema
+    change because of where the file happened to live. Tier selection may take
+    the first match; irreversibility must ask every rule."""
+    return any(rule_tier == "L3" and why in IRREVERSIBLE_REASONS and rx.search(path)
+               for rule_tier, rx, why in _RISK_RULES_C)
 
 
 class _IrreversibleShim:
@@ -341,7 +345,12 @@ def _gate_floor_paths(root, args, report, sha):
         if out is None:
             # No parent (root commit) is the one benign case: list the commit's
             # own files rather than guessing.
-            out = _git_paths(["show", "--name-only", "--pretty=format:", sha], root) or []
+            out = _git_paths(["show", "--name-only", "--pretty=format:", sha], root)
+        if out is None:
+            # Both failed. `or []` here turned a git timeout, a shallow clone, a
+            # corrupt object or a bad origin_commit into an EMPTY path set with
+            # unknown=False — an all-clear built out of a failure.
+            return sorted(set(paths)), True
         paths += out
     return sorted(set(paths)), False
 
@@ -1446,7 +1455,15 @@ def _project_signers_file(root, ref, tmpdir):
     its OWN signer file, so a change to the policy is itself gated evidence —
     review it like any code change). Pass a PROTECTED ref (`--signers-ref
     origin/main`) that a PR can't rewrite to remove even the bootstrap gap (R5)."""
-    content = git(["show", f"{ref}:.coverloop/allowed_signers"], cwd=root)
+    # Resolve FIRST: `git show` takes options positionally, so an option-shaped
+    # --signers-ref (e.g. --format=...) was interpreted as formatting and could
+    # materialise attacker-chosen commit text AS THE ALLOWED-SIGNERS POLICY.
+    # Same class as the --base injection; the same fix applies.
+    resolved = _resolve_commit(ref, root)
+    if resolved is None:
+        return None
+    content = git(["show", "--end-of-options", f"{resolved}:.coverloop/allowed_signers"],
+                  cwd=root)
     if content is None:
         return None
     p = os.path.join(tmpdir, "allowed_signers")

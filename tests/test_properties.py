@@ -1301,11 +1301,27 @@ class FifthRoundRegressions(unittest.TestCase):
                 self.assertNotIn(leak, red)
                 self.assertIn("[REDACTED:secret-value]", red)
 
-    def test_a_stray_quote_cannot_swallow_the_document(self):
-        # The span is capped so an unterminated quote near a secret name does not
-        # redact everything after it.
-        blob = 'PASSWORD="unterminated ' + ("x" * 20000)
-        self.assertGreater(len(F.redact(blob)), 15000)
+    def test_an_unterminated_quote_is_bounded_to_its_line(self):
+        """An unterminated quote after a secret name redacts the rest of that LINE
+        and stops. The earlier assertion here (that most of the text survives) was
+        wrong: honouring it required the match to FAIL past the 4096-character
+        cap, which meant redact() replaced nothing at all and a 4097-character
+        secret went out whole — under-redaction dressed up as restraint. Losing a
+        line of review context is the cheap side of this trade."""
+        blob = 'PASSWORD="unterminated ' + ("x" * 20000) + "\nSURVIVES = 1\nalso here\n"
+        red = F.redact(blob)
+        self.assertNotIn("x" * 100, red)
+        self.assertIn("SURVIVES = 1", red)
+        self.assertIn("also here", red)
+
+    def test_a_long_secret_is_never_passed_through_untouched(self):
+        # The regression this replaced: past the cap the whole match failed, so
+        # redact() made NO replacement and scan() saw no assignment.
+        for n in (4000, 4096, 4097, 9000, 60000):
+            with self.subTest(length=n):
+                red = F.redact('PASSWORD="' + ("a" * n) + '"')
+                self.assertIn("[REDACTED:secret-value]", red)
+                self.assertNotIn("a" * 100, red)
 
     def test_irreversible_is_derived_from_the_rules(self):
         # A parallel regex drifted from RISK_RULES three times, each time waiving
@@ -1357,6 +1373,54 @@ class FifthRoundRegressions(unittest.TestCase):
             self.assertIn("L3", r.stdout + r.stderr,
                           "re-attesting hid the migration from the floor")
             self.assertNotEqual(r.returncode, 0)
+
+
+class SixthRoundRegressions(unittest.TestCase):
+    """Two of these were defects the PREVIOUS round's fixes introduced. That is
+    the honest reason this loop was stopped here rather than run again."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_irreversibility_does_not_depend_on_rule_order(self):
+        # is_irreversible() returned on the FIRST matching rule, so
+        # workers/models/user.py hit the worker rule (L3, reversible) before the
+        # schema rule and the human stop was waived for a schema change because
+        # of where the file happened to live.
+        for path in ("workers/models/user.py", "secrets/schema.py",
+                     ".github/workflows/migrations/x.yml"):
+            with self.subTest(path=path):
+                self.assertTrue(self.mod.is_irreversible(path))
+
+    def test_option_shaped_signers_ref_cannot_reach_git_as_a_flag(self):
+        # Same class as the --base injection: `git show` takes options
+        # positionally, so --signers-ref=--format=... could materialise
+        # attacker-chosen commit text AS the allowed-signers policy.
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A")
+            run("git", "commit", "-qm", "init")
+            self.assertIsNone(
+                self.mod._project_signers_file(d, "--format=%s", d),
+                "an option-shaped ref produced signer content")
+
+    def test_a_failed_range_lookup_is_unknown_not_empty(self):
+        # `or []` turned a git failure into an empty path set with unknown=False
+        # — an all-clear assembled out of a failure.
+        import types
+        real = self.mod.git
+        try:
+            self.mod.git = lambda a, cwd=None: None
+            paths, unknown = self.mod._gate_floor_paths(
+                ".", types.SimpleNamespace(base=None), None, "0" * 40)
+            self.assertTrue(unknown, "a total git failure reported a known, empty set")
+        finally:
+            self.mod.git = real
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
