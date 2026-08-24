@@ -1746,6 +1746,31 @@ class NinthRoundRegressions(unittest.TestCase):
                     self.mod.classify_paths([f".coverloop/reports/{sha}{suffix}"])[0],
                     "L0")
 
+    def test_the_collector_hands_the_classifier_raw_names(self):
+        """END-TO-END, through real git. The unit tests above passed while the
+        bypass was still live one layer down: git() called .stdout.strip() on
+        NUL-delimited output, so " .coverloop/reports/<sha>.json" arrived at the
+        classifier already normalised into the exempt shape. A test that calls
+        classify_paths() directly cannot see that."""
+        sha = "a" * 40
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", "-b", "main", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+            os.makedirs(os.path.join(d, ".coverloop", "reports"))
+            try:
+                open(os.path.join(d, ".coverloop", "reports",
+                                  f" {sha}.json"), "w").write("x")
+            except OSError:
+                self.skipTest("filesystem rejects leading-space names")
+            r = subprocess.run([CLI, "classify", "--quiet"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.stdout.strip(), "L0",
+                                "a leading-space name took the artifact exemption")
+
     def test_one_predicate_governs_the_exemption(self):
         """The bypass existed because two regexes encoded 'is this an evidence
         artifact' and only one was strict. Any future divergence reintroduces it."""

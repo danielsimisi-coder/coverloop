@@ -297,7 +297,10 @@ def _git_paths(args, cwd):
     out = git(args + extra, cwd=cwd)
     if out is None:
         return None
-    return [p for p in out.split("\0") if p.strip()]
+    # Only EMPTY segments are dropped — a filename that is entirely whitespace
+    # is a real (and suspicious) file, and discarding it produced an empty,
+    # L0 change set.
+    return [p for p in out.split("\0") if p]
 
 
 def _changed_paths_for_gate(root, args):
@@ -499,7 +502,7 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
     # the exempt artifact shape, so an arbitrary file could take the evidence
     # exemption and skip the L1 floor. git reports the real name; a name with
     # surrounding whitespace is a DIFFERENT, and more suspicious, file.
-    paths = [p for p in paths if p and p.strip()]
+    paths = [p for p in paths if p]
     if not paths:
         return "L0", []
     tier = "L0"
@@ -601,6 +604,13 @@ def git(args, cwd=None):
         return None
     if out.returncode != 0:
         return None
+    # NUL-delimited output is a list of RAW pathnames: a leading or trailing
+    # space is part of a filename, not formatting. Stripping it re-created the
+    # exemption bypass one layer below classify_paths(), where the tests could
+    # not see it — " .coverloop/reports/<sha>.json" became the exact exempt
+    # shape again. Only line-oriented output gets the convenience strip.
+    if "-z" in args:
+        return out.stdout
     return out.stdout.strip()
 
 
