@@ -192,7 +192,12 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 # x.coverloop/reports/migration.sql, via the unescaped-dot lookalike — were
 # exempted from classification entirely: an attacker could park a migration
 # under any directory NAMED like the evidence tree and classify it L0.
-_EVIDENCE_RE = re.compile(r"^\.coverloop/reports/")
+# ...and only the exact artifact SHAPES the tool itself writes. Anchoring
+# alone still exempted .coverloop/reports/evil.sql — anything parked in the
+# canonical directory. A file there that is not a report or transcript is
+# ordinary (suspicious) code and classifies like any other path.
+_EVIDENCE_RE = re.compile(
+    r"^\.coverloop/reports/[0-9a-f]{40}\.(?:json|codex\.log|glm\.log)$")
 _INERT_RE = re.compile(r"\.(md|mdx|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
@@ -315,47 +320,79 @@ def _changed_paths_for_gate(root, args):
 
 
 def _validated_baseline(root, sha, limit=2000):
-    """The newest ancestor of SHA whose evidence chain actually VALIDATES, or
-    the root commit when none does. None means git could not answer — the
-    caller must fail closed.
+    """The newest ancestor of SHA whose evidence chain actually VALIDATES.
 
-    The predecessor of this function accepted any ancestor whose report FILE
-    existed. Existence is not validity: a hand-planted (or pre-v2.10.6,
-    never-floor-checked) L0 report sitting on a migration commit became a
-    trusted baseline, the migration fell outside every later prior..sha diff,
-    and gate passed at L0 — verified end-to-end before this fix. Reports are
-    therefore re-validated OLDEST-FIRST against the deterministic floor of the
-    segment they actually govern; a report whose tier under-declares its own
-    segment simply does not advance the baseline, so its segment stays inside
-    the range the gate classifies. Total cost is one diff per evidence commit,
-    the same work a full-history classification would do once.
+    Returns (baseline, validated): `validated` is False when the baseline is the
+    bare root commit with no accepted evidence — the caller must then classify
+    the root's OWN files too, because a two-dot diff from the root excludes the
+    files the root itself introduced (a migration in a repo's FIRST commit was
+    never classified at all; probed end-to-end). None baseline means git could
+    not answer, or the history is SHALLOW — a shallow boundary looks exactly
+    like a root commit to rev-list --max-parents=0, and treating it as one
+    silently drops everything at or before the boundary; fail closed and let
+    the operator fetch full history (CI: fetch-depth: 0, or pass --base).
+
+    A report advances the baseline only if BOTH hold:
+      * its tier covers the deterministic floor of the segment it governs, AND
+      * it would pass its own evidence evaluation (tests bound to the config
+        command, hash-bound transcripts, human approval at L3) — existence is
+        not validity, and a bare tier claim is not evidence: a planted
+        no-evidence L3 report on a migration commit advanced the baseline and
+        let a later docs commit gate at L0 (probed end-to-end).
+
+    Cost is bounded: at most _BASELINE_WALK_CAP evidence commits are validated
+    (newest-first); anything older folds into the pre-baseline segment, which
+    only ever ENLARGES what the gate classifies.
     """
+    shallow = git(["rev-parse", "--is-shallow-repository"], cwd=root)
+    if shallow is None or shallow.strip() == "true":
+        return None, False
     out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
     if not out:
-        return None
+        return None, False
     commits = out.split()
     attested = []
     for c in commits[1:]:
         if os.path.exists(report_path(root, c)):
             rep, _why = load_report(root, c)
             if rep is not None and rep.get("risk_tier") in TIERS:
-                attested.append((c, rep["risk_tier"]))
+                attested.append((c, rep))
+        if len(attested) >= _BASELINE_WALK_CAP:
+            break
     root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
     if not root_out:
-        return None
+        return None, False
     baseline = root_out.split()[-1]
-    for c, tier in reversed(attested):
-        if c == baseline:
+    validated = False
+    cfg, _cfg_err = load_json(os.path.join(root, CONFIG_FILE))
+    cfg_cmd = (cfg or {}).get("test_command")
+    for c, rep in reversed(attested):
+        if c == baseline and validated:
             continue
         seg = _git_paths(["diff", "--name-only", f"{baseline}..{c}"], root)
         if seg is None:
-            return None
+            return None, False
+        if not validated:
+            # The segment reaching back to the bare root must include the
+            # root's own files — a two-dot diff excludes what the root itself
+            # introduced, and nothing else ever accounts for those.
+            own = _git_paths(["show", "--name-only", "--pretty=format:", baseline], root)
+            if own is None:
+                return None, False
+            seg = list(seg) + own
+        tier = rep["risk_tier"]
         floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
-        if tier_max(tier, floor) == tier:
-            baseline = c
-        # else: under-declared — leave the baseline where it is, so this
-        # segment remains part of what the gate classifies.
-    return baseline
+        if tier_max(tier, floor) != tier:
+            continue  # under-declares its segment — not a valid baseline
+        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd)
+        if not ok:
+            continue  # a tier claim with no evidence behind it is not a baseline
+        baseline = c
+        validated = True
+    return baseline, validated
+
+
+_BASELINE_WALK_CAP = 100
 
 
 def _gate_floor_paths(root, args, report, sha):
@@ -418,7 +455,7 @@ def _gate_floor_paths(root, args, report, sha):
     # word for where its coverage began, which is exactly the trust the
     # planted-report attack abused. The walk finds the same origin commit when
     # its report is honest, and walks past it when it is not.
-    prior = _validated_baseline(root, sha)
+    prior, prior_validated = _validated_baseline(root, sha)
     if prior is None:
         return sorted(set(paths)), True
     if prior == sha:
@@ -438,6 +475,11 @@ def _gate_floor_paths(root, args, report, sha):
         # every time a later, unrelated commit made that evidence stale for
         # governance purposes but not for floor purposes.
         out = _git_paths(["diff", "--name-only", f"{prior}..{sha}"], root)
+        if out is not None and not prior_validated:
+            # The baseline is the BARE root: no evidence ever covered the files
+            # the root commit itself introduced, and prior..sha excludes them.
+            own = _git_paths(["show", "--name-only", "--pretty=format:", prior], root)
+            out = None if own is None else out + own
     if out is None:
         # `or []` here once turned a git timeout, a shallow clone, a corrupt
         # object or a bad origin_commit into an EMPTY path set with

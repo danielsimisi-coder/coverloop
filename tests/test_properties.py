@@ -1702,7 +1702,7 @@ class EighthRoundRegressions(unittest.TestCase):
             subprocess.run([CLI, "init", "--test-command", "true"], cwd=d,
                            capture_output=True, text=True)
             run("git", "add", "-A"); run("git", "commit", "-qm", "scaffolding")
-            r = subprocess.run([CLI, "attest", "--tier", "L1"], cwd=d,
+            r = subprocess.run([CLI, "attest", "--tier", "L1", "--tests"], cwd=d,
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")

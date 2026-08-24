@@ -105,7 +105,12 @@ class GateTestCase(unittest.TestCase):
         a real repo does on Day 1, then adds a genuinely inert commit — which
         is what "an L0 change needs no evidence" is actually supposed to mean.
         """
-        r = run(["attest", "--tier", "L1"], self.repo)
+        # --tests, not a bare tier claim: the baseline walk only advances past
+        # a report that would pass its own evidence evaluation, so the fixture
+        # must do what a real Day-1 repo does — actually run its test command.
+        if not os.path.exists(os.path.join(self.repo, ".coverloop", "config.json")):
+            self.init_project()
+        r = run(["attest", "--tier", "L1", "--tests"], self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         sh(["git", "add", "-A"], self.repo)
         sh(["git", "commit", "-qm", "evidence for base"], self.repo)

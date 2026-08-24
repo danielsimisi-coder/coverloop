@@ -2,6 +2,33 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — the baseline earns its trust, and the loop closes (PROTOCOL v2.10.8)
+
+A scoped review of v2.10.7's own fix commit found five defects in it. All five
+verified and closed:
+
+- **A migration in a repo's FIRST commit was never classified.** A two-dot diff
+  from the root excludes the files the root itself introduced, so the very first
+  commit's content escaped the floor entirely. The root's own files are now part
+  of whichever segment first accounts for them.
+- **A tier claim is not evidence.** The baseline walk accepted a planted L3
+  report with no tests, no reviewers, no approval — the tier covered the floor,
+  so the baseline advanced past a migration. A report now advances the baseline
+  only if it would pass its own evidence evaluation.
+- **Only exact artifact shapes are exempt** in `.coverloop/reports/` —
+  `evil.sql` parked there classifies like any other path.
+- **Shallow history fails closed.** A shallow boundary looks exactly like a root
+  commit; everything at or before it silently vanished from the floor. Fetch
+  full history (CI: `fetch-depth: 0`) or pass `--base`.
+- **The walk is capped** at 100 evidence commits; older spans fold into the
+  pre-baseline segment, which only ever enlarges what the gate classifies.
+
+This entry closes the audit sequence: nine rounds, 45+ verified defects, every
+one regression-locked. The stopping rule was honest non-convergence — later
+rounds increasingly found defects in the fixes themselves, which is the
+strongest argument this tool's own README makes for why no author, human or
+model, should review their own work.
+
 ## 2026-08-22 — existence is not validity (PROTOCOL v2.10.7)
 
 Round eight targeted the newest code — all three defects were in fixes from the
