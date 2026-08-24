@@ -1716,5 +1716,43 @@ class EighthRoundRegressions(unittest.TestCase):
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
 
+
+class NinthRoundRegressions(unittest.TestCase):
+    """The last finding of the sequence: two predicates for one concept."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_whitespace_cannot_smuggle_a_file_into_the_exemption(self):
+        """classify_paths() stripped paths BEFORE testing the artifact shape, so
+        a name with surrounding whitespace was normalised INTO the exempt shape
+        and skipped the L1 floor. git reports the real name; a name with
+        surrounding whitespace is a different, more suspicious file."""
+        sha = "a" * 40
+        for suffix in (".json", ".codex.log", ".glm.log"):
+            for path in (f".coverloop/reports/{sha}{suffix} ",
+                         f" .coverloop/reports/{sha}{suffix}",
+                         f".coverloop/reports/{sha}{suffix}\t",
+                         f".coverloop/reports/{sha}{suffix}\n"):
+                with self.subTest(path=repr(path)):
+                    self.assertNotEqual(self.mod.classify_paths([path])[0], "L0")
+
+    def test_the_genuine_artifact_is_still_exempt(self):
+        sha = "b" * 40
+        for suffix in (".json", ".codex.log", ".glm.log"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(
+                    self.mod.classify_paths([f".coverloop/reports/{sha}{suffix}"])[0],
+                    "L0")
+
+    def test_one_predicate_governs_the_exemption(self):
+        """The bypass existed because two regexes encoded 'is this an evidence
+        artifact' and only one was strict. Any future divergence reintroduces it."""
+        src = open(CLI, encoding="utf-8").read()
+        self.assertNotIn("_EVIDENCE_RE", src,
+                         "a second artifact predicate came back")
+        self.assertIn("is_report_artifact(path)", src)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

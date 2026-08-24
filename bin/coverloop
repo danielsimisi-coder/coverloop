@@ -196,8 +196,6 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 # alone still exempted .coverloop/reports/evil.sql — anything parked in the
 # canonical directory. A file there that is not a report or transcript is
 # ordinary (suspicious) code and classifies like any other path.
-_EVIDENCE_RE = re.compile(
-    r"^\.coverloop/reports/[0-9a-f]{40}\.(?:json|codex\.log|glm\.log)$")
 _INERT_RE = re.compile(r"\.(md|mdx|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
@@ -496,7 +494,12 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
     "<tier>: <why> (<example path>)" strings — the audit trail for the verdict.
     An empty change set is L0 with no reasons; it asserts nothing.
     """
-    paths = [p.strip() for p in paths if p and p.strip()]
+    # RAW git paths — no .strip(). Stripping first meant `<sha>.json ` and
+    # ` <sha>.glm.log` (trailing space, leading space, tab) were normalised INTO
+    # the exempt artifact shape, so an arbitrary file could take the evidence
+    # exemption and skip the L1 floor. git reports the real name; a name with
+    # surrounding whitespace is a DIFFERENT, and more suspicious, file.
+    paths = [p for p in paths if p and p.strip()]
     if not paths:
         return "L0", []
     tier = "L0"
@@ -512,7 +515,7 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
         # dependency manifest that happens to end in .txt, and the blanket inert
         # shortcut demoted it from L2 to L0 — a regression introduced by the fix
         # for documentation false positives.
-        if _INERT_RE.search(path) or _EVIDENCE_RE.search(path):
+        if _INERT_RE.search(path) or is_report_artifact(path):
             matched = ("L0", "documentation / styling (inert regardless of name)")
         for rule_tier, rx, why in (() if matched else _RISK_RULES_C):
             if rx.search(path):
@@ -538,9 +541,11 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
 # reports/ (e.g. .coverloop/reports/backdoor.py) is a NORMAL code file: not
 # "evidence-only", not test-waivable. This is what stops code being smuggled in
 # under the reports/ prefix.
+# `\Z`, not `$`: Python's `$` also matches BEFORE a final newline, so
+# "<sha>.json\n" satisfied the artifact shape and took the exemption.
 REPORT_ARTIFACT_RE = re.compile(
     r"^" + re.escape(REPORTS_DIR + "/")
-    + r"[0-9a-f]{40}(?:\.json|\.(?:codex|glm)\.log)$")
+    + r"[0-9a-f]{40}(?:\.json|\.(?:codex|glm)\.log)\Z")
 
 # Documentation for the L1 test-gate waiver. Deliberately strict so a code file
 # cannot masquerade as docs: an EXACT root-level doc file, or a doc-suffixed
@@ -563,7 +568,7 @@ def tier_max(*tiers):
 
 def is_report_artifact(f):
     """True iff f is exactly a committed report JSON or reviewer transcript."""
-    return bool(REPORT_ARTIFACT_RE.match(f))
+    return bool(REPORT_ARTIFACT_RE.fullmatch(f))
 
 
 def is_doc_file(f):
