@@ -751,10 +751,12 @@ def only_evidence_changed(root, frm, to):
     """True iff the diff frm..to touches ONLY committed report ARTIFACTS
     (<sha>.json / <sha>.<reviewer>.log). A non-artifact file under reports/
     (e.g. reports/backdoor.py) counts as a real code change and returns False."""
-    out = git(["diff", "--no-renames", "--name-only", f"{frm}..{to}"], cwd=root)
-    if out is None:
+    # _git_paths, not a line split: a lone " .coverloop/reports/<sha>.json"
+    # was stripped into the exact artifact shape, so stale ancestor evidence
+    # was accepted as "nothing but evidence changed".
+    files = _git_paths(["diff", "--name-only", f"{frm}..{to}"], root)
+    if files is None:
         return False  # unresolvable range -> fail closed
-    files = [line for line in out.splitlines() if line.strip()]
     return bool(files) and all(is_report_artifact(f) for f in files)
 
 
@@ -1399,10 +1401,9 @@ def changed_files(root, base, sha):
     """Files changed base..sha, or None when the range can't be resolved."""
     if not base:
         return None
-    out = git(["diff", "--no-renames", "--name-only", f"{base}..{sha}"], cwd=root)
-    if out is None:
-        return None
-    return [line for line in out.splitlines() if line.strip()]
+    # Same collector as everywhere else — a stripped pathname here granted an
+    # incorrect docs-only waiver.
+    return _git_paths(["diff", "--name-only", f"{base}..{sha}"], root)
 
 
 def docs_only(files):
@@ -2001,14 +2002,16 @@ def cmd_gate(args):
     # so "attest, then commit the report" still works; git-unavailable fails
     # closed. L0 (no evidence required) is exempt.
     if getattr(args, "require_clean_tree", False) and tier != "L0":
-        tracked = git(["diff", "--no-renames", "--name-only", "HEAD"], cwd=root)
-        untracked = git(["ls-files", "--others", "--exclude-standard"], cwd=root)
+        tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
+        untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
         if tracked is None or untracked is None:
             _emit(args, sha, tier, False,
                   [check("worktree", False, "git status unavailable — cannot confirm a clean tree")])
             sys.exit(1)
-        dirty = [p for p in (tracked.splitlines() + untracked.splitlines())
-                 if p.strip() and not is_report_artifact(p.strip())]
+        # No per-path strip: it turned a whitespace-padded name into the exempt
+        # artifact shape and hid a dirty tree.
+        dirty = [p for p in (list(tracked) + list(untracked))
+                 if not is_report_artifact(p)]
         if dirty:
             _emit(args, sha, tier, False,
                   [check("worktree", False,

@@ -1771,6 +1771,23 @@ class NinthRoundRegressions(unittest.TestCase):
             self.assertNotEqual(r.stdout.strip(), "L0",
                                 "a leading-space name took the artifact exemption")
 
+    def test_every_path_collector_uses_the_raw_collector(self):
+        """The bypass reappeared twice at a lower layer, so this asserts the
+        STRUCTURE rather than another instance: no pathname-producing git call
+        may bypass _git_paths(), because each one that does re-opens the
+        normalisation hole in its own caller."""
+        src = open(CLI, encoding="utf-8").read()
+        offenders = []
+        for lineno, line in enumerate(src.splitlines(), 1):
+            if '"--name-only"' not in line and '"--others"' not in line:
+                continue  # prose mentioning the flag is not a call site
+            if "_git_paths(" in line or line.lstrip().startswith("#"):
+                continue
+            offenders.append(f"{lineno}: {line.strip()[:70]}")
+        self.assertFalse(offenders,
+                         "path-producing git calls outside _git_paths():\n"
+                         + "\n".join(offenders))
+
     def test_one_predicate_governs_the_exemption(self):
         """The bypass existed because two regexes encoded 'is this an evidence
         artifact' and only one was strict. Any future divergence reintroduces it."""
