@@ -12,8 +12,32 @@ Inject this at session start; auditors MUST check it before raising findings and
 | date | tier | reviewers | raised | verdicts (accepted/rejected/needs-test) |
 |------|------|-----------|--------|------------------------------------------|
 | 2026-07-02 | _example_ L2 | Codex+GLM | 3 | 1/2/0 |
+| 2026-08-24 | L3 | Codex (9 rounds) + GLM | 45+ | all accepted after verification |
+| 2026-08-24 | L3 | GLM (final pass) | 4 | 0/2 rejected/2 already-covered |
 
 ---
+
+## The self-audit of 2026-08-24 — nine rounds, and what the numbers mean
+
+Coverloop reviewed its own v2.10 release under its own protocol: a cold diff, a
+fresh session each round, a reviewer with no stake in the answer.
+
+| | count |
+|---|---:|
+| Rounds run before a PASS | **9** |
+| Defects found and fixed | **45+** |
+| Defects introduced BY the fixes and caught in a later round | **at least 6** |
+| Rounds that raised zero findings | **1** (the ninth) |
+
+Two things in that table are worth more than the headline. Roughly one defect in
+seven was created by the previous round's fix — including a length cap meant to
+stop a secret leak that instead made long secrets leak *completely*. And the
+final GLM pass raised four findings of which **two were false positives** that a
+five-minute check against the code disproved (it asked whether `--no-renames`
+was still applied; it was, injected one layer down where the diff did not show
+it). Both numbers argue the same thing: no reviewer is an authority, the author
+least of all, and every finding gets verified against the real code before
+anyone acts on it.
 
 ## What a real ledger looks like after a few weeks
 
