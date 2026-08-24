@@ -1,0 +1,30 @@
+## Verdict: PASS WITH RISKS
+
+## P0 blockers
+None definitively — but see P1 #1, which is a P0 if `_git_paths` does not re-add `--no-renames`.
+
+## P1 serious issues
+
+1. **`--no-renames` silently dropped from all three call sites.** The old code explicitly passed `--no-renames`; the new calls (`only_evidence_changed`, `changed_files`, `cmd_gate` tracked-diff) omit it. If `_git_paths` does not re-inject it, a rename from a non-artifact path to an artifact-shaped path (e.g. `evil.py` → `reports/<sha>.json`) may surface only the new path under `git diff --name-only -z`, causing `only_evidence_changed` to return True and the clean-tree check to treat it as exempt. That is a direct classification bypass. Must confirm either that `_git_paths` adds `--no-renames`, or that `--name-only -z` emits both old and new paths for renames.
+
+2. **`is_report_artifact` / `docs_only` bodies not in diff.** The collector no longer strips, but if either downstream predicate does its own `.strip()`, `.lower()` before match, or uses unanchored matching (`.endswith()`, `in`, `re.search` without `^…$`), a padded/unanchored name still collapses into an exempt shape. The fix is incomplete unless both predicates use anchored regex on the raw path.
+
+## P2 improvements
+
+3. **`_git_paths` implementation not shown.** Entire fix rests on it: must add `-z` to both `diff` and `ls-files`, split on `\0`, not strip whitespace, and handle the trailing empty string from the terminal NUL (filtering or treating `''` as non-artifact both fail closed, but should be deliberate).
+
+4. **`cmd_gate` comment is truncated mid-sentence** ("No per-path strip: it turned a whitespace-padded name into"). Verify the actual `dirty` comprehension matches intent — no `.strip()` on `p` before `is_report_artifact(p)`.
+
+## Missing tests / verification
+- Filename with leading/trailing whitespace matching artifact shape → must NOT be exempt.
+- Rename from non-artifact to artifact-shaped path → must NOT be exempt (depends on `--no-renames`).
+- Filename containing a newline → must be a single path, not split.
+- Filename that is only whitespace → must be visible and classified as dirty (old code filtered it out entirely via `if line.strip()`).
+
+## Likely false positives / ignore
+- Empty `files` list making `only_evidence_changed` return False — fail-closed, not a bypass.
+- `frm`/`to` ref-name injection — not a path-classification concern.
+- Trailing-NUL empty entry — safe either way (empty string is non-artifact → dirty).
+
+## Suggested next action
+Confirm `_git_paths` injects `--no-renames` (or re-add it at the three call sites) and show `is_report_artifact`/`docs_only` using anchored regex on raw paths. Add the four tests above.

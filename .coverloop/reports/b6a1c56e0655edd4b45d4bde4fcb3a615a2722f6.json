@@ -1,0 +1,37 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6",
+  "risk_tier": "L3",
+  "created_at": "2026-08-24T10:18:05Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-08-24T10:20:32Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-08-24T10:21:00Z",
+    "source": "attached",
+    "output_file": ".coverloop/reports/b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6.codex.log",
+    "output_sha256": "ac459ea6eee1c4358a92bbe8622b5767659d600726bae65e379a14779dc0a0b4",
+    "output_lines": 7169,
+    "attached_at": "2026-08-24T10:21:00Z"
+  },
+  "glm": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-08-24T10:21:00Z",
+    "source": "attached",
+    "output_file": ".coverloop/reports/b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6.glm.log",
+    "output_sha256": "00b50a907f040e5c951743ba3868b67431a041f2d39bd9db0001fd9d99d44c0b",
+    "output_lines": 30,
+    "attached_at": "2026-08-24T10:21:00Z"
+  },
+  "human_gate": {
+    "required": true,
+    "approved": true,
+    "approver": "Daniel Siman Tov",
+    "approved_at": "2026-08-24T10:46:41Z"
+  }
+}
