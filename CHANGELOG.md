@@ -2,6 +2,30 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — attest enforces its own floor (PROTOCOL v2.10.6)
+
+The remaining round-7 items exposed a structural gap: only `gate` ever validated
+the deterministic floor. `attest` recorded whatever `--tier` was declared,
+unchecked — so a migration attested L0, then covered by a later, separately
+committed evidence file, could pass gate forever after: gate trusted the nearest
+ancestor's report as a legitimate baseline without anyone ever having actually
+checked it against the floor.
+
+- **`attest` now enforces the same deterministic floor `gate` does**, and
+  refuses to record a tier below it. This closes the gap at its root: any report
+  that reaches disk already satisfies tier >= floor(baseline..that commit), so
+  gate can safely trust committed evidence as an incremental baseline instead of
+  re-walking full history on every call.
+- Two defects surfaced only by re-running the full suite after that change —
+  both introduced by this session's own edits, caught before either shipped: a
+  stray `return` left `paths += out` as dead code, so the floor silently saw
+  only uncommitted changes again; and the evidence report file itself
+  classified as "L1: unrecognized source," so a repo's own audit trail
+  re-flagged itself as unreviewed.
+- `.coverloop/reports/` is now excluded from risk classification — it holds the
+  tool's generated output, not application code; its integrity is defended
+  separately (hash binding, forgery checks), not by the path classifier.
+
 ## 2026-08-22 — round six, and why the loop stopped here (PROTOCOL v2.10.5)
 
 Two of this round's six defects were introduced by the PREVIOUS round's fixes, and

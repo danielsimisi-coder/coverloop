@@ -18,7 +18,7 @@ in_protocol_project() {
 in_protocol_project || exit 0
 
 cat <<'EOF'
-[v2.10.5 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
+[v2.10.6 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
 - NEXT-TASK MODEL LINE (§9b, every response): if the reply ends with a next task, close with ONE line — "▸ Next: <task> → <model> · <effort> effort — <why>". L0 mechanical -> Haiku 4.5/low · L1 -> Sonnet 5/medium · L2 -> Sonnet 5/high · L3 (money/auth/migration/schema/concurrency, architecture, hard debugging) -> Opus 5/high-xhigh · deadlock -> Opus 5/max (one shot). Classify risk FIRST (tie -> heavier), then read the model off the tier; never downgrade a real L3 to save tokens. No next task -> no line. Recommend only — the operator runs /model.
 - Code-review roster: Claude builds · Codex (GPT-5.6 Sol) gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · the human operator gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
 - Execution/tests are the PRIMARY gate. No model is an authority — verify every finding against code/tests/runtime.
