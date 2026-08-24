@@ -139,12 +139,13 @@ RISK_RULES = (
     ("L3", r"(^|/)(secrets?|credentials?|keys?)(?=(?-i:[A-Z])|[/._\-\s]|$)|(^|/)\.env",
      "secrets / credentials"),
     ("L3", r"(^|/)\.github/workflows/|(^|/)(Dockerfile|docker-compose|fly\.toml|vercel\.json)"
-           r"|(^|/)(\.gitlab-ci\.yml|Jenkinsfile|\.circleci/|azure-pipelines\.yml|buildspec\.yml)",
+           r"|(^|/)(\.gitlab-ci\.yml|Jenkinsfile|\.circleci/|azure-pipelines\.yml|buildspec\.yml)"
+           r"|(^|/)\.github/actions/|\.(tf|tfvars)$|(^|/)(terraform|pulumi|helm|k8s|kubernetes)/",
      "CI / deploy configuration"),
     ("L3", r"(^|/)(workers?|cron|jobs?|queues?|scheduler)(?=(?-i:[A-Z])|[/._\-\s]|$)",
      "worker / cron / queue"),
     ("L3", r"(^|/)" + _kws("schemas?|models?")
-           + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json)$",
+           + r".*\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|rs|php|sql|prisma|graphql|ya?ml|json|cs|ex|exs|scala|clj|hs|dart)$",
      "schema / data model"),
     # L2 — product surface and shared contracts: wide blast radius, no direct
     # money/auth authority.
@@ -163,7 +164,10 @@ RISK_RULES = (
      "dependency manifest"),
     # L0 — provably inert: prose and styling only. Anything else falls through
     # to the L1 default.
-    ("L0", r"\.(md|mdx|txt|rst|adoc)$", "documentation"),
+    # `.txt` is deliberately absent: config/roles.txt and the like are plain
+    # text that configures real behaviour, so an unmatched .txt falls to L1
+    # ("silence is not safety") rather than being presumed prose.
+    ("L0", r"\.(md|mdx|rst|adoc)$", "documentation"),
     ("L0", r"\.(css|scss|sass|less)$", "stylesheet"),
     ("L0", r"(^|/)(LICENSE|CODEOWNERS|\.gitignore|\.editorconfig)$", "repo metadata"),
 )
@@ -177,6 +181,13 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 # ahead of the rules that call them dangerous. `.txt` falls through to the
 # ordinary rules, where the documentation rule still catches notes.txt — but
 # only after the L3 rules have had their say.
+# .coverloop/reports/ holds the tool's OWN generated evidence artifacts —
+# report JSON and reviewer transcripts. They cannot carry application risk;
+# their integrity is defended separately (hash binding, forgery checks in
+# find_report/verify_capture), not by this classifier. Without this, an
+# evidence-only commit classified its own report file as "L1: unrecognized
+# source", so a repo's evidence chain kept re-flagging ITSELF as unreviewed.
+_EVIDENCE_RE = re.compile(re.escape(REPORTS_DIR) + r"/")
 _INERT_RE = re.compile(r"\.(md|mdx|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
@@ -269,7 +280,12 @@ def _git_paths(args, cwd):
     # correctly, read as "cannot determine the paths" and held at L1. Correct
     # fail-closed behaviour, wrong cause, and it would have masked the evasion
     # fix it was meant to deliver.
-    extra = ["--no-renames", "-z"] if args and args[0] == "diff" else ["-z"]
+    # `show` takes diff options too, and it defaults to rename detection just
+    # like `diff` — scoping the flag to `diff` alone let the root-commit fallback
+    # lose a rename origin again, one commit after that hole was closed.
+    # `ls-files` is the only caller here that rejects it.
+    extra = (["--no-renames", "-z"] if args and args[0] in ("diff", "show")
+             else ["-z"])
     out = git(args + extra, cwd=cwd)
     if out is None:
         return None
@@ -291,6 +307,29 @@ def _changed_paths_for_gate(root, args):
     tracked = _git_paths(["diff", "--name-only", "HEAD"], root) or []
     untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root) or []
     return list(tracked) + list(untracked)
+
+
+def _newest_attested_ancestor(root, sha, limit=2000):
+    """The most recent ancestor of SHA that carries an evidence report, or the
+    ROOT commit when none does.
+
+    Returned so the caller can classify everything since then: with no evidence
+    at all, no commit in the history has been reviewed, and a floor that looks
+    only at HEAD will happily clear a dangerous change one commit back.
+    `limit` bounds the walk on very long histories; past it we fall back to the
+    root, which over-classifies rather than under-classifies.
+    """
+    out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
+    if not out:
+        return None
+    commits = out.split()
+    for c in commits[1:]:
+        if os.path.exists(report_path(root, c)):
+            return c
+    root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
+    if root_out:
+        return root_out.split()[-1]
+    return commits[-1] if commits else None
 
 
 def _gate_floor_paths(root, args, report, sha):
@@ -338,20 +377,41 @@ def _gate_floor_paths(root, args, report, sha):
     # tier has to match what that commit actually contains.
     # The EARLIEST commit this evidence claims to cover — not the one it was last
     # rebound to (see origin_commit above).
-    prior = (report or {}).get("origin_commit") or (report or {}).get("commit")
-    rng = f"{prior}^..{sha}" if prior and prior != sha else f"{sha}^..{sha}"
-    if rng:
-        out = _git_paths(["diff", "--name-only", rng], root)
-        if out is None:
-            # No parent (root commit) is the one benign case: list the commit's
-            # own files rather than guessing.
-            out = _git_paths(["show", "--name-only", "--pretty=format:", sha], root)
-        if out is None:
-            # Both failed. `or []` here turned a git timeout, a shallow clone, a
-            # corrupt object or a bad origin_commit into an EMPTY path set with
-            # unknown=False — an all-clear built out of a failure.
-            return sorted(set(paths)), True
-        paths += out
+    # The oldest commit some EARLIER evidence already claims to cover.
+    # `origin_commit` is the honest source when it exists (set on rebind). A
+    # report's plain `commit` field is NOT a substitute: on a first-ever attest
+    # it equals sha itself, and treating sha as "prior" collapsed the range to
+    # sha^..sha — a single commit — so a migration one commit back (never
+    # attested, never rebound) stayed invisible. Absent a real origin, the
+    # honest baseline is the newest ANCESTOR that independently carries
+    # evidence, walking past sha itself; with none, the root. A migration that
+    # nothing has ever reviewed cannot be waved through by attesting the commit
+    # after it.
+    origin = (report or {}).get("origin_commit")
+    prior = origin or _newest_attested_ancestor(root, sha)
+    if prior == sha:
+        # Only reachable for a single-commit repo (sha IS its own root): there
+        # is nothing to diff against, so list its own files.
+        out = _git_paths(["show", "--name-only", "--pretty=format:", sha], root)
+    else:
+        # A PLAIN two-dot diff, no caret. `prior` is a commit whose own state
+        # was already reviewed — either it carries a real evidence report (and
+        # attest now enforces the floor at record time, so that report already
+        # reflects tier >= floor(baseline..prior)), or it's the root, which
+        # needs no separate review since nothing precedes it. Because of that,
+        # `prior..sha` correctly EXCLUDES `prior`'s own introduction: adding
+        # `prior`'s files back in (the previous version of this code did, via
+        # a `^`) double-counted content that had already been accounted for,
+        # and specifically kept re-flagging a repo's OWN coverloop scaffolding
+        # every time a later, unrelated commit made that evidence stale for
+        # governance purposes but not for floor purposes.
+        out = _git_paths(["diff", "--name-only", f"{prior}..{sha}"], root)
+    if out is None:
+        # `or []` here once turned a git timeout, a shallow clone, a corrupt
+        # object or a bad origin_commit into an EMPTY path set with
+        # unknown=False — an all-clear built out of a failure.
+        return sorted(set(paths)), True
+    paths += out
     return sorted(set(paths)), False
 
 
@@ -378,7 +438,7 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
         # dependency manifest that happens to end in .txt, and the blanket inert
         # shortcut demoted it from L2 to L0 — a regression introduced by the fix
         # for documentation false positives.
-        if _INERT_RE.search(path):
+        if _INERT_RE.search(path) or _EVIDENCE_RE.search(path):
             matched = ("L0", "documentation / styling (inert regardless of name)")
         for rule_tier, rx, why in (() if matched else _RISK_RULES_C):
             if rx.search(path):
@@ -947,6 +1007,16 @@ def _attest_lock(root):
     try:
         import fcntl
     except ImportError:
+        # No file locking on this platform (native Windows). Yielding here made
+        # the "two attests never lose each other's evidence" guarantee false
+        # wherever it could not be kept, silently. Refuse by default, same as a
+        # lock that cannot be created.
+        if os.environ.get("COVERLOOP_ALLOW_UNLOCKED_ATTEST") != "1":
+            sys.stderr.write(
+                "coverloop: this platform provides no file locking, so concurrent "
+                "`attest` could lose evidence. Refusing. Set "
+                "COVERLOOP_ALLOW_UNLOCKED_ATTEST=1 to proceed anyway.\n")
+            sys.exit(1)
         yield
         return
     # --git-common-dir (NOT --git-dir): the SHARED git dir, so two linked
@@ -1095,6 +1165,31 @@ def _cmd_attest_locked(args, root):
         report["risk_tier"] = args.tier if getattr(args, "force", False) else raised
     if report["risk_tier"] not in TIERS:
         fail_usage(f"invalid tier {report['risk_tier']!r}")
+
+    # Enforce the deterministic floor HERE, not only at gate time. Without this,
+    # `attest --tier L0` on a migration recorded L0 unchecked, and a LATER gate
+    # call could end up trusting that L0 report as a legitimate baseline for its
+    # OWN incremental scan — silently re-exporting the unvalidated claim forever
+    # after, even though nobody ever actually checked it against the floor. Once
+    # attest itself refuses to under-declare, any report reaching disk already
+    # satisfies tier >= floor(baseline..this commit), so gate can safely trust
+    # committed evidence as a real baseline instead of re-walking full history
+    # on every call.
+    try:
+        floor_paths, floor_unknown = _gate_floor_paths(root, args, None, sha)
+    except Exception:
+        floor_paths, floor_unknown = [], True
+    if not floor_unknown and floor_paths:
+        auto_floor, auto_reasons = classify_paths(floor_paths, BREADTH_L2_FILES)
+        raised = tier_max(report["risk_tier"], auto_floor)
+        if raised != report["risk_tier"] and not getattr(args, "force", False):
+            reasons_str = "; ".join(auto_reasons[:4])
+            fail_usage(
+                f"--tier {report['risk_tier']} is below the deterministic floor "
+                f"{auto_floor} for the changes since the last evidence ({reasons_str}). "
+                f"Re-attest at --tier {auto_floor} or higher, or pass --force to override "
+                f"(recorded, not hidden — the gate will still see the true floor).")
+        report["risk_tier"] = raised
 
     did = []
 

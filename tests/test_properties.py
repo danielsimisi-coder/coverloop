@@ -1348,7 +1348,10 @@ class FifthRoundRegressions(unittest.TestCase):
         # the rule that calls `permissions` an L3 keyword.
         self.assertEqual(self.mod.classify_paths(["config/permissions.txt"])[0], "L3")
         self.assertEqual(self.mod.classify_paths(["requirements.txt"])[0], "L2")
-        self.assertEqual(self.mod.classify_paths(["docs/notes.txt"])[0], "L0")
+        # .txt left the inert list entirely in the round that followed: plain
+        # text configures real behaviour often enough that presuming prose was
+        # the wrong default. Unmatched .txt now lands on L1, not L0.
+        self.assertEqual(self.mod.classify_paths(["docs/notes.txt"])[0], "L1")
 
     def test_re_attesting_cannot_shrink_what_the_floor_covers(self):
         """Dangerous commit A, attested L0; evidence-only commit B; attest again.
@@ -1421,6 +1424,192 @@ class SixthRoundRegressions(unittest.TestCase):
             self.assertTrue(unknown, "a total git failure reported a known, empty set")
         finally:
             self.mod.git = real
+
+
+class InvariantsThatCatchTheAuthor(unittest.TestCase):
+    """Properties, not examples.
+
+    Seven rounds of off-policy review found two defects that the FIXES had
+    introduced, and both were invisible to example-based tests: a length cap that
+    made long secrets stop matching entirely, and an order-dependent
+    irreversibility check. Each is a broken INVARIANT, and each is caught here in
+    milliseconds instead of in the next review round. The point of this class is
+    to move that detection from the reviewer back to the author."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    # -- secret filter -------------------------------------------------------
+
+    SECRET_NAMES = ("PASSWORD", "API_KEY", "OPENROUTER_API_KEY", "DB_PASSWORD",
+                    "VERCEL_TOKEN", "SECRET_KEY", "x_secret", "SERVICE_TOKEN")
+
+    def test_no_secret_value_ever_survives_redaction(self):
+        """For every combination of name, separator, quoting, length and embedded
+        escape, the value must not appear in the output. The 4096-character cap
+        regression lived exactly in the gap between 4096 and 4097."""
+        marker = "ZqXsecretVALUE"
+        lengths = (1, 10, 4094, 4095, 4096, 4097, 4098, 8200)
+        checked = 0
+        for name in self.SECRET_NAMES:
+            for sep in ("=", ": ", " = "):
+                for quote in ("", '"', "'"):
+                    for n in lengths:
+                        body = marker + ("a" * max(0, n - len(marker)))
+                        raw = f"{name}{sep}{quote}{body}{quote}"
+                        red = F.redact(raw)
+                        checked += 1
+                        self.assertNotIn(marker, red,
+                                         f"leaked: name={name!r} sep={sep!r} "
+                                         f"quote={quote!r} len={n}")
+        self.assertGreater(checked, 400)
+
+    def test_no_secret_value_survives_an_embedded_newline_or_escape(self):
+        marker = "ZqXsecretVALUE"
+        for filler in ("\n", "\r\n", "\\\n", '\\"', "\\'", "\t"):
+            for quote in ('"', "'"):
+                raw = f'PASSWORD={quote}head{filler}{marker}{quote}'
+                with self.subTest(filler=repr(filler), quote=quote):
+                    self.assertNotIn(marker, F.redact(raw))
+
+    def test_redaction_never_makes_the_scan_blind(self):
+        """A packet that scans clean after redaction must not still contain a
+        recognisable secret shape. This is the property the escaped-quote and
+        multi-line leaks both violated: the tail survived AND scanned clean."""
+        shapes = ("sk-" + "a" * 40, "ghp_" + "b" * 36, "AKIA" + "C" * 16,
+                  "xoxb-" + "1" * 20, "AIza" + "d" * 35)
+        for shape in shapes:
+            for wrapper in ('PASSWORD="%s"', "TOKEN='%s'", "API_KEY=%s",
+                            'SECRET_KEY="lead\n%s"'):
+                raw = wrapper % shape
+                with self.subTest(raw=raw[:40]):
+                    red = F.redact(raw)
+                    if not F.scan(red):
+                        self.assertNotIn(shape, red,
+                                         "scanned clean while still carrying the secret")
+
+    # -- classifier ----------------------------------------------------------
+
+    def test_irreversibility_never_depends_on_rule_order(self):
+        """If ANY irreversible rule matches a path, the answer must be True —
+        whatever other rule happens to match first. Built by crossing every
+        reversible-rule directory with every irreversible-rule filename."""
+        reversible_dirs = ("workers", "secrets", "cron", "queue", "jobs",
+                           ".github/workflows", "credentials")
+        irreversible_names = ("models/user.py", "schema.sql", "migrations/1.sql",
+                              "authorization.ts", "billing.ts", "rls.ts")
+        for d in reversible_dirs:
+            for n in irreversible_names:
+                path = f"{d}/{n}"
+                with self.subTest(path=path):
+                    self.assertTrue(self.mod.is_irreversible(path), path)
+
+    def test_every_irreversible_path_also_classifies_L3(self):
+        """Irreversible but below L3 would be incoherent: the human stop would be
+        demanded for a change the gate calls routine."""
+        for path in ("models/user.py", "migrations/1.sql", "src/authz.ts",
+                     "src/billing.ts", "workers/schema.py", "db/migrate/1.rb"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L3")
+
+    def test_adding_a_path_never_lowers_the_tier(self):
+        """Monotonicity. A change set can only get more dangerous as it grows."""
+        order = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
+        pool = ["README.md", "src/api.ts", "migrations/1.sql", "src/util.ts",
+                "package.json", "src/authGuard.ts", "docs/x.md", "config/roles.txt"]
+        acc = []
+        prev = 0
+        for p in pool:
+            acc.append(p)
+            tier = order[self.mod.classify_paths(acc)[0]]
+            self.assertGreaterEqual(tier, prev, f"adding {p} LOWERED the tier")
+            prev = tier
+
+    def test_only_provably_inert_extensions_may_reach_L0(self):
+        """L0 requires no evidence at all, so anything landing there must be
+        inert by EXTENSION, never merely by failing to match a rule."""
+        inert = (".md", ".mdx", ".rst", ".adoc", ".css", ".scss", ".sass", ".less")
+        known_L0 = ("LICENSE", "CODEOWNERS", ".gitignore", ".editorconfig")
+        for path in ("src/thing.ts", "config/roles.txt", "notes.txt", "Makefile",
+                     "src/mod.rs", "data.csv", "run.sh", "x.bin", "a.yaml"):
+            with self.subTest(path=path):
+                tier = self.mod.classify_paths([path])[0]
+                if tier == "L0":
+                    self.assertTrue(
+                        path.endswith(inert) or os.path.basename(path) in known_L0,
+                        f"{path} reached L0 without being provably inert")
+
+
+class SeventhRoundRegressions(unittest.TestCase):
+    """Three defects found while closing the previous round's remaining items —
+    one of them my own dead-code bug, caught only by re-running the suite."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def test_attest_refuses_to_record_below_the_floor(self):
+        """The structural fix: attest itself must enforce the deterministic
+        floor, not just record whatever --tier the caller asserts. Without
+        this, an evidence report could carry an honest-looking L0 that gate
+        would later trust as a baseline without ever having checked it."""
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", "-b", "main", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "migrations", "1.sql"), "w").write("drop table x;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = subprocess.run([CLI, "attest", "--tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0, "attest recorded L0 over a migration")
+            self.assertIn("L3", r.stderr)
+
+    def test_the_floor_accumulates_the_evidence_gap_not_just_the_worktree(self):
+        """Regression for a dead-code bug: a stray `return` inside `_gate_floor_
+        paths` sat ABOVE `paths += out`, so the historical diff was computed
+        and then silently discarded — every gate call effectively saw only
+        uncommitted changes, exactly the original hole this floor exists to
+        close. All 216 tests were green with the working tree already clean in
+        most of them, which is precisely why this needs its own direct check
+        of the returned path list rather than trusting a gate exit code."""
+        import types
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+            run("git", "init", "-q", "-b", "main", ".")
+            run("git", "config", "user.email", "t@example.com")
+            run("git", "config", "user.name", "t")
+            open(os.path.join(d, "README.md"), "w").write("x\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "migrations", "1.sql"), "w").write("drop table x;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            paths, unknown = self.mod._gate_floor_paths(
+                d, types.SimpleNamespace(base=None), None, self.mod.head_sha(d))
+            self.assertFalse(unknown)
+            self.assertIn("migrations/1.sql", paths,
+                          "the committed migration never reached the returned path list")
+
+    def test_evidence_artifacts_do_not_classify_as_their_own_risk(self):
+        """.coverloop/reports/ holds the tool's OWN generated output. Without
+        an exclusion, a commit that ONLY adds a report file classified as
+        'L1: unrecognized source' — a repo's evidence chain re-flagging
+        itself as unreviewed on every attest."""
+        self.assertEqual(
+            self.mod.classify_paths([".coverloop/reports/" + "a" * 40 + ".json"])[0],
+            "L0")
+        self.assertEqual(
+            self.mod.classify_paths([".coverloop/reports/" + "a" * 40 + ".codex.log"])[0],
+            "L0")
+        # A real source file living OUTSIDE the evidence directory is unaffected —
+        # this one has no matching keyword, so it is an ordinary unrecognized
+        # source file (L1), not exempted just because the word 'reports' appears.
+        self.assertEqual(self.mod.classify_paths(["src/reports/thing.ts"])[0], "L1")
+        self.assertEqual(self.mod.classify_paths(["src/api/reports.ts"])[0], "L2")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

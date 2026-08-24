@@ -92,14 +92,23 @@ class GateTestCase(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
 
     def make_head_inert(self):
-        """Give HEAD a docs-only commit.
+        """Establish an honest evidence baseline, then give HEAD a docs-only
+        commit on top of it.
 
-        The gate now derives a tier FLOOR from the paths in the range its evidence
-        does not cover, so an L0 assertion has to be made over a genuinely inert
-        change. These tests used to gate a repo whose HEAD touched app.py and
-        still expect L0 to pass — which is precisely the fail-open the floor
-        closes, so the fixture moved rather than the expectation.
+        The gate derives a tier FLOOR from the paths its evidence does not yet
+        cover. With NO evidence anywhere in history, that floor walks back to
+        root — so a virgin repo whose base commit added app.py (real,
+        unreviewed source — correctly L1, not a false positive) can no longer
+        borrow a free pass from a LATER, unrelated docs commit; that borrowing
+        is the exact fail-open closed elsewhere this round (migration A +
+        readme B). The honest fixture attests the baseline ONCE, matching what
+        a real repo does on Day 1, then adds a genuinely inert commit — which
+        is what "an L0 change needs no evidence" is actually supposed to mean.
         """
+        r = run(["attest", "--tier", "L1"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence for base"], self.repo)
         with open(os.path.join(self.repo, "NOTES.md"), "a") as fh:
             fh.write("inert\n")
         subprocess.run(["git", "add", "NOTES.md"], cwd=self.repo, capture_output=True)
