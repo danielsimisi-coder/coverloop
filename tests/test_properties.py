@@ -1066,8 +1066,12 @@ class SecondRoundRegressions(unittest.TestCase):
             self.assertLess(took, 3.0, f"{n} chars took {took:.1f}s")
             if prev is not None:
                 # Linear growth doubles; quadratic quadruples. 2.5x leaves room
-                # for timer noise on a loaded machine without admitting O(n^2).
-                self.assertLess(took, max(prev * 2.5, 0.25))
+                # for timer noise without admitting O(n^2), and the 0.6s noise
+                # floor exists because a shared CI runner flaked this at 0.34s
+                # vs a 0.26s bound — at these absolute times scheduler jitter
+                # dwarfs the signal. The REAL regression detector is the 3.0s
+                # absolute ceiling above: the quadratic bug took 93 seconds.
+                self.assertLess(took, max(prev * 2.5, 0.6))
             prev = max(took, 0.02)
 
     def test_email_redaction_still_catches_real_addresses(self):
