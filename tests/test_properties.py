@@ -1611,5 +1611,106 @@ class SeventhRoundRegressions(unittest.TestCase):
         self.assertEqual(self.mod.classify_paths(["src/reports/thing.ts"])[0], "L1")
         self.assertEqual(self.mod.classify_paths(["src/api/reports.ts"])[0], "L2")
 
+
+class EighthRoundRegressions(unittest.TestCase):
+    """Round eight targeted the newest code: all three defects were in fixes
+    from the two rounds before it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _repo(self, d):
+        run = lambda *a: subprocess.run(a, cwd=d, capture_output=True, text=True)
+        run("git", "init", "-q", "-b", "main", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "t")
+        open(os.path.join(d, "README.md"), "w").write("x\n")
+        run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+        return run
+
+    def test_evidence_exemption_is_anchored_to_the_repo_root(self):
+        # Unanchored, every occurrence of the substring matched — including the
+        # unescaped-dot lookalike — so an attacker could park a migration under
+        # any directory NAMED like the evidence tree and classify it L0.
+        for path in ("nested/.coverloop/reports/evil.sql",
+                     "x.coverloop/reports/migration.sql",
+                     "a/b/.coverloop/reports/c.sql"):
+            with self.subTest(path=path):
+                self.assertEqual(self.mod.classify_paths([path])[0], "L3")
+        self.assertEqual(
+            self.mod.classify_paths([".coverloop/reports/" + "a" * 40 + ".json"])[0],
+            "L0")
+
+    def test_attest_refuses_when_the_floor_is_unknowable(self):
+        # Skipping the check when git could not answer was a fail-open: with
+        # `git diff` broken, attest recorded L0 over a migration and exited 0.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "migrations", "1.sql"), "w").write("drop table x;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            shim = os.path.join(d, "shim"); os.makedirs(shim)
+            real_git = subprocess.run(["which", "git"], capture_output=True,
+                                      text=True).stdout.strip()
+            with open(os.path.join(shim, "git"), "w") as fh:
+                fh.write("#!/bin/bash\n"
+                         'if [ "$1" = "diff" ] || [ "$1" = "rev-list" ]; then exit 1; fi\n'
+                         f'exec {real_git} "$@"\n')
+            os.chmod(os.path.join(shim, "git"), 0o755)
+            env = dict(os.environ, PATH=shim + os.pathsep + os.environ["PATH"])
+            r = subprocess.run([CLI, "attest", "--tier", "L0"], cwd=d, env=env,
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0,
+                                "attest recorded a tier it could not validate")
+            self.assertFalse(
+                any(f.endswith(".json") for f in
+                    os.listdir(os.path.join(d, ".coverloop", "reports"))
+                    if os.path.isdir(os.path.join(d, ".coverloop", "reports"))) if
+                os.path.isdir(os.path.join(d, ".coverloop", "reports")) else False,
+                "a report was written despite the refusal")
+
+    def test_a_planted_under_tier_report_is_not_a_trusted_baseline(self):
+        """The worst of the three: existence is not validity. A hand-written L0
+        report sitting on a migration commit became the floor's baseline, the
+        migration fell outside every later prior..sha diff, and gate PASSED at
+        L0 — verified end-to-end before the fix."""
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            subprocess.run([CLI, "init", "--test-command", "true"], cwd=d,
+                           capture_output=True, text=True)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "scaffolding")
+            os.makedirs(os.path.join(d, "migrations"))
+            open(os.path.join(d, "migrations", "A.sql"), "w").write("drop table users;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "A: migration")
+            sha_a = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                                   capture_output=True, text=True).stdout.strip()
+            with open(os.path.join(d, ".coverloop", "reports", sha_a + ".json"), "w") as fh:
+                json.dump({"schema": "coverloop-report/v1",
+                           "commit": sha_a, "risk_tier": "L0"}, fh)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "B: evidence only")
+            r = subprocess.run([CLI, "gate"], cwd=d, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("L3", r.stdout + r.stderr,
+                          "the planted L0 report hid the migration from the floor")
+
+    def test_an_honest_baseline_still_advances(self):
+        # The counter-test: a report whose tier genuinely covers its segment
+        # must still be accepted, or every gate call walks to the root forever.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            subprocess.run([CLI, "init", "--test-command", "true"], cwd=d,
+                           capture_output=True, text=True)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "scaffolding")
+            r = subprocess.run([CLI, "attest", "--tier", "L1"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            open(os.path.join(d, "NOTES.md"), "w").write("inert\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "docs")
+            r = subprocess.run([CLI, "gate", "--min-tier", "L0"], cwd=d,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

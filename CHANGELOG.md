@@ -2,6 +2,34 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-08-22 — existence is not validity (PROTOCOL v2.10.7)
+
+Round eight targeted the newest code — all three defects were in fixes from the
+two rounds before it, each verified end-to-end before being fixed:
+
+- **A planted under-tier report became a trusted baseline.** The ancestor walk
+  accepted any commit whose report FILE existed. A hand-written (or pre-v2.10.6,
+  never-floor-checked) L0 report on a migration commit put the migration outside
+  every later `prior..sha` diff, and gate PASSED at L0. Baselines are now
+  re-validated oldest-first: a report whose tier under-declares the deterministic
+  floor of its own segment simply does not advance the baseline, so its segment
+  stays inside what the gate classifies. The `origin_commit` shortcut is dropped
+  from floor computation for the same reason — it trusted a rebound report's own
+  word for where its coverage began.
+- **The evidence-directory exclusion was unanchored.** Every occurrence of the
+  substring matched, so `nested/.coverloop/reports/evil.sql` — and even
+  `x.coverloop/reports/…` via the unescaped-dot lookalike — was exempt from
+  classification entirely. Now anchored to the repo root.
+- **`attest` failed open when the floor was unknowable.** With `git diff` broken
+  the check was skipped and an L0 report was saved over a migration, exit 0. It
+  now refuses before writing; `--force` remains, and gate still computes its own
+  floor independently.
+
+Note for existing repos: baselines recorded before v2.10.6 were never
+floor-checked at record time, so the validated walk may now classify further
+back than before and raise floors on the next gate run. That is the fix working,
+not a regression — those segments were never actually validated.
+
 ## 2026-08-22 — attest enforces its own floor (PROTOCOL v2.10.6)
 
 The remaining round-7 items exposed a structural gap: only `gate` ever validated

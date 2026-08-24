@@ -187,7 +187,12 @@ _RISK_RULES_C = tuple((t, re.compile(p, re.I), why) for t, p, why in RISK_RULES)
 # find_report/verify_capture), not by this classifier. Without this, an
 # evidence-only commit classified its own report file as "L1: unrecognized
 # source", so a repo's evidence chain kept re-flagging ITSELF as unreviewed.
-_EVIDENCE_RE = re.compile(re.escape(REPORTS_DIR) + r"/")
+# Anchored to the REPO ROOT. Unanchored, every occurrence of the substring
+# matched, so nested/.coverloop/reports/evil.sql — and even
+# x.coverloop/reports/migration.sql, via the unescaped-dot lookalike — were
+# exempted from classification entirely: an attacker could park a migration
+# under any directory NAMED like the evidence tree and classify it L0.
+_EVIDENCE_RE = re.compile(r"^\.coverloop/reports/")
 _INERT_RE = re.compile(r"\.(md|mdx|rst|adoc|css|scss|sass|less)$", re.I)
 
 BREADTH_L2_FILES = 10
@@ -309,27 +314,48 @@ def _changed_paths_for_gate(root, args):
     return list(tracked) + list(untracked)
 
 
-def _newest_attested_ancestor(root, sha, limit=2000):
-    """The most recent ancestor of SHA that carries an evidence report, or the
-    ROOT commit when none does.
+def _validated_baseline(root, sha, limit=2000):
+    """The newest ancestor of SHA whose evidence chain actually VALIDATES, or
+    the root commit when none does. None means git could not answer — the
+    caller must fail closed.
 
-    Returned so the caller can classify everything since then: with no evidence
-    at all, no commit in the history has been reviewed, and a floor that looks
-    only at HEAD will happily clear a dangerous change one commit back.
-    `limit` bounds the walk on very long histories; past it we fall back to the
-    root, which over-classifies rather than under-classifies.
+    The predecessor of this function accepted any ancestor whose report FILE
+    existed. Existence is not validity: a hand-planted (or pre-v2.10.6,
+    never-floor-checked) L0 report sitting on a migration commit became a
+    trusted baseline, the migration fell outside every later prior..sha diff,
+    and gate passed at L0 — verified end-to-end before this fix. Reports are
+    therefore re-validated OLDEST-FIRST against the deterministic floor of the
+    segment they actually govern; a report whose tier under-declares its own
+    segment simply does not advance the baseline, so its segment stays inside
+    the range the gate classifies. Total cost is one diff per evidence commit,
+    the same work a full-history classification would do once.
     """
     out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
     if not out:
         return None
     commits = out.split()
+    attested = []
     for c in commits[1:]:
         if os.path.exists(report_path(root, c)):
-            return c
+            rep, _why = load_report(root, c)
+            if rep is not None and rep.get("risk_tier") in TIERS:
+                attested.append((c, rep["risk_tier"]))
     root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
-    if root_out:
-        return root_out.split()[-1]
-    return commits[-1] if commits else None
+    if not root_out:
+        return None
+    baseline = root_out.split()[-1]
+    for c, tier in reversed(attested):
+        if c == baseline:
+            continue
+        seg = _git_paths(["diff", "--name-only", f"{baseline}..{c}"], root)
+        if seg is None:
+            return None
+        floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
+        if tier_max(tier, floor) == tier:
+            baseline = c
+        # else: under-declared — leave the baseline where it is, so this
+        # segment remains part of what the gate classifies.
+    return baseline
 
 
 def _gate_floor_paths(root, args, report, sha):
@@ -387,8 +413,14 @@ def _gate_floor_paths(root, args, report, sha):
     # evidence, walking past sha itself; with none, the root. A migration that
     # nothing has ever reviewed cannot be waved through by attesting the commit
     # after it.
-    origin = (report or {}).get("origin_commit")
-    prior = origin or _newest_attested_ancestor(root, sha)
+    # origin_commit is kept in reports for provenance, but the baseline is
+    # ALWAYS the validated walk: the origin shortcut trusted a rebound report's
+    # word for where its coverage began, which is exactly the trust the
+    # planted-report attack abused. The walk finds the same origin commit when
+    # its report is honest, and walks past it when it is not.
+    prior = _validated_baseline(root, sha)
+    if prior is None:
+        return sorted(set(paths)), True
     if prior == sha:
         # Only reachable for a single-commit repo (sha IS its own root): there
         # is nothing to diff against, so list its own files.
@@ -1176,9 +1208,19 @@ def _cmd_attest_locked(args, root):
     # committed evidence as a real baseline instead of re-walking full history
     # on every call.
     try:
-        floor_paths, floor_unknown = _gate_floor_paths(root, args, None, sha)
+        floor_paths, floor_unknown = _gate_floor_paths(root, args, report, sha)
     except Exception:
         floor_paths, floor_unknown = [], True
+    if floor_unknown and not getattr(args, "force", False):
+        # Skipping the check when git could not answer was a fail-open: break
+        # `git diff` and attest happily recorded L0 over a migration (probed
+        # directly). If the floor cannot be computed, nothing can vouch for the
+        # declared tier — refuse before writing. --force still works and is not
+        # hidden: gate computes its own floor and fails closed on unknown too.
+        fail_usage("cannot determine the changed paths for the floor check "
+                   "(is git responding?). Refusing to record an unvalidated tier; "
+                   "pass --force to record anyway — the gate will still compute "
+                   "its own floor independently.")
     if not floor_unknown and floor_paths:
         auto_floor, auto_reasons = classify_paths(floor_paths, BREADTH_L2_FILES)
         raised = tier_max(report["risk_tier"], auto_floor)
