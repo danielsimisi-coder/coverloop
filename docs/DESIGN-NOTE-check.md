@@ -27,8 +27,9 @@ eight-step ceremony around `attest` was what people skipped.
 ## Why it is not in this release
 
 Twelve cold review rounds (Codex at xhigh, GLM red-team), **52 verified
-findings**, and **zero rounds with no new P0/P1**. The full history is in
-`CHANGELOG.md` under v2.11 and in the preserved branch's commit messages.
+findings**, and **zero rounds with no new P0/P1**. `CHANGELOG.md` here carries a summary; the
+round-by-round detail lives in the preserved branch — its own version of
+`CHANGELOG.md` and, findings-by-round, its commit messages.
 
 Two patterns decided it.
 

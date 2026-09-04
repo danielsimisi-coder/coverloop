@@ -27,6 +27,6 @@ in_protocol_project || exit 0
 cat <<'EOF'
 [coverloop] Build normally. Run the relevant tests as you go.
 Before merge/deploy: `coverloop gate` must pass at HEAD. It fails closed on missing evidence — record that evidence with `coverloop attest` (tests, the independent reviews the tier requires, and a named human approval where one is required). Resolve what the gate names; do not work around it.
-Never lower the deterministic risk floor. Never record an approval on a human's behalf. Never bypass a red test or a red review. Never send secrets, .env contents, keys, or PII to any model. Irreversible production actions (migrations, money, auth/RLS, deploys) are Daniel's call.
+Never lower the deterministic risk floor. Never record an approval on a human's behalf. Never bypass a red test or a red review. Never send secrets, .env contents, keys, or PII to any model. Irreversible production actions — migrations, money paths, auth/RLS — are the operator's call, not yours.
 EOF
 exit 0

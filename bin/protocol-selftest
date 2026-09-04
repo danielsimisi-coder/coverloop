@@ -45,14 +45,17 @@ if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
   # is exactly the kind of per-session noise the shrink removed. Compare the
   # installed FILE with the repo's instead:
   # that is what "this machine needs a pull" actually means.
-  if [ -n "$SRC" ] && [ -f "$SRC/hooks/session-contract.sh" ]; then
-    if cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then
-      ok "session-contract.sh matches the repo"
-    else
-      warn "installed session-contract.sh differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
-    fi
-  else
+  if [ -z "$SRC" ]; then
     ok "session-contract.sh installed (no repo clone to compare against)"
+  elif [ ! -f "$SRC/hooks/session-contract.sh" ]; then
+    # A clone WITHOUT the reference hook is a broken clone, not "nothing to
+    # compare" — reporting PASS there hid the one case where the comparison
+    # silently stopped happening.
+    warn "repo clone at $SRC has no hooks/session-contract.sh — cannot verify the installed hook"
+  elif cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then
+    ok "session-contract.sh matches the repo"
+  else
+    warn "installed session-contract.sh differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
   fi
 fi
 WIRED=$(python3 - <<'PY' 2>/dev/null
