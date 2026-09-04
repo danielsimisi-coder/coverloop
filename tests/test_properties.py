@@ -2054,6 +2054,49 @@ class DerivedTier(unittest.TestCase):
             self.assertEqual(g.returncode, 1)
 
 
+    def test_a_legacy_report_without_provenance_is_not_assumed_derived(self):
+        # Pre-2.11 reports record no tier_source, and back then the tier was
+        # DECLARED. Defaulting them to "derived" handed the
+        # --human-gate-scope irreversible exemption to exactly the reports most
+        # likely to have been caller-elevated.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass")
+            rep_path = os.path.join(d, ".coverloop", "reports",
+                                    subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                                                   capture_output=True, text=True
+                                                   ).stdout.strip() + ".json")
+            rep = json.load(open(rep_path))
+            rep["risk_tier"] = "L3"            # a v2.10-shaped, caller-declared L3
+            rep.pop("tier_source", None); rep.pop("floor", None); rep.pop("elevation", None)
+            json.dump(rep, open(rep_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertIn("NOT APPROVED", g.stdout, g.stdout)
+            self.assertEqual(g.returncode, 1, g.stdout)
+
+    def test_re_attesting_a_legacy_report_does_not_launder_its_provenance(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests")
+            rep_path = os.path.join(d, ".coverloop", "reports",
+                                    subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                                                   capture_output=True, text=True
+                                                   ).stdout.strip() + ".json")
+            rep = json.load(open(rep_path))
+            rep["risk_tier"] = "L3"
+            rep.pop("tier_source", None); rep.pop("floor", None); rep.pop("elevation", None)
+            json.dump(rep, open(rep_path, "w"), indent=2)
+            self._cl(d, "attest", "--approve", "--approver", "Daniel")
+            rep = self._report(d)
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertIn("pre-2.11", rep["elevation"]["reason"])
+
+
 def glob_reports(d):
     import glob as _g
     return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))

@@ -1274,7 +1274,13 @@ def _cmd_attest_locked(args, root):
                    "pass --force to record anyway — the gate will still compute "
                    "its own floor independently.")
     auto_floor, auto_reasons = ("L0", [])
-    if not floor_unknown and floor_paths:
+    if floor_unknown:
+        # Reachable only with --force (the refusal above). Recording L0 as if it
+        # had been DERIVED wrote a provenance that is simply false: nothing was
+        # classified. Say so — the gate recomputes the floor itself anyway.
+        auto_reasons = ["floor UNKNOWN — git could not report the changed paths; "
+                        "recorded under --force"]
+    elif floor_paths:
         auto_floor, auto_reasons = classify_paths(floor_paths, BREADTH_L2_FILES)
 
     raise_to = getattr(args, "raise_tier", None)
@@ -1336,6 +1342,17 @@ def _cmd_attest_locked(args, root):
         final_tier = derived if not getattr(args, "force", False) or not requested else requested
         elevation = None
         tier_source = "derived" if not (requested and getattr(args, "force", False)) else "forced"
+        if floor_unknown:
+            tier_source = "forced"          # nothing was classified; not "derived"
+        elif (not requested and existing and not (report or {}).get("elevation")
+              and tier_max(existing, auto_floor) != auto_floor):
+            # A pre-2.11 report carries a tier above the floor and no
+            # provenance: it was DECLARED by a caller under the old interface.
+            # Re-attesting must not launder that into "derived".
+            tier_source = "elevated"
+            elevation = {"from": auto_floor, "to": existing,
+                         "reason": "pre-2.11 report — tier above the derived floor, "
+                                   "provenance unknown", "at": now_utc()}
 
     if report is None:
         report = new_report(sha, final_tier)
@@ -1350,7 +1367,7 @@ def _cmd_attest_locked(args, root):
         # The tier is still the elevated one — it only looks "derived" now
         # because `derived` folds in the existing report's tier. Dropping the
         # provenance here erased the recorded reason on the ordinary
-        # `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
+        # attest -> `attest --approve` flow, leaving an unexplained L3 behind.
         elevation, tier_source = prior_elevation, "elevated"
     if (existing and report.get("human_gate") and tier_max(existing, final_tier) == final_tier
             and existing != final_tier):
@@ -2132,7 +2149,15 @@ def cmd_gate(args):
         # "elevated" let `--raise-tier L3 --reason ...` followed by
         # `--force --tier L3` flip the source to "forced" and take the
         # exemption back, dropping the human requirement entirely.
-        _elevated = (report or {}).get("tier_source", "derived") != "derived"
+        src = (report or {}).get("tier_source")
+        if src is None:
+            # A pre-2.11 report records no provenance at all. Defaulting it to
+            # "derived" handed the exemption to exactly the reports most likely
+            # to have been caller-elevated — the tier was DECLARED back then.
+            # Infer it: a tier above the recomputed floor was not derived.
+            _elevated = tier_max(tier, auto_floor or "L0") != (auto_floor or "L0")
+        else:
+            _elevated = src != "derived"
         human_required = (_elevated or (not _changed)
                           or any(IRREVERSIBLE_RE.search(p) for p in _changed))
 

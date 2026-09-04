@@ -164,8 +164,8 @@ jobs:
       - name: Coverloop gate
         env:
           # Bump BOTH together on every upgrade to a release you vetted:
-          COVERLOOP_SHA: e6b3a4dabfcf24724ff314a4d520540c81b74b06        # v2.8.0 release commit (immutable)
-          COVERLOOP_SHA256: 27caf03a2faef295e0a6d6735937bc2204b93b206213e481de424ea2b8bb35fe  # shasum -a 256 bin/coverloop @ that commit
+          COVERLOOP_SHA: a499c22e9d5c30764ac416ae9f273468cf3b21c6        # v2.10.1 release commit (immutable)
+          COVERLOOP_SHA256: b4c5e1bebe4bef277c3577f22048bee88ff5a5cb7b11d735d9249e965331161b  # shasum -a 256 bin/coverloop @ that commit
           # base_ref via env, never interpolated into the shell (a ref name can
           # carry shell metacharacters).
           BASE_REF: ${{ github.base_ref }}
@@ -175,9 +175,15 @@ jobs:
           echo "${COVERLOOP_SHA256}  coverloop" | shasum -a 256 -c - \
             || { echo "::error::checksum mismatch — refusing unverified gate"; exit 1; }
           chmod +x coverloop
-          # --min-tier is a risk FLOOR so a PR can't dodge review by declaring a
-          # lower tier; drop it only if a human reviews the tier per PR.
-          ./coverloop gate --ci --min-tier L2 --require-transcript --base "origin/${BASE_REF}"
+          # The floor is DERIVED from the paths this PR actually changed, so a
+          # migration or an auth file cannot arrive labelled L1. The pin below
+          # is a SECOND floor, never a cap: the gate takes the MAX. Pinning only
+          # L2, as this snippet used to, let an auth or migration change
+          # declared L2 skip the red-team and the human approval entirely.
+          FLOOR="$(./coverloop classify --quiet --base "origin/${BASE_REF}")"
+          echo "derived risk floor for this PR: ${FLOOR}"
+          ./coverloop gate --ci --min-tier "${FLOOR}" --min-tier L1 \
+            --require-transcript --base "origin/${BASE_REF}"
 ```
 
 Then in the repo settings: **Branches → branch protection → require the
