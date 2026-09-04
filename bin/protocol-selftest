@@ -41,9 +41,9 @@ for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure
 done
 [ -z "$MISSING" ] && ok "all 4 hook scripts present" || fail "hook scripts missing:$MISSING"
 if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
-  # The v2.11 hook deliberately prints no version banner — it is seven lines of
-  # invariants, and a version string is exactly the kind of per-session noise
-  # the shrink removed. Compare the installed FILE with the repo's instead:
+  # The shortened hook deliberately prints no version banner — a version string
+  # is exactly the kind of per-session noise the shrink removed. Compare the
+  # installed FILE with the repo's instead:
   # that is what "this machine needs a pull" actually means.
   if [ -n "$SRC" ] && [ -f "$SRC/hooks/session-contract.sh" ]; then
     if cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then

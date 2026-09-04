@@ -1858,6 +1858,6 @@ class NinthRoundRegressions(unittest.TestCase):
 # The entry point stays at the very END of this file. `unittest.main()` collects
 # what is defined ABOVE it, so a class appended later is silently invisible to
 # `python3 tests/test_properties.py` — which is exactly how CI runs it. That had
-# happened: 102 of 264 tests were running in CI.
+# happened during development: 102 of this file's 138 tests ran.
 if __name__ == "__main__":
     unittest.main(verbosity=2)

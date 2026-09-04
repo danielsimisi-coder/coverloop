@@ -2,20 +2,21 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-09-04 — the session contract stops being a process manual
+## 2026-09-04 — the session contract stops being a process manual (PROTOCOL v2.11.0)
 
 `classify`, `attest` and `gate` are **byte-identical** to the previous release:
 `git diff <prev> -- bin/coverloop` is empty. This release changes what the
 builder reads at session start, and two defects in the test harness itself.
 
-- **The SessionStart hook is seven lines of invariants.** It fires at every
+- **The SessionStart hook prints three lines of invariants.** It fires at every
   session start and after every compaction, so its text is read on every single
   session — which is exactly why the 6 KB version was the problem. It mentioned
   "gate" nineteen times and told the builder to classify every task, pick a
   model, run two reviewers, re-attest, keep a ledger, run a self-test, and end
-  every reply with a model line. Measured against real sessions, **that last
-  rule was followed 1% of the time** and the rest turned the builder into a
-  process manager. It now says: build normally, run the relevant tests, make
+  every reply with a model line. Reviewing the fleet's session transcripts, that
+  last rule was followed in roughly 1 reply in 100 — an external observation
+  from that review, not a metric this repository computes — and the rest turned
+  the builder into a process manager. It now says: build normally, run the relevant tests, make
   `coverloop gate` pass before merge or deploy, never lower the deterministic
   floor, never record an approval on a human's behalf, never bypass a red test
   or review, never send secrets or PII to a model. Enforcement lives in code,
@@ -31,18 +32,20 @@ builder reads at session start, and two defects in the test harness itself.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is ever sent — but
   `log_egress` still wrote `attempt` markers to the operator's **production**
-  egress log, and the daily spend cap counts exactly those. A full run burned
-  ~30 real review slots, so after a few runs every genuine review that day was
-  refused. The suite runs against a temporary log now, and `tearDownModule`
-  **fails** if the production one is touched at all.
+  egress log, and the daily spend cap counts exactly those. Measured: **6
+  markers per run** (13 log lines). Small per run, and the reason every real
+  review was refused by late afternoon after a day of re-running the suite. It
+  runs against a temporary log now, and `tearDownModule` **fails** if the
+  production one is touched at all.
 
 - **A comment pins the test entry point in place.** CI runs
   `tests/test_properties.py` directly, and `unittest.main()` collects only what
   is defined *above* it — so a class appended below is silently skipped. That
-  happened during this release's development (102 of 264 tests were running
-  before review caught it). Nothing was skipped in the file as it ships, and
-  this change is preventive: the entry point is explicitly the last thing in the
-  file, with a comment saying why.
+  happened during this release's development: 102 of that file's 138 property
+  tests ran, and because CI invokes its three test scripts separately the whole
+  Python job still ran 228 of 264. Nothing is skipped in the file as it ships,
+  and this change is preventive: the entry point is explicitly the last thing in
+  the file, with a comment saying why.
 
 - **`protocol-selftest` no longer reports a current hook as stale.** It parsed
   the `[vX PROTOCOL` banner the shortened hook deliberately does not print. It
