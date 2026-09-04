@@ -44,6 +44,7 @@ SEED = 20260711  # fixed -> deterministic, reproducible failures
 PROD_EGRESS_LOG = os.path.join(os.path.expanduser("~"), ".config", "openrouter", "egress.log")
 _SUITE_LOG_DIR = None
 _PROD_LOG_BEFORE = None
+_CALLER_EGRESS_LOG = None      # whatever the caller had set, restored on teardown
 
 
 def _prod_log_fingerprint():
@@ -55,7 +56,13 @@ def _prod_log_fingerprint():
 
 
 def setUpModule():
-    global _SUITE_LOG_DIR, _PROD_LOG_BEFORE
+    global _SUITE_LOG_DIR, _PROD_LOG_BEFORE, _CALLER_EGRESS_LOG, PROD_EGRESS_LOG
+    # The log to PROTECT is the caller's, not a hardcoded default: someone who
+    # runs the suite with COVERLOOP_EGRESS_LOG pointing at their own log would
+    # otherwise have it overwritten, unset on teardown, and never fingerprinted.
+    _CALLER_EGRESS_LOG = os.environ.get("COVERLOOP_EGRESS_LOG")
+    if _CALLER_EGRESS_LOG:
+        PROD_EGRESS_LOG = _CALLER_EGRESS_LOG
     _PROD_LOG_BEFORE = _prod_log_fingerprint()
     _SUITE_LOG_DIR = tempfile.mkdtemp(prefix="coverloop-suite-egress-")
     os.environ["COVERLOOP_EGRESS_LOG"] = os.path.join(_SUITE_LOG_DIR, "egress.log")
@@ -63,7 +70,10 @@ def setUpModule():
 
 def tearDownModule():
     import shutil as _sh
-    os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+    if _CALLER_EGRESS_LOG is None:
+        os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+    else:
+        os.environ["COVERLOOP_EGRESS_LOG"] = _CALLER_EGRESS_LOG
     if _SUITE_LOG_DIR:
         _sh.rmtree(_SUITE_LOG_DIR, ignore_errors=True)
     if _prod_log_fingerprint() != _PROD_LOG_BEFORE:

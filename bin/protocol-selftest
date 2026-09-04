@@ -35,7 +35,13 @@ if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this u
 if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.7 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
 
 # ---------- machine: hooks installed + wired ----------
-HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
+# A marketplace install runs the hooks from ${CLAUDE_PLUGIN_ROOT}/hooks (see
+# .claude-plugin/plugin.json); a manual install puts them in ~/.claude/hooks.
+# Checking only the latter could compare an inactive legacy copy while the
+# active plugin hook went unexamined.
+HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/hooks}"
+[ -n "$HOOKS_DIR" ] && [ -d "$HOOKS_DIR" ] || HOOKS_DIR="$HOME/.claude/hooks"
+MISSING=""
 for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
   [ -f "$HOOKS_DIR/$h" ] || MISSING="$MISSING $h"
 done
@@ -53,9 +59,9 @@ if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
     # silently stopped happening.
     warn "repo clone at $SRC has no hooks/session-contract.sh — cannot verify the installed hook"
   elif cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then
-    ok "session-contract.sh matches the repo"
+    ok "session-contract.sh matches the repo ($HOOKS_DIR)"
   else
-    warn "installed session-contract.sh differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
+    warn "installed session-contract.sh ($HOOKS_DIR) differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
   fi
 fi
 WIRED=$(python3 - <<'PY' 2>/dev/null

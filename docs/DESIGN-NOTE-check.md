@@ -26,8 +26,8 @@ eight-step ceremony around `attest` was what people skipped.
 
 ## Why it is not in this release
 
-Twelve cold review rounds (Codex at xhigh, GLM red-team), **52 verified
-findings**, and **zero rounds with no new P0/P1**. `CHANGELOG.md` here carries a summary; the
+Twelve cold review rounds (Codex at xhigh, GLM red-team), and **zero rounds
+with no new P0/P1**. `CHANGELOG.md` here carries a summary; the
 round-by-round detail lives in the preserved branch — its own version of
 `CHANGELOG.md` and, findings-by-round, its commit messages.
 
@@ -35,7 +35,7 @@ Two patterns decided it.
 
 **One mechanism ate its own fixes.** Letting reviewed-but-uncountersigned
 evidence advance the gate's baseline requires the owed human signature to be
-carried forward to HEAD. That obligation was shed five different ways across
+carried forward to HEAD. That obligation was shed six different ways across
 five consecutive rounds — by stacking a commit on top, under
 `--human-gate-scope irreversible`, by an L0 successor, by the scope going
 retroactively sticky, through `--base`, and finally by carrying the approval

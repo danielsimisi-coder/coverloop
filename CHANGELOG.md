@@ -58,9 +58,9 @@ builder reads at session start, and two defects in the test harness itself.
 
 **Two larger changes were built, reviewed, and deliberately not shipped.**
 `coverloop check` (a one-command merge boundary) and the derived risk tier each
-reached a pre-agreed stopping condition: twelve review rounds and 52 findings
-for the first, five rounds for the second, with three consecutive rounds finding
-a real P1 in the same conceptual boundary. Both are preserved with their full
+reached a pre-agreed stopping condition: twelve review rounds for the first,
+five for the second, with three consecutive rounds finding a real P1 in the same
+conceptual boundary. Both are preserved with their full
 audit history — `followup/coverloop-check-audit` and
 `followup/derived-tier-audit` — and both have design notes carrying the evidence
 forward so the next attempt starts from it rather than rediscovering it:
