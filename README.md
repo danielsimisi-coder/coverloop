@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
-[![Tests](https://img.shields.io/badge/tests-172%20passing-34E0B4?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-254%20passing-34E0B4?style=flat-square)](tests/)
 
 [**Install**](#-install) · [**Real bugs it caught**](#-real-bugs-it-caught) · [**What it costs you**](#-what-it-actually-costs-you) · [**What runs on your machine**](#-what-actually-runs-on-your-machine)
 
