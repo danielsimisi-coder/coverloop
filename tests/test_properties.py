@@ -74,8 +74,14 @@ def tearDownModule():
 
 
 def suite_egress_log():
-    """The temporary log this module runs against — never the production one."""
-    return os.environ.get("COVERLOOP_EGRESS_LOG") or os.path.join(_SUITE_LOG_DIR or "", "egress.log")
+    """The temporary log this module runs against — never the production one.
+
+    Deliberately does NOT read COVERLOOP_EGRESS_LOG: a teardown calling this to
+    restore the module-wide log while a per-test override was still installed
+    just restored that override to itself, leaving every later test coupled to
+    the last test's private log.
+    """
+    return os.path.join(_SUITE_LOG_DIR or tempfile.gettempdir(), "egress.log")
 
 
 # ---- generators for real secret SHAPES (one valid instance per VALUE pattern) ----
@@ -2160,6 +2166,59 @@ class DerivedTier(unittest.TestCase):
             rep = json.load(open(max(glob_reports(d), key=os.path.getmtime)))
             self.assertEqual(rep["tier_source"], "elevated")
             self.assertNotEqual(rep["risk_tier"], rep["floor"]["tier"])
+
+
+    def test_raise_tier_without_reason_is_refused_at_any_floor(self):
+        # The reviewer read the --reason guard as sitting AFTER the block that
+        # fills in a default, and predicted this would pass. It does not: the
+        # guard runs first. Both floor relationships are covered here so the
+        # ordering cannot regress unnoticed.
+        for rel, body in (("workers/job.py", "x = 1\n"),          # floors at L3
+                          ("src/a.ts", "export const a = 1;\n")):  # floors at L1
+            with self.subTest(path=rel), tempfile.TemporaryDirectory() as d:
+                run = self._repo(d)
+                self._write(d, rel, body)
+                run("git", "add", "-A"); run("git", "commit", "-qm", "change")
+                r = self._cl(d, "attest", "--raise-tier", "L3", "--tests")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("requires --reason", r.stderr)
+                self.assertFalse(glob_reports(d), "a refused attest writes nothing")
+
+    def test_a_forced_tier_is_not_relabelled_as_a_pre_2_11_report(self):
+        # Re-attesting a forced-above-floor report with no flags filed it under
+        # "provenance unknown" when this repo knew exactly what happened.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tier", "L3", "--tests")
+            path = max(glob_reports(d), key=os.path.getmtime)
+            rep = json.load(open(path))
+            rep["tier_source"] = "forced"          # as an earlier --force wrote it
+            rep.pop("elevation", None)
+            json.dump(rep, open(path, "w"), indent=2)
+            self._cl(d, "attest", "--approve", "--approver", "Daniel")
+            rep = json.load(open(max(glob_reports(d), key=os.path.getmtime)))
+            self.assertIn("--force", rep["elevation"]["reason"])
+
+
+    def test_a_bare_legacy_pin_at_the_derived_floor_is_still_caller_declared(self):
+        # `--tier L3` on a path that already floors at L3, with no reason, was
+        # recorded as "derived" — and the gate then waived the human under
+        # --human-gate-scope irreversible. What makes a tier caller-influenced
+        # is that a caller named it, not which flag they used.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "workers/job.py", "x = 1\n")     # L3 by path, reversible
+            run("git", "add", "-A"); run("git", "commit", "-qm", "worker")
+            self._cl(d, "attest", "--tier", "L3", "--tests", "--codex", "pass",
+                     "--glm", "pass")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            rep = json.load(open(max(glob_reports(d), key=os.path.getmtime)))
+            self.assertEqual(rep["tier_source"], "elevated")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertIn("NOT APPROVED", g.stdout, g.stdout)
+            self.assertEqual(g.returncode, 1, g.stdout)
 
 
 def glob_reports(d):

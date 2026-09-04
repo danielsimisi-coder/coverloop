@@ -1332,7 +1332,12 @@ def _cmd_attest_locked(args, root):
         final_tier = requested if (tier_max(requested, derived) == requested
                                    or getattr(args, "force", False)) else derived
     above_floor = tier_max(final_tier, auto_floor) != auto_floor
-    asserted = bool(raise_to) or bool(reason)
+    # ANY explicit tier flag is caller-asserted provenance — the legacy `--tier`
+    # pin included. Excluding it recorded `--tier L3` on an already-L3
+    # reversible path as "derived", and the gate then waived the human under
+    # --human-gate-scope irreversible. What makes a tier caller-influenced is
+    # that a caller named it, not which flag they used to do so.
+    asserted = bool(requested) or bool(reason)
     forced_below = bool(requested) and getattr(args, "force", False) and \
         tier_max(requested, derived) != requested
 
@@ -1357,9 +1362,12 @@ def _cmd_attest_locked(args, root):
                 reason = prior["reason"]
             elif not requested:
                 # No tier flag, no recorded elevation, yet the tier sits above
-                # the floor: a pre-2.11 report, written when the tier was
-                # DECLARED. Re-attesting must not launder that into "derived".
-                reason = ("pre-2.11 report — tier above the derived floor, "
+                # the floor. Either a pre-2.11 report (written when the tier was
+                # DECLARED) or one this repo forced earlier — say which, rather
+                # than filing a forced tier under "provenance unknown".
+                reason = ("tier previously recorded under --force"
+                          if (report or {}).get("tier_source") == "forced" else
+                          "pre-2.11 report — tier above the derived floor, "
                           "provenance unknown")
             else:
                 # The LEGACY flag (--tier) keeps working for every existing
