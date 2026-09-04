@@ -134,8 +134,26 @@ them fail-opens in the previous rounds' own fixes:
 - **A later `attest` erased the elevation reason** on the ordinary
   `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
 
-43 new regression tests lock the falsification table from the research pass and
-every finding above (271 in the suite). Explicitly **not** done in this release, and still open: a signed
+A fourth round found three more, and the reviewer-independence one was a design
+answer rather than another patch:
+
+- **Reviewers now run OUTSIDE the worktree.** Token heuristics cannot cover
+  shell semantics: `python3 -m reviewer` picks up a planted `reviewer.py`, and
+  `sh <scripts/reviewer` hides the path in a redirect token. The command now
+  executes from a scratch directory, and what it needs arrives explicitly —
+  `$COVERLOOP_REPO`, `$COVERLOOP_DIFF`, `$COVERLOOP_BASE`. The in-repo token
+  guard stays as a tripwire but is no longer the boundary.
+- **An unapproved elevation is carried through `--base`** — CI's path. The floor
+  there comes from the span's paths, which by definition cannot show an
+  elevation, so an unapproved `--raise-tier L3` followed by a one-line fix
+  passed CI at L1. An elevated ancestor is also never exempt under
+  `--human-gate-scope irreversible`, for the same reason.
+- **`--json` owns file descriptor 1**, not just Python's `sys.stdout`: the test
+  command and the reviewers are subprocesses that inherit fd 1, and nearly every
+  real test command prints.
+
+46 new regression tests lock the falsification table from the research pass and
+every finding above (274 in the suite). Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
 `codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
 the L3 GLM requirement.

@@ -43,6 +43,21 @@ the primitives below — it adds no new authority and skips no check:
    resolves inside the repo under review (including via a symlink), a policy
    file that is group- or world-writable, and a `.coverloop/config.json` that
    defines `reviewers`/`reviewer_commands` at all.
+
+   **The command also runs from OUTSIDE the worktree.** Naming the reviewer in a
+   trusted file is not enough on its own — `python3 -m reviewer` would pick up a
+   planted `reviewer.py`, and `sh <scripts/reviewer` hides the path in a
+   redirect token, so no token check can cover shell semantics. `check` runs
+   each reviewer in a scratch directory and passes what it needs explicitly:
+
+   | variable | meaning |
+   |---|---|
+   | `COVERLOOP_REPO` | absolute path to the repository under review |
+   | `COVERLOOP_DIFF` | a file holding the diff being judged (evidence excluded) |
+   | `COVERLOOP_BASE` | the base ref, when one was given |
+
+   A reviewer that needs the working tree does `cd "$COVERLOOP_REPO"` itself —
+   an explicit choice in the operator's own file, not an implicit search path.
 5. **read each verdict from its transcript.** The verdict is a **machine
    protocol**: the transcript must contain a line that is exactly
    `VERDICT: PASS`, and no other `VERDICT:` line. `PASS WITH RISKS`, `APPROVE`,

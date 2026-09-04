@@ -321,6 +321,28 @@ def _changed_paths_for_gate(root, args):
     return list(tracked) + list(untracked)
 
 
+def _pending_elevation(root, base, head):
+    """The oldest commit in base..head whose report was ELEVATED above the
+    deterministic floor and never approved.
+
+    A plain L3 inside the range raises the floor by its own paths, so the gate
+    demands the human anyway. An elevation is invisible to the classifier by
+    definition — that is what it is for — so without this an unapproved
+    `--raise-tier L3` commit followed by a one-line fix passed CI at L1.
+    """
+    out = git(["rev-list", "--reverse", f"{base}..{head}"], cwd=root)
+    if not out:
+        return None
+    for c in out.split():
+        rep, _why = load_report(root, c)
+        if not rep or rep.get("tier_source") != "elevated":
+            continue
+        hg = rep.get("human_gate") or {}
+        if not (hg.get("approved") is True and str(hg.get("approver", "")).strip()):
+            return c
+    return None
+
+
 def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
     """The newest ancestor of SHA whose evidence chain actually VALIDATES.
 
@@ -409,7 +431,10 @@ def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
         # exempt under --human-gate-scope irreversible into a permanent pending
         # obligation on every later commit.
         anc_human = True
-        if human_gate_scope == "irreversible" and tier == "L3":
+        if (human_gate_scope == "irreversible" and tier == "L3"
+                and rep.get("tier_source") != "elevated"):
+            # An ELEVATED ancestor is never exempt: the exemption reads paths,
+            # and an elevation says the paths do not show the risk.
             anc_human = (not seg) or any(IRREVERSIBLE_RE.search(pth) for pth in seg)
         authorized, _ac = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
                                    require_captured=True, human_gate_required=anc_human,
@@ -453,8 +478,10 @@ def _gate_floor_paths(root, args, report, sha):
             # it as "no files changed" turned a typo into a passing gate.
             return [], True, None
         # With an explicit base the whole span is classified, so an unapproved
-        # commit inside it raises the tier directly — nothing to inherit.
-        return out, False, None
+        # commit inside it raises the tier through its own paths — EXCEPT an
+        # ELEVATED one, which exists precisely because the paths do not show
+        # the risk. Those obligations still have to be carried.
+        return out, False, _pending_elevation(root, base, "HEAD")
 
     tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
     untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
@@ -979,7 +1006,7 @@ WITHHELD_RE = re.compile(r"^\[[a-z]+ reviewer command exited -?\d+; "
                          + re.escape(WITHHELD_MARKER) + r"\s*$")
 
 
-def capture_run(root, sha, name, cmd):
+def capture_run(root, sha, name, cmd, cwd=None, env=None):
     """Run a reviewer command, save its combined output to
     .coverloop/reports/<sha>.<name>.log, and return provenance (command, exit
     code, output path, sha256, line count, timestamp).
@@ -1000,7 +1027,14 @@ def capture_run(root, sha, name, cmd):
         # reviewer invocation (e.g. 'codex exec ...'), printed before it runs.
         # text=False: capture raw bytes so non-UTF-8 reviewer output (colored
         # diffs, binary error dumps) can't crash us; decode defensively below.
-        proc = subprocess.run(cmd, shell=True, cwd=root,
+        # `cwd` defaults to the repo (attest --codex-run keeps that contract),
+        # but `check` passes a directory OUTSIDE the worktree: with shell=True
+        # a repo-relative resolution — `python3 -m reviewer` picking up a
+        # planted reviewer.py, `sh <scripts/reviewer` — would otherwise let the
+        # change under review supply its own reviewer. The repo and a
+        # pre-computed diff reach the command through COVERLOOP_REPO /
+        # COVERLOOP_DIFF instead.
+        proc = subprocess.run(cmd, shell=True, cwd=cwd or root, env=env,
                               capture_output=True, timeout=1800)
     except (OSError, subprocess.TimeoutExpired) as e:
         fail_usage(f"could not run {name} reviewer command: {e}")
@@ -1428,7 +1462,9 @@ def _cmd_attest_locked(args, root):
             }
             if run_cmd:
                 # capture_run sets source="captured" + provenance; keep verdict.
-                entry.update(capture_run(root, sha, name, run_cmd))
+                entry.update(capture_run(root, sha, name, run_cmd,
+                                         cwd=getattr(args, "reviewer_cwd", None),
+                                         env=getattr(args, "reviewer_env", None)))
                 entry["status"] = verdict
                 entry["findings_open"] = findings if findings is not None else 0
                 if entry.get("exit_code") != 0:
@@ -2497,12 +2533,29 @@ def cmd_check(args):
     #    come from config ("reviewer_commands": {"codex": "...", "glm": "..."});
     #    with none configured, check STOPs and names the missing role rather
     #    than silently downgrading to a self-attested verdict.
+    # Reviewer commands run from a scratch directory OUTSIDE the worktree, so
+    # nothing the change can write is on the shell's or an interpreter's search
+    # path. What the reviewer needs reaches it explicitly:
+    #   $COVERLOOP_REPO  absolute path to the repository under review
+    #   $COVERLOOP_DIFF  a file holding the diff this run is judging
+    #   $COVERLOOP_BASE  the base ref, when one was given
+    review_dir = tempfile.mkdtemp(prefix="coverloop-review-")
+    diff_file = os.path.join(review_dir, "change.diff")
+    diff_args = ["diff", f"{args.base}...HEAD"] if getattr(args, "base", None) else \
+        ["show", "--patch", sha]
+    diff_text = git(diff_args + ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root)
+    with open(diff_file, "w", encoding="utf-8", errors="replace") as fh:
+        fh.write(diff_text or "")
+    review_env = dict(os.environ)
+    review_env.update({"COVERLOOP_REPO": root, "COVERLOOP_DIFF": diff_file,
+                       "COVERLOOP_BASE": str(getattr(args, "base", "") or "")})
     a = argparse.Namespace(
         tier=None, raise_tier=raise_to if raise_to and raise_to != floor else None,
         reason=reason or None, force=False, tests=True,
         codex=None, codex_findings=None, codex_run=None, codex_log=None,
         glm=None, glm_findings=None, glm_run=None, glm_log=None,
-        approve=False, approver=None, base=getattr(args, "base", None), quiet=True)
+        approve=False, approver=None, base=getattr(args, "base", None), quiet=True,
+        reviewer_cwd=review_dir, reviewer_env=review_env)
     cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):
@@ -2530,19 +2583,24 @@ def cmd_check(args):
         # attest requires a stated verdict, so we provisionally state "fail" and
         # only upgrade it when the transcript ends in a pass marker. Fail-closed.
         setattr(a, role, "fail")
-    # In --json mode stdout must be nothing but the JSON document.
-    say = (lambda *a: print(*a, file=sys.stderr)) if getattr(args, "json", False) else print
+    # In --json mode stdout must be nothing but the JSON document. Redirecting
+    # sys.stdout is not enough: the test command and the reviewers are
+    # SUBPROCESSES that inherit file descriptor 1, and nearly every real test
+    # command prints. Move fd 1 itself to stderr for the whole run and keep the
+    # original to write the document at the end.
+    json_mode = getattr(args, "json", False)
+    json_out = None
+    if json_mode:
+        json_out = os.dup(1)
+        os.dup2(2, 1)
+    say = (lambda *a: print(*a, file=sys.stderr)) if json_mode else print
     say(f"coverloop check — {sha[:12]} — derived tier {tier}"
         + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:
         say(f"  - {r}")
     try:
         with _attest_lock(root):
-            if getattr(args, "json", False):
-                with contextlib.redirect_stdout(sys.stderr):
-                    rc = _cmd_attest_locked(a, root)
-            else:
-                rc = _cmd_attest_locked(a, root)
+            rc = _cmd_attest_locked(a, root)
     except SystemExit as exc:
         # attest reports usage errors (no test_command configured, a reviewer
         # command that timed out) with fail_usage -> exit 2 and no STOP line.
@@ -2630,8 +2688,10 @@ def cmd_check(args):
         # Automation reads the EXIT CODE. Printing {"verdict": "fail"} and then
         # exiting 0 made a missing human approval look like success to every
         # caller that checks the status the way CI does.
-        print(json.dumps({"schema": "coverloop-check/v1", "commit": sha, "tier": tier,
-                          "verdict": "pass" if verdict else "fail", "checks": checks}, indent=2))
+        doc = json.dumps({"schema": "coverloop-check/v1", "commit": sha, "tier": tier,
+                          "verdict": "pass" if verdict else "fail", "checks": checks}, indent=2)
+        sys.stdout.flush()
+        os.write(json_out, (doc + "\n").encode())
         sys.exit(0 if verdict else 1)
     if verdict:
         for c in checks:

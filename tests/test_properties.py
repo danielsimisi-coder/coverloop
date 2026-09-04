@@ -2316,10 +2316,10 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             run("git", "add", "-A"); run("git", "commit", "-qm", "data")
             outside = os.path.join(self.policy_dir, "pass.sh")
             self._policy(cmds={
-                "codex": f"git diff HEAD~1..HEAD -- . ':(exclude)notes.txt' && {outside}",
+                "codex": f'git -C "$COVERLOOP_REPO" diff -- . \':(exclude)notes.txt\' && {outside}',
                 "glm": outside})
             r = self._cl(d, "check")
-            self.assertNotIn("lives inside the repository", r.stderr)
+            self.assertNotIn("inside the repository under review", r.stderr)
 
     def test_check_stops_if_head_moves_during_the_run(self):
         # A command that commits or resets leaves a CLEAN tree while the
@@ -2436,6 +2436,64 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         self.assertEqual(tv("VERDICT: PASS\ncritical defect remains"), "fail")
         self.assertEqual(tv("VERDICT: PASS\nverdict: fail"), "fail")   # case-insensitive
         self.assertEqual(tv("VERDICT: PASS\ntokens used\n159,653"), "pass")
+
+    def test_reviewers_run_outside_the_worktree(self):
+        # `python3 -m reviewer` or `sh <scripts/reviewer` would resolve a
+        # planted file if the reviewer ran with the repo as its cwd. It does
+        # not: the repo and the diff arrive as COVERLOOP_REPO / COVERLOOP_DIFF.
+        probe = os.path.join(self.policy_dir, "probe.sh")
+        open(probe, "w").write(
+            '#!/bin/sh\n'
+            'test "$(pwd -P)" = "$(cd "$COVERLOOP_REPO" && pwd -P)" && exit 3\n'
+            'test -s "$COVERLOOP_DIFF" || exit 4\n'
+            'echo reviewed\necho "VERDICT: PASS"\n')
+        os.chmod(probe, 0o755)
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._policy(cmds={"codex": probe, "glm": probe})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            # it gets as far as the human gate, so both reviewers passed the probe
+            self.assertIn("requires a named human approval", r.stderr, r.stdout + r.stderr)
+
+    def test_an_unapproved_elevation_is_carried_through_base(self):
+        # With --base the floor comes from the whole span's PATHS, which by
+        # definition cannot show an elevation. An unapproved --raise-tier L3
+        # followed by a one-line fix passed CI at L1.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                                  capture_output=True, text=True).stdout.strip()
+            stub = os.path.join(self.policy_dir, "pass.sh")
+            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--codex-run", stub,
+                     "--glm", "pass", "--glm-run", stub,
+                     "--raise-tier", "L3", "--reason", "this config steers auth")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            self._write(d, "src/other.ts", "export const b = 2;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "small fix")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
+            g = self._cl(d, "gate", "--base", base)
+            self.assertEqual(g.returncode, 1, g.stdout)
+            self.assertIn("reviewed but never approved", g.stdout)
+
+    def test_check_json_stdout_survives_a_chatty_test_command(self):
+        # redirect_stdout only moves Python's writes; the test SUBPROCESS
+        # inherits fd 1, and nearly every real test command prints.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = "echo 'ran 41 tests, all green'"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "chatty tests")
+            r = self._cl(d, "check", "--json")
+            doc = json.loads(r.stdout)
+            self.assertEqual(doc["verdict"], "pass")
+            self.assertEqual(r.returncode, 0)
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
