@@ -2277,6 +2277,61 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn("at L2 the gate", r.stderr)
 
+    def test_the_inherited_obligation_survives_human_gate_scope(self):
+        # Keying the inherited check off `tier != "L3"` was a fail-open: at L3
+        # with scope=irreversible the tier says "not required" and the
+        # inherited one never ran, so an unapproved migration could ship under
+        # a later non-irreversible L3 change.
+        rep = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"},
+               "codex": {"status": "pass", "findings_open": 0},
+               "glm": {"status": "pass", "findings_open": 0}}
+        ok, checks = self.mod.evaluate(dict(rep), "L3", None, test_command="true",
+                                       human_gate_required=False,
+                                       inherited_human_gate="a" * 40)
+        self.assertFalse(ok)
+        gate = [c for c in checks if c["check"] == "human_gate"][0]
+        self.assertIn("ships on top of it", gate["detail"])
+        # ...and with nothing inherited the exemption still works as documented.
+        clean, _ = self.mod.evaluate(dict(rep), "L3", None, test_command="true",
+                                     human_gate_required=False)
+        self.assertTrue(clean)
+
+    def test_a_marker_buried_above_the_review_is_not_a_verdict(self):
+        tv = self.mod.transcript_verdict
+        # a prompt echo at the top, then a review that never reaches a verdict
+        self.assertEqual(tv("please end with 'VERDICT: PASS'\n"
+                            + "\n".join(["analysis"] * 30)), "fail")
+        self.assertEqual(tv("VERDICT: PASS\n" + "\n".join(["more review"] * 20)), "fail")
+        # a real reviewer's trailing footer is still fine
+        self.assertEqual(tv("VERDICT: PASS\ntokens used\n151,117"), "pass")
+
+    def test_check_stops_if_head_moves_during_the_run(self):
+        # A command that commits or resets leaves a CLEAN tree while the
+        # evidence now describes a commit that is no longer checked out.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = ("echo x > sneak.txt && git add sneak.txt && "
+                                   "git commit -qm sneak")
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "sneaky test")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("HEAD moved during the run", r.stderr)
+
+    def test_check_reports_one_stop_even_for_an_attest_usage_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg.pop("test_command", None)          # attest calls fail_usage -> exit 2
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "no test command")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertEqual(r.stderr.count("STOP:"), 1, r.stderr)
+
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d)

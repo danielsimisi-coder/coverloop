@@ -82,8 +82,33 @@ closed:
 - **A non-`codex` primary at L2 is refused** with the reason, rather than
   running a reviewer whose evidence the fixed L2 report field never reads.
 
-31 new regression tests lock the falsification table from the research pass and
-every finding above. Explicitly **not** done in this release, and still open: a signed
+A second cold review of the corrected branch returned **VERDICT: FAIL** again,
+with four more findings — three of them in the round-one fixes themselves, which
+is the pattern this repo's own README predicts:
+
+- **The inherited obligation failed open under `--human-gate-scope irreversible`.**
+  It was keyed off `tier != "L3"`, so at L3 with the narrowed scope the tier said
+  "not required" and the inherited check never ran: an unapproved migration could
+  ship under a later non-irreversible L3 change. Required-by-tier and
+  required-by-inheritance are now tracked apart, and either one stops the merge.
+- **`check` never re-read HEAD.** A test or reviewer command that commits,
+  amends or resets leaves a clean tree while the evidence describes a commit
+  that is no longer checked out.
+- **The verdict marker must be the reviewer's closing word.** Accepting
+  `VERDICT: PASS` anywhere meant a prompt echo at the top, followed by a review
+  that never reached a verdict, counted as approval. A trailing footer (Codex
+  prints "tokens used") is tolerated; review content after the marker is not.
+- **One STOP, always.** `check` could exit 2 with `coverloop: error:` when
+  attest hit a usage error, breaking the exit-1/one-reason interface it promises.
+
+Two operational fixes came out of running it for real: the GLM red-team was
+returning truncated output on a large diff (moved to the xhigh wrapper), and
+both reviewers were being handed a 941 KB diff because previously committed
+reviewer transcripts were in it — the reviewed diff now excludes
+`.coverloop/reports/`.
+
+35 new regression tests lock the falsification table from the research pass and
+every finding above (263 in the suite). Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
 `codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
 the L3 GLM requirement.

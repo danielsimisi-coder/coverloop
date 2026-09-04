@@ -1697,6 +1697,7 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
             "red-team/audit is mandatory at L3", require_captured, root, report_commit,
             require_executed))
 
+    if tier == "L3" or inherited_human_gate:
         # WHO gets stopped, and why it is a choice.
         #
         # By default every L3 change waits for a named human. Measured on a real
@@ -1721,7 +1722,21 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
                                 "reviewed evidence, not authorization)"))
             verdict = all(c["status"] == "pass" for c in checks)
             return verdict, checks
-        needs_human = human_gate_required
+        # An obligation INHERITED from the branch is independent of this
+        # commit's own tier and of --human-gate-scope. Advancing the baseline
+        # past a reviewed-but-unapproved commit removes its FILES from this
+        # floor — it must not remove the signature that commit still owes.
+        # Keying this off `tier != "L3"` was a fail-open the reviewer found: at
+        # L3 with scope=irreversible the tier check says "not required" and the
+        # inherited one never ran, so an unapproved migration could ship under a
+        # later non-irreversible L3 change.
+        # `human_gate_required` is the caller's POLICY flag; it says nothing
+        # about the tier, so at L1 it is still True and only the tier gate below
+        # decides. Required-by-tier and required-by-inheritance are tracked
+        # apart so the reason printed is the true one.
+        by_tier = (tier == "L3") and human_gate_required
+        inherited = bool(inherited_human_gate)
+        needs_human = by_tier or inherited
         why_exempt = ("" if needs_human else
                       " — scope=irreversible and no migration/money/authz path in "
                       "this change; the full automated L3 evidence still applies")
@@ -1730,26 +1745,19 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
         if not needs_human:
             checks.append(check("human_gate", True, "human gate: not required" + why_exempt))
+        elif hg_ok:
+            checks.append(check("human_gate", True,
+                                f"human gate: approved by {hg.get('approver')!r}"))
+        elif by_tier:
+            checks.append(check(
+                "human_gate", False,
+                "human gate: NOT APPROVED — L3 requires "
+                "`coverloop attest --approve --approver <name>`"))
         else:
-            detail = (
-                f"human gate: approved by {hg.get('approver')!r}" if hg_ok
-                else "human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`"
-            )
-            checks.append(check("human_gate", hg_ok, detail))
-
-    # An obligation inherited from the branch. Advancing the baseline past a
-    # reviewed-but-unapproved commit removes its FILES from this floor — it
-    # must not remove the signature that commit still owes, or a docs commit
-    # on top of an unapproved migration would merge the migration with it.
-    if (scope == EVIDENCE_AUTHORIZATION and inherited_human_gate
-            and tier != "L3"):
-        hg = report.get("human_gate") if report else None
-        hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
-        checks.append(check(
-            "human_gate", hg_ok,
-            f"human gate: approved by {hg.get('approver')!r}" if hg_ok else
-            f"human gate: NOT APPROVED — {inherited_human_gate[:12]} in this branch was "
-            f"reviewed but never approved, and this change ships on top of it"))
+            checks.append(check(
+                "human_gate", False,
+                f"human gate: NOT APPROVED — {inherited_human_gate[:12]} in this branch was "
+                f"reviewed but never approved, and this change ships on top of it"))
 
     verdict = all(c["status"] == "pass" for c in checks)
     return verdict, checks
@@ -2253,22 +2261,33 @@ _VERDICT_CANONICAL_PASS = "VERDICT: PASS"
 _VERDICT_CANONICAL_FAIL = "VERDICT: FAIL"
 
 
-def transcript_verdict(text):
-    """Return "pass" only for an unambiguous canonical PASS marker.
+def transcript_verdict(text, tail_lines=10):
+    """Return "pass" only for an unambiguous canonical PASS marker at the end.
 
-    EVERY `VERDICT:` line in the transcript must be exactly "VERDICT: PASS".
-    This deliberately reads the whole file rather than a tail window: a cold
-    review that says FAIL and then emits 5 KB of appendix would otherwise have
-    its failure scroll out of view and be read as a pass (found by the Codex
-    review of this very change, reproduced end-to-end). Anything that is not
-    byte-for-byte canonical, after trimming surrounding whitespace — no marker
-    at all, lowercase, "PASS WITH RISKS", "APPROVE" — is a fail.
+    Three conditions, all fail-closed:
+      * at least one `VERDICT:` line exists;
+      * EVERY such line is byte-for-byte "VERDICT: PASS" after trimming — no
+        "PASS WITH RISKS", no lowercase, no "APPROVE";
+      * the last one is among the final `tail_lines` non-empty lines, so it is
+        the reviewer's closing word rather than something near the top.
+
+    The whole transcript is read, not a tail window: a review that says FAIL and
+    then emits 5 KB of appendix would otherwise have its failure scroll out of
+    view. The closing-position rule is the other half of the same idea — a
+    prompt echo containing the marker, followed by a review that never reaches a
+    verdict, must not count as approval. The small allowance exists because real
+    reviewers append a footer (Codex prints "tokens used" and a count after its
+    reply); it is not room for review content.
     """
-    markers = [m.group(0).strip() for m in _VERDICT_MARKER.finditer(text or "")]
+    lines = (text or "").splitlines()
+    live = [(i, ln.strip()) for i, ln in enumerate(lines) if ln.strip()]
+    markers = [(n, body) for n, (i, body) in enumerate(live) if _VERDICT_MARKER.match(lines[i])]
     if not markers:
         return "fail"
-    if any(m != _VERDICT_CANONICAL_PASS for m in markers):
+    if any(body != _VERDICT_CANONICAL_PASS for _n, body in markers):
         return "fail"
+    if len(live) - markers[-1][0] > tail_lines:
+        return "fail"          # a marker buried above the review is not a verdict
     return "pass"
 
 
@@ -2473,8 +2492,17 @@ def cmd_check(args):
           + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:
         print(f"  - {r}")
-    with _attest_lock(root):
-        rc = _cmd_attest_locked(a, root)
+    try:
+        with _attest_lock(root):
+            rc = _cmd_attest_locked(a, root)
+    except SystemExit as exc:
+        # attest reports usage errors (no test_command configured, a reviewer
+        # command that timed out) with fail_usage -> exit 2 and no STOP line.
+        # `check` promises exit 1 and exactly one STOP, so translate rather than
+        # letting a second exit convention leak out of the boundary command.
+        if exc.code:
+            _stop("attest could not run (see the error above)")
+        raise
     report, why, malformed = find_report(root, sha)
     if report is None:
         print(f"STOP: attest did not produce a report — {why}", file=sys.stderr)
@@ -2514,6 +2542,12 @@ def cmd_check(args):
     # other than HEAD — a test that repairs the code it is testing would earn a
     # SAFE TO MERGE for the broken commit. Re-check, excluding the evidence the
     # run is supposed to produce.
+    if head_sha(root) != sha:
+        # A test or reviewer command that commits, amends, resets or switches
+        # branches leaves a CLEAN tree while the evidence now describes a commit
+        # that is no longer HEAD.
+        _stop(f"HEAD moved during the run ({sha[:12]} -> {(head_sha(root) or '?')[:12]}) — "
+              f"the evidence describes a commit that is no longer checked out")
     after = _git_paths(["diff", "--name-only", "HEAD"], root)
     after_new = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
     if after is None or after_new is None:
