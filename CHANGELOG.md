@@ -56,6 +56,13 @@ builder reads at session start, and two defects in the test harness itself.
   compares the installed file with the repo's instead — which is what "this
   machine needs a pull" actually means.
 
+**Known limitation, unchanged by this release:** `protocol-selftest` still
+assumes a manual install — reviewer CLIs under `~/bin` and hooks registered in
+`~/.claude/settings.json`. A marketplace plugin install puts its `bin/` on
+`PATH` and merges hooks from the plugin manifest, so the self-test reports
+missing CLIs there. Only the hook-comparison path learned about
+`$CLAUDE_PLUGIN_ROOT` here; the rest predates this release and is left alone.
+
 **Two larger changes were built, reviewed, and deliberately not shipped.**
 `coverloop check` (a one-command merge boundary) and the derived risk tier each
 reached a pre-agreed stopping condition: twelve review rounds for the first,

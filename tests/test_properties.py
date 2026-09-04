@@ -38,8 +38,10 @@ SEED = 20260711  # fixed -> deterministic, reproducible failures
 # test suite silently consumed production quota.
 #
 # The whole module runs against a temporary log, and tearDownModule FAILS if the
-# production log was touched at all — an accidental production reviewer
-# invocation is a test failure, not a surprise on the invoice.
+# caller's log changed SIZE OR MTIME while the suite ran. That is a tripwire,
+# not proof: a real review running concurrently trips it, and a change that
+# restored both values would not. It is here to catch the accident this comment
+# describes, not to detect tampering.
 # ---------------------------------------------------------------------------
 PROD_EGRESS_LOG = os.path.join(os.path.expanduser("~"), ".config", "openrouter", "egress.log")
 _SUITE_LOG_DIR = None
@@ -78,7 +80,8 @@ def tearDownModule():
         _sh.rmtree(_SUITE_LOG_DIR, ignore_errors=True)
     if _prod_log_fingerprint() != _PROD_LOG_BEFORE:
         raise AssertionError(
-            f"the test suite wrote to the PRODUCTION egress log ({PROD_EGRESS_LOG}). "
+            f"the egress log at {PROD_EGRESS_LOG} changed size or mtime while the "
+            f"suite ran (a concurrent real review would also do this). "
             f"Those entries are what the daily spend cap counts, so the suite would be "
             f"consuming the operator's real review budget. Point COVERLOOP_EGRESS_LOG at "
             f"a temporary file in the test's own setUp.")
@@ -1868,7 +1871,8 @@ class NinthRoundRegressions(unittest.TestCase):
 
 # The entry point stays at the very END of this file. `unittest.main()` collects
 # what is defined ABOVE it, so a class appended later is silently invisible to
-# `python3 tests/test_properties.py` — which is exactly how CI runs it. That had
-# happened during development: 102 of this file's 138 tests ran.
+# `python tests/test_properties.py` — which is how CI runs it
+# (.github/workflows/test.yml). That had happened during development: 102 of
+# this file's 138 tests ran.
 if __name__ == "__main__":
     unittest.main(verbosity=2)
