@@ -82,32 +82,32 @@ These stay first-class: CI runs `classify` + `gate` (not `check` — CI must not
 be the thing that runs the reviewers), and `attest --codex-log` is still how you
 attach a review you ran interactively.
 
-## Verification is not authorization
+## The baseline, and a known cost (deferred: "verification is not authorization")
 
 The gate walks back from HEAD to find the last commit whose evidence it can
-trust, and only classifies the paths that changed *since* that baseline. Two
-different questions are being asked of a report, and conflating them was a real
-bug:
+trust, and only classifies the paths that changed *since* that baseline. A
+report advances the baseline only if it would pass its **own full evaluation** —
+tier covering its segment, tests green, the reviews its tier requires, and the
+named human approval where policy requires one.
 
-- **Verified** — the tier covers the segment, the tests passed, and the reviews
-  the tier requires passed. This is what advances the baseline.
-- **Authorized** — verified *and* a named human countersigned it, where policy
-  requires one.
+That last condition has a real cost, and it is currently paid on purpose. A
+fully reviewed L3 that nobody got around to countersigning is treated as if it
+had never been reviewed: its files fall back into every later change's floor, so
+a docs-only commit can inherit L3 from the repo root. Measured across nine
+repos, 238 reviewed-but-unsigned L3 commits were being dropped from baselines
+this way, which is most of the fleet's inflated floors.
 
-**The obligation is inherited, the files are not.** Advancing past a
-reviewed-but-unapproved commit removes its *files* from later floors — that is
-the point — but the *signature it still owes* is carried to HEAD and named
-there. Otherwise a docs commit stacked on an unapproved migration would gate at
-L1 and merge the migration with it.
-
-Requiring authorization to advance the baseline meant that a fully reviewed L3
-that nobody had got around to signing was treated as if it had never been
-reviewed at all: its files fell back into every later change's floor, so a
-docs-only commit inherited L3 from the repo root. Since v2.11 the baseline walk
-asks only the *verification* question. The human gate is untouched where it
-actually matters — `gate` and `check` still fail on it at HEAD — and an
-unverified ancestor (tests missing, reviews missing, or failing) still stops the
-baseline dead.
+**The fix for it is deferred, and the reason is worth recording.** Letting
+*verified* evidence advance the baseline requires the signature that commit
+still owes to be carried forward to HEAD — otherwise a docs commit stacked on an
+unapproved migration gates at L1 and merges the migration with it. Five
+consecutive cold review rounds each found a different way to shed that
+obligation: stacking a commit on top, `--human-gate-scope irreversible`, an L0
+successor, the scope going retroactively sticky, `--base`, and finally carrying
+the human approval while dropping the reviewer requirement. Every fix created
+the next hole. The mechanism needs a design, not another condition, so the
+conservative behaviour stands: **over-classification, which costs review time,
+rather than a gate that can be walked around.**
 
 ## Recording evidence (`attest`)
 

@@ -27,6 +27,56 @@ import glm_secret_filter as F
 
 SEED = 20260711  # fixed -> deterministic, reproducible failures
 
+# ---------------------------------------------------------------------------
+# The suite drives the REAL reviewer CLIs (that is the point of the egress
+# tests: they assert on the exact bytes that would leave the machine). Their
+# do_request is stubbed, so nothing is ever sent — but log_egress still wrote
+# `attempt` markers to the PRODUCTION egress log, and the daily spend cap counts
+# exactly those markers. A full suite run therefore burned ~30 slots of the
+# operator's real review budget, and after a few runs every real GLM review that
+# day was refused. That is how a test suite silently consumed production quota.
+#
+# The whole module runs against a temporary log, and tearDownModule FAILS if the
+# production log was touched at all — an accidental production reviewer
+# invocation is a test failure, not a surprise on the invoice.
+# ---------------------------------------------------------------------------
+PROD_EGRESS_LOG = os.path.join(os.path.expanduser("~"), ".config", "openrouter", "egress.log")
+_SUITE_LOG_DIR = None
+_PROD_LOG_BEFORE = None
+
+
+def _prod_log_fingerprint():
+    try:
+        st = os.stat(PROD_EGRESS_LOG)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def setUpModule():
+    global _SUITE_LOG_DIR, _PROD_LOG_BEFORE
+    _PROD_LOG_BEFORE = _prod_log_fingerprint()
+    _SUITE_LOG_DIR = tempfile.mkdtemp(prefix="coverloop-suite-egress-")
+    os.environ["COVERLOOP_EGRESS_LOG"] = os.path.join(_SUITE_LOG_DIR, "egress.log")
+
+
+def tearDownModule():
+    import shutil as _sh
+    os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+    if _SUITE_LOG_DIR:
+        _sh.rmtree(_SUITE_LOG_DIR, ignore_errors=True)
+    if _prod_log_fingerprint() != _PROD_LOG_BEFORE:
+        raise AssertionError(
+            f"the test suite wrote to the PRODUCTION egress log ({PROD_EGRESS_LOG}). "
+            f"Those entries are what the daily spend cap counts, so the suite would be "
+            f"consuming the operator's real review budget. Point COVERLOOP_EGRESS_LOG at "
+            f"a temporary file in the test's own setUp.")
+
+
+def suite_egress_log():
+    """The temporary log this module runs against — never the production one."""
+    return os.environ.get("COVERLOOP_EGRESS_LOG") or os.path.join(_SUITE_LOG_DIR or "", "egress.log")
+
 
 # ---- generators for real secret SHAPES (one valid instance per VALUE pattern) ----
 def _rand(rng, alphabet, n):
@@ -623,7 +673,9 @@ class DailyReviewCap(unittest.TestCase):
         os.environ["COVERLOOP_EGRESS_LOG"] = self.log
 
     def tearDown(self):
-        os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+        # Restore the SUITE's temporary log — popping it would let every later
+        # test fall back to the operator's production log.
+        os.environ["COVERLOOP_EGRESS_LOG"] = suite_egress_log()
         os.environ.pop("COVERLOOP_DAILY_REVIEW_CAP", None)
 
     def _write(self, n_today=0, n_old=0, n_result=0, corrupt=False):
@@ -1423,7 +1475,7 @@ class SixthRoundRegressions(unittest.TestCase):
         real = self.mod.git
         try:
             self.mod.git = lambda a, cwd=None: None
-            paths, unknown, _pending = self.mod._gate_floor_paths(
+            paths, unknown = self.mod._gate_floor_paths(
                 ".", types.SimpleNamespace(base=None), None, "0" * 40)
             self.assertTrue(unknown, "a total git failure reported a known, empty set")
         finally:
@@ -1592,7 +1644,7 @@ class SeventhRoundRegressions(unittest.TestCase):
             os.makedirs(os.path.join(d, "migrations"))
             open(os.path.join(d, "migrations", "1.sql"), "w").write("drop table x;\n")
             run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
-            paths, unknown, _pending = self.mod._gate_floor_paths(
+            paths, unknown = self.mod._gate_floor_paths(
                 d, types.SimpleNamespace(base=None), None, self.mod.head_sha(d))
             self.assertFalse(unknown)
             self.assertIn("migrations/1.sql", paths,
@@ -1951,96 +2003,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertIn("refusing to downgrade", r.stderr)
             self.assertEqual(self._report(d)["risk_tier"], "L3")
 
-    # ---- item 2: verification vs authorization --------------------------
-    def test_verification_scope_does_not_evaluate_the_human_gate(self):
-        report = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"},
-                  "codex": {"status": "pass", "findings_open": 0},
-                  "glm": {"status": "pass", "findings_open": 0}}
-        auth, achecks = self.mod.evaluate(dict(report), "L3", None, test_command="true",
-                                          scope=self.mod.EVIDENCE_AUTHORIZATION)
-        ver, checks = self.mod.evaluate(dict(report), "L3", None, test_command="true",
-                                        scope=self.mod.EVIDENCE_VERIFICATION)
-        self.assertFalse(auth, "authorization scope must still demand the human gate")
-        self.assertEqual([c["check"] for c in achecks if c["status"] != "pass"],
-                         ["human_gate"], "and nothing else may differ between the scopes")
-        self.assertTrue(ver, "reviewed evidence is verified even without a signature")
-        gate = [c for c in checks if c["check"] == "human_gate"][0]
-        self.assertIn("not evaluated", gate["detail"])
-
-    def test_verification_scope_still_requires_the_reviews(self):
-        report = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"}}
-        ok, _ = self.mod.evaluate(report, "L3", None, test_command="true",
-                                  scope=self.mod.EVIDENCE_VERIFICATION)
-        self.assertFalse(ok, "verification without the reviews is not verification")
-
-    def test_reviewed_but_unapproved_ancestor_advances_the_baseline(self):
-        # The fleet bug this fixes: 238 fully reviewed L3 commits were dropped
-        # from the baseline because nobody had countersigned them, so every
-        # later docs-only change re-inherited an L3 floor from the repo root.
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
-            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
-            stub = os.path.join(self.policy_dir, "pass.sh")
-            r = self._cl(d, "attest", "--tests", "--codex", "pass",
-                         "--codex-run", stub, "--glm", "pass", "--glm-run", stub)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            # ...and it is NOT mergeable: verification is not authorization.
-            g = self._cl(d, "gate")
-            self.assertEqual(g.returncode, 1)
-            self.assertIn("NOT APPROVED", g.stdout)
-            # A later low-risk change inherits L1, not the ancestor's L3 — the
-            # reviewer chain is not re-run over a docs commit, which is the
-            # whole point of advancing the baseline...
-            self._write(d, "src/a.ts", "export const a = 1;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
-            self._cl(d, "attest", "--tests")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g2 = self._cl(d, "gate")
-            self.assertIn("tier L1", g2.stdout)
-            self.assertNotIn("codex: NO RECORD", g2.stdout)
-            # ...but the signature that migration still owes is INHERITED, so
-            # the branch cannot be merged by stacking a small commit on top.
-            self.assertEqual(g2.returncode, 1, g2.stdout)
-            self.assertIn("reviewed but never approved", g2.stdout)
-
-    def test_the_inherited_obligation_clears_once_a_human_approves(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
-            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
-            self._cl(d, "attest", "--tests", "--codex", "pass",
-                     "--codex-run", os.path.join(self.policy_dir, "pass.sh"),
-                     "--glm", "pass", "--glm-run", os.path.join(self.policy_dir, "pass.sh"))
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            self._write(d, "src/a.ts", "export const a = 1;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
-            self._cl(d, "attest", "--tests")
-            self._cl(d, "attest", "--approve", "--approver", "Daniel")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g = self._cl(d, "gate")
-            self.assertEqual(g.returncode, 0, g.stdout)
-            self.assertIn("tier L1", g.stdout)
-
-    def test_an_unverified_ancestor_does_not_advance_the_baseline(self):
-        # The control for the case above: dropping the human gate from the
-        # baseline walk must not drop the tests or the reviews with it.
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
-            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
-            self._cl(d, "attest", "--tests")          # tests only, no reviews
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            self._write(d, "src/a.ts", "export const a = 1;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
-            self._cl(d, "attest", "--tests")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g = self._cl(d, "gate")
-            self.assertIn("tier L3", g.stdout)
-            self.assertEqual(g.returncode, 1, g.stdout)
-
-    # ---- item 3: the check boundary -------------------------------------
     def test_check_stops_on_an_uncommitted_tree(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d)
@@ -2201,26 +2163,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertIn("no reviewer policy at", r.stderr)
             self.assertIn(self.policy, r.stderr)
 
-    def test_a_self_attested_ancestor_cannot_become_a_baseline(self):
-        # Without require_captured on the baseline walk, a bare
-        # `--codex pass --glm pass` L3 report (no transcript, nothing ran) was
-        # enough to advance the baseline — after which the next commit's check
-        # skipped both real reviewers.
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
-            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
-            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
-                     "--approve", "--approver", "Someone")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            self._write(d, "src/a.ts", "export const a = 1;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
-            self._cl(d, "attest", "--tests")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g = self._cl(d, "gate")
-            self.assertIn("tier L3", g.stdout, "the migration is still in the floor")
-            self.assertEqual(g.returncode, 1, g.stdout)
-
     def test_a_reviewer_command_inside_the_repo_is_refused(self):
         # Naming the reviewer outside the repo means nothing if the command it
         # names is a script the change can rewrite.
@@ -2278,25 +2220,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn("at L2 the gate", r.stderr)
 
-    def test_the_inherited_obligation_survives_human_gate_scope(self):
-        # Keying the inherited check off `tier != "L3"` was a fail-open: at L3
-        # with scope=irreversible the tier says "not required" and the
-        # inherited one never ran, so an unapproved migration could ship under
-        # a later non-irreversible L3 change.
-        rep = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"},
-               "codex": {"status": "pass", "findings_open": 0},
-               "glm": {"status": "pass", "findings_open": 0}}
-        ok, checks = self.mod.evaluate(dict(rep), "L3", None, test_command="true",
-                                       human_gate_required=False,
-                                       inherited_human_gate="a" * 40)
-        self.assertFalse(ok)
-        gate = [c for c in checks if c["check"] == "human_gate"][0]
-        self.assertIn("ships on top of it", gate["detail"])
-        # ...and with nothing inherited the exemption still works as documented.
-        clean, _ = self.mod.evaluate(dict(rep), "L3", None, test_command="true",
-                                     human_gate_required=False)
-        self.assertTrue(clean)
-
     def test_a_marker_buried_above_the_review_is_not_a_verdict(self):
         tv = self.mod.transcript_verdict
         # a prompt echo at the top, then a review that never reaches a verdict
@@ -2348,16 +2271,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertEqual(r.stderr.count("STOP:"), 1, r.stderr)
 
-    def test_an_l0_commit_cannot_shed_an_inherited_obligation(self):
-        # evaluate() returned success for L0 before it ever looked at the
-        # inherited gate, so a docs-only commit carried the unapproved L3 in.
-        rep = {"risk_tier": "L0", "tests": {"status": "pass", "command": "true"}}
-        ok, _ = self.mod.evaluate(dict(rep), "L0", None, test_command="true",
-                                  inherited_human_gate="a" * 40)
-        self.assertFalse(ok)
-        clean, _ = self.mod.evaluate(dict(rep), "L0", None, test_command="true")
-        self.assertTrue(clean, "an ordinary L0 still needs no evidence")
-
     def test_an_elevation_cannot_claim_the_classifier_exemption(self):
         # --human-gate-scope irreversible exempts changes the CLASSIFIER reads
         # as reversible. An elevation exists because the classifier under-reads
@@ -2383,26 +2296,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(r.returncode, 1, "a failing verdict must not exit 0")
             doc = json.loads(r.stdout)          # stdout is JSON and nothing else
             self.assertEqual(doc["verdict"], "fail")
-
-    def test_the_irreversible_scope_is_applied_to_ancestors_too(self):
-        # Re-judging a historical L3 with the default policy turned a change
-        # legitimately exempted under scope=irreversible into a permanent
-        # pending obligation on every later commit.
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
-            stub = os.path.join(self.policy_dir, "pass.sh")
-            self._write(d, ".github/workflows/ci.yml", "on: push\n")   # L3, reversible
-            run("git", "add", "-A"); run("git", "commit", "-qm", "ci")
-            self._cl(d, "attest", "--tests", "--codex", "pass", "--codex-run", stub,
-                     "--glm", "pass", "--glm-run", stub)
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            self._write(d, "docs/x.md", "prose\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "docs")
-            self._cl(d, "attest", "--tests")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
-            self.assertNotIn("reviewed but never approved", g.stdout)
-            self.assertEqual(g.returncode, 0, g.stdout)
 
     def test_an_elevation_reason_survives_a_later_attest(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2456,29 +2349,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             r = self._cl(d, "check")
             # it gets as far as the human gate, so both reviewers passed the probe
             self.assertIn("requires a named human approval", r.stderr, r.stdout + r.stderr)
-
-    def test_an_unapproved_elevation_is_carried_through_base(self):
-        # With --base the floor comes from the whole span's PATHS, which by
-        # definition cannot show an elevation. An unapproved --raise-tier L3
-        # followed by a one-line fix passed CI at L1.
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
-            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
-                                  capture_output=True, text=True).stdout.strip()
-            stub = os.path.join(self.policy_dir, "pass.sh")
-            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
-            self._cl(d, "attest", "--tests", "--codex", "pass", "--codex-run", stub,
-                     "--glm", "pass", "--glm-run", stub,
-                     "--raise-tier", "L3", "--reason", "this config steers auth")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
-            self._write(d, "src/other.ts", "export const b = 2;\n")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "small fix")
-            self._cl(d, "attest", "--tests")
-            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
-            g = self._cl(d, "gate", "--base", base)
-            self.assertEqual(g.returncode, 1, g.stdout)
-            self.assertIn("reviewed but never approved", g.stdout)
 
     def test_check_json_stdout_survives_a_chatty_test_command(self):
         # redirect_stdout only moves Python's writes; the test SUBPROCESS

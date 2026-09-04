@@ -38,6 +38,7 @@ Exit codes: 0 = all required gates pass; 1 = gate failure (missing/failed
 evidence); 2 = usage or environment error.
 """
 import argparse
+import atexit
 import contextlib
 import datetime
 import hashlib
@@ -321,29 +322,7 @@ def _changed_paths_for_gate(root, args):
     return list(tracked) + list(untracked)
 
 
-def _pending_elevation(root, base, head):
-    """The oldest commit in base..head whose report was ELEVATED above the
-    deterministic floor and never approved.
-
-    A plain L3 inside the range raises the floor by its own paths, so the gate
-    demands the human anyway. An elevation is invisible to the classifier by
-    definition — that is what it is for — so without this an unapproved
-    `--raise-tier L3` commit followed by a one-line fix passed CI at L1.
-    """
-    out = git(["rev-list", "--reverse", f"{base}..{head}"], cwd=root)
-    if not out:
-        return None
-    for c in out.split():
-        rep, _why = load_report(root, c)
-        if not rep or rep.get("tier_source") != "elevated":
-            continue
-        hg = rep.get("human_gate") or {}
-        if not (hg.get("approved") is True and str(hg.get("approver", "")).strip()):
-            return c
-    return None
-
-
-def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
+def _validated_baseline(root, sha, limit=2000):
     """The newest ancestor of SHA whose evidence chain actually VALIDATES.
 
     Returns (baseline, validated): `validated` is False when the baseline is the
@@ -390,7 +369,6 @@ def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
         return None, False, None
     baseline = root_out.split()[-1]
     validated = False
-    pending_human = None
     cfg, _cfg_err = load_json(os.path.join(root, CONFIG_FILE))
     cfg_cmd = (cfg or {}).get("test_command")
     for c, rep in reversed(attested):
@@ -411,39 +389,12 @@ def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
         floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
         if tier_max(tier, floor) != tier:
             continue  # under-declares its segment — not a valid baseline
-        # VERIFICATION scope, deliberately: this asks "was commit c actually
-        # checked?" (tests + reviewers), not "did a human sign for it?". A
-        # reviewed-but-unsigned commit is a legitimate risk baseline. Human
-        # authorization is enforced by the GATE on the commit being shipped —
-        # it is never inherited from an ancestor, and never inferred here.
-        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
-                               require_captured=True, scope=EVIDENCE_VERIFICATION)
+        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd)
         if not ok:
             continue  # a tier claim with no evidence behind it is not a baseline
-        # Advancing past this commit removes its files from every later floor.
-        # If its tier required a human signature and never got one, that
-        # OBLIGATION does not vanish with the files: it is carried to HEAD, so
-        # a branch containing an unapproved migration cannot be merged by
-        # putting a docs commit on top of it. Sticky — a later approval signs
-        # for its own segment, never retroactively for this one.
-        # Judge the ancestor by the SAME policy this run uses. Re-evaluating a
-        # historical L3 with the default "all" made an L3 that was legitimately
-        # exempt under --human-gate-scope irreversible into a permanent pending
-        # obligation on every later commit.
-        anc_human = True
-        if (human_gate_scope == "irreversible" and tier == "L3"
-                and rep.get("tier_source") != "elevated"):
-            # An ELEVATED ancestor is never exempt: the exemption reads paths,
-            # and an elevation says the paths do not show the risk.
-            anc_human = (not seg) or any(IRREVERSIBLE_RE.search(pth) for pth in seg)
-        authorized, _ac = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
-                                   require_captured=True, human_gate_required=anc_human,
-                                   scope=EVIDENCE_AUTHORIZATION)
-        if not authorized:
-            pending_human = pending_human or c
         baseline = c
         validated = True
-    return baseline, validated, pending_human
+    return baseline, validated
 
 
 _BASELINE_WALK_CAP = 100
@@ -469,24 +420,20 @@ def _gate_floor_paths(root, args, report, sha):
         # before it can reach git as a flag.
         base = _resolve_commit(base, root)
         if base is None:
-            return [], True, None
+            return [], True
         out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
             out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
         if out is None:
             # An unresolvable --base is a caller error, not an all-clear. Reading
             # it as "no files changed" turned a typo into a passing gate.
-            return [], True, None
-        # With an explicit base the whole span is classified, so an unapproved
-        # commit inside it raises the tier through its own paths — EXCEPT an
-        # ELEVATED one, which exists precisely because the paths do not show
-        # the risk. Those obligations still have to be carried.
-        return out, False, _pending_elevation(root, base, "HEAD")
+            return [], True
+        return out, False
 
     tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
     untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
     if tracked is None or untracked is None:
-        return [], True, None
+        return [], True
     paths = list(tracked) + list(untracked)
 
     # ...plus whatever the evidence does not already cover.
@@ -513,10 +460,9 @@ def _gate_floor_paths(root, args, report, sha):
     # word for where its coverage began, which is exactly the trust the
     # planted-report attack abused. The walk finds the same origin commit when
     # its report is honest, and walks past it when it is not.
-    prior, prior_validated, pending_human = _validated_baseline(
-        root, sha, human_gate_scope=getattr(args, "human_gate_scope", "all"))
+    prior, prior_validated = _validated_baseline(root, sha)
     if prior is None:
-        return sorted(set(paths)), True, None
+        return sorted(set(paths)), True
     if prior == sha:
         # Only reachable for a single-commit repo (sha IS its own root): there
         # is nothing to diff against, so list its own files.
@@ -543,9 +489,9 @@ def _gate_floor_paths(root, args, report, sha):
         # `or []` here once turned a git timeout, a shallow clone, a corrupt
         # object or a bad origin_commit into an EMPTY path set with
         # unknown=False — an all-clear built out of a failure.
-        return sorted(set(paths)), True, pending_human
+        return sorted(set(paths)), True
     paths += out
-    return sorted(set(paths)), False, pending_human
+    return sorted(set(paths)), False
 
 
 def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
@@ -1325,7 +1271,7 @@ def _cmd_attest_locked(args, root):
     # Nothing lowers the floor. --force only bypasses the "git cannot answer"
     # refusal and is recorded, never hidden.
     try:
-        floor_paths, floor_unknown, _pending = _gate_floor_paths(root, args, report, sha)
+        floor_paths, floor_unknown = _gate_floor_paths(root, args, report, sha)
     except Exception:
         floor_paths, floor_unknown = [], True
     if floor_unknown and not getattr(args, "force", False):
@@ -1693,30 +1639,16 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
 # baseline to the root and inflated every floor to L3. The gate asks BOTH, and
 # authorization is never inferred from verification: reviewers passing does not
 # mean a human said yes.
-EVIDENCE_VERIFICATION = "verification"      # tests + reviewers only
-EVIDENCE_AUTHORIZATION = "authorization"    # + the human gate, where policy requires it
-
-
 def evaluate(report, tier, files, require_captured=False, root=None, test_command=None,
-             require_executed=False, human_gate_required=True,
-             scope=EVIDENCE_AUTHORIZATION, inherited_human_gate=None):
+             require_executed=False, human_gate_required=True):
     """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout.
 
-    `scope` selects which question is being asked (see EVIDENCE_* above).
-    EVIDENCE_VERIFICATION deliberately omits the human gate; it is for deciding
-    whether a past commit counts as a reviewed baseline, never for clearing a
-    merge. EVIDENCE_AUTHORIZATION is the full gate.
     """
     checks = []
 
-    if tier == "L0" and not inherited_human_gate:
+    if tier == "L0":
         checks.append(check("tier", True, "L0: trivial — no evidence required"))
         return True, checks
-    if tier == "L0":
-        # L0 needs no evidence of its OWN, but it cannot be the commit that
-        # carries an unapproved L3 into main: returning early here let a
-        # docs-only commit shed the obligation entirely.
-        checks.append(check("tier", True, "L0: trivial — no evidence required"))
 
     tests = report.get("tests") if report else None
     recorded_cmd = str((tests or {}).get("command", "")).strip()
@@ -1755,7 +1687,7 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
             "red-team/audit is mandatory at L3", require_captured, root, report_commit,
             require_executed))
 
-    if tier == "L3" or inherited_human_gate:
+    if tier == "L3":
         # WHO gets stopped, and why it is a choice.
         #
         # By default every L3 change waits for a named human. Measured on a real
@@ -1771,30 +1703,7 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         # It is OPT-IN. Silently relaxing an existing user's gate on upgrade
         # would be exactly the kind of unannounced weakening this project exists
         # to make impossible.
-        if scope == EVIDENCE_VERIFICATION:
-            # Asked only whether the change was VERIFIED. Say so explicitly in
-            # the checks rather than silently passing: the record must show this
-            # evaluation never claimed anyone authorized anything.
-            checks.append(check("human_gate", True,
-                                "human gate: not evaluated (verification-only scope — "
-                                "reviewed evidence, not authorization)"))
-            verdict = all(c["status"] == "pass" for c in checks)
-            return verdict, checks
-        # An obligation INHERITED from the branch is independent of this
-        # commit's own tier and of --human-gate-scope. Advancing the baseline
-        # past a reviewed-but-unapproved commit removes its FILES from this
-        # floor — it must not remove the signature that commit still owes.
-        # Keying this off `tier != "L3"` was a fail-open the reviewer found: at
-        # L3 with scope=irreversible the tier check says "not required" and the
-        # inherited one never ran, so an unapproved migration could ship under a
-        # later non-irreversible L3 change.
-        # `human_gate_required` is the caller's POLICY flag; it says nothing
-        # about the tier, so at L1 it is still True and only the tier gate below
-        # decides. Required-by-tier and required-by-inheritance are tracked
-        # apart so the reason printed is the true one.
-        by_tier = (tier == "L3") and human_gate_required
-        inherited = bool(inherited_human_gate)
-        needs_human = by_tier or inherited
+        needs_human = human_gate_required
         why_exempt = ("" if needs_human else
                       " — scope=irreversible and no migration/money/authz path in "
                       "this change; the full automated L3 evidence still applies")
@@ -1806,16 +1715,11 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         elif hg_ok:
             checks.append(check("human_gate", True,
                                 f"human gate: approved by {hg.get('approver')!r}"))
-        elif by_tier:
+        else:
             checks.append(check(
                 "human_gate", False,
                 "human gate: NOT APPROVED — L3 requires "
                 "`coverloop attest --approve --approver <name>`"))
-        else:
-            checks.append(check(
-                "human_gate", False,
-                f"human gate: NOT APPROVED — {inherited_human_gate[:12]} in this branch was "
-                f"reviewed but never approved, and this change ships on top of it"))
 
     verdict = all(c["status"] == "pass" for c in checks)
     return verdict, checks
@@ -2125,9 +2029,8 @@ def cmd_gate(args):
     # there is no flag to switch it off, because a switch is the hole.
     auto_floor, auto_reasons = None, []
     auto_paths, unknown = [], True
-    pending_human = None
     try:
-        auto_paths, unknown, pending_human = _gate_floor_paths(root, args, report, sha)
+        auto_paths, unknown = _gate_floor_paths(root, args, report, sha)
         if unknown and getattr(args, "base", None):
             # Substituting an L1 floor let a valid L1 report gate successfully
             # over an unresolvable base — the caller believes they reviewed a
@@ -2250,7 +2153,6 @@ def cmd_gate(args):
 
     verdict, checks = evaluate(report, tier, files,
                                human_gate_required=human_required,
-                               inherited_human_gate=pending_human,
                                require_captured=require_transcript, root=root,
                                test_command=(cfg or {}).get("test_command"),
                                require_executed=args.require_executed)
@@ -2444,9 +2346,21 @@ def reviewer_policy(root):
     return {"path": path, "primary": primary, "secondary": secondary, "commands": cmds}, None
 
 
+_SCRATCH_DIRS = []
+
+
+def _cleanup_scratch():
+    """Remove the reviewer scratch dirs. They hold a full copy of the source
+    diff, so leaving one behind on every run — including every failure path —
+    scatters the reviewed code across /tmp."""
+    while _SCRATCH_DIRS:
+        shutil.rmtree(_SCRATCH_DIRS.pop(), ignore_errors=True)
+
+
 def _stop(reason):
     """The single STOP line. stdout is flushed first so the reason is the last
     thing on the terminal even though it goes to stderr."""
+    _cleanup_scratch()
     sys.stdout.flush()
     print(f"STOP: {reason}", file=sys.stderr)
     sys.exit(1)
@@ -2507,7 +2421,7 @@ def cmd_check(args):
         print(f"STOP: existing evidence is malformed — {why}", file=sys.stderr)
         sys.exit(1)
     try:
-        paths, unknown, pending_human = _gate_floor_paths(root, args, report, sha)
+        paths, unknown = _gate_floor_paths(root, args, report, sha)
     except Exception as exc:
         print(f"STOP: could not classify the change ({exc})", file=sys.stderr)
         sys.exit(1)
@@ -2533,20 +2447,47 @@ def cmd_check(args):
     #    come from config ("reviewer_commands": {"codex": "...", "glm": "..."});
     #    with none configured, check STOPs and names the missing role rather
     #    than silently downgrading to a self-attested verdict.
-    # Reviewer commands run from a scratch directory OUTSIDE the worktree, so
-    # nothing the change can write is on the shell's or an interpreter's search
-    # path. What the reviewer needs reaches it explicitly:
+    # Reviewer commands run from a scratch directory OUTSIDE the worktree, and
+    # with the search paths that could lead back into it removed. Changing the
+    # cwd alone was not enough: PYTHONPATH or a repo directory on PATH still let
+    # `python3 -m reviewer` or a bare command resolve code the change controls.
+    # What the reviewer needs arrives explicitly:
     #   $COVERLOOP_REPO  absolute path to the repository under review
-    #   $COVERLOOP_DIFF  a file holding the diff this run is judging
+    #   $COVERLOOP_DIFF  the diff this run is judging — the SAME span the floor
+    #                    was computed over, not just HEAD
     #   $COVERLOOP_BASE  the base ref, when one was given
     review_dir = tempfile.mkdtemp(prefix="coverloop-review-")
+    _SCRATCH_DIRS.append(review_dir)
+    atexit.register(_cleanup_scratch)
     diff_file = os.path.join(review_dir, "change.diff")
-    diff_args = ["diff", f"{args.base}...HEAD"] if getattr(args, "base", None) else \
-        ["show", "--patch", sha]
-    diff_text = git(diff_args + ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root)
+    if getattr(args, "base", None):
+        span = [f"{args.base}...HEAD"]
+    else:
+        prior, _validated = _validated_baseline(root, sha)
+        if prior is None:
+            shutil.rmtree(review_dir, ignore_errors=True)
+            _stop("cannot determine the span to review (shallow clone or git failure) — "
+                  "fetch full history or pass --base")
+        span = [sha] if prior == sha else [f"{prior}..{sha}"]
+    diff_text = git(["diff"] + span + ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root) \
+        if ".." in span[0] or "..." in span[0] else \
+        git(["show", "--patch", sha, "--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root)
+    if diff_text is None:
+        # An empty packet is not "nothing to review" — it is a reviewer looking
+        # at nothing and saying PASS. git failing here must stop the run.
+        shutil.rmtree(review_dir, ignore_errors=True)
+        _stop("could not produce the diff for the reviewers to read (git failed) — "
+              "refusing to review an empty packet")
     with open(diff_file, "w", encoding="utf-8", errors="replace") as fh:
-        fh.write(diff_text or "")
-    review_env = dict(os.environ)
+        fh.write(diff_text)
+    review_env = {k: v for k, v in os.environ.items()
+                  if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
+    # Drop every PATH entry that is empty (= cwd), relative, or inside the repo.
+    review_env["PATH"] = os.pathsep.join(
+        d for d in review_env.get("PATH", "").split(os.pathsep)
+        if d and os.path.isabs(d)
+        and not os.path.realpath(d).startswith(os.path.realpath(root) + os.sep)
+        and os.path.realpath(d) != os.path.realpath(root))
     review_env.update({"COVERLOOP_REPO": root, "COVERLOOP_DIFF": diff_file,
                        "COVERLOOP_BASE": str(getattr(args, "base", "") or "")})
     a = argparse.Namespace(
@@ -2680,7 +2621,6 @@ def cmd_check(args):
         elevated = bool(raise_to) or (report or {}).get("tier_source") == "elevated"
         human_required = elevated or (not paths) or any(IRREVERSIBLE_RE.search(p) for p in paths)
     verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
-                               inherited_human_gate=pending_human,
                                require_captured=True, root=root,
                                test_command=cfg.get("test_command"))
     failing = [c for c in checks if c["status"] != "pass"]

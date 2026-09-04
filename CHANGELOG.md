@@ -56,107 +56,68 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-A cold Codex review at xhigh then returned **VERDICT: FAIL** on this very
-change, and the gate stopped its own merge. All seven findings were verified and
-closed:
+Five cold review rounds ran against this change; the gate stopped its own merge
+every time. 26 findings, all verified against the code, and the pattern in them
+decided the shape of the release:
 
-- **The human gate could be shed by stacking a commit on top of it.** Advancing
-  the baseline past a reviewed-but-unapproved L3 removed its files from every
-  later floor — so a docs commit on top of an unapproved migration gated at L1
-  and merged the migration with it. The obligation is now **inherited**: it is
-  carried to HEAD and named there, while the tier still drops (the reviewer
-  chain is not re-run over a docs commit, which was the whole point).
-- **A self-attested report could become a baseline.** The walk now demands
-  `require_captured` — a bare `--codex pass` with no transcript no longer buys
-  a baseline, after which `check` would have skipped the real reviewers.
-- **The reviewer command could still live in the repo.** Naming the reviewer
-  outside the tree is worthless if the command it names is a script the change
-  can rewrite; a command token that resolves inside the repo is refused.
-- **The tree is re-checked after the run.** A test that repairs the code it
-  tests would otherwise earn `SAFE TO MERGE` for the broken commit being shipped.
-- **A failing verdict can no longer be scrolled out of view.** The verdict
-  parser reads the whole transcript, not a 4 KB tail: `VERDICT: FAIL`, 5 KB of
-  appendix, `VERDICT: PASS` was read as a pass (reproduced by the reviewer).
-- **`check` honours attest's exit status**, so evidence git would ignore stops
-  the run instead of passing locally and reaching CI as nothing.
-- **A non-`codex` primary at L2 is refused** with the reason, rather than
-  running a reviewer whose evidence the fixed L2 report field never reads.
+**Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
+Letting a reviewed-but-uncountersigned commit advance the gate's baseline needs
+an obligation to be carried forward instead, and that mechanism produced a
+fail-open in **every one of the five rounds**: shed by stacking a commit on top
+(round 1), shed under `--human-gate-scope irreversible` (round 2), shed by an L0
+successor and by `scope` going retroactively sticky (round 3), lost through
+`--base` (round 4), and finally carrying only the human approval while dropping
+the reviewer requirement entirely (round 5). Each fix created the next finding.
+The baseline therefore stays exactly as released: it advances only under the
+full authorization requirements. The fleet's inflated floors remain — that is
+over-strictness, which is the safe direction to be wrong in — and item 2 returns
+later as an isolated design problem with this history attached.
 
-A second cold review of the corrected branch returned **VERDICT: FAIL** again,
-with four more findings — three of them in the round-one fixes themselves, which
-is the pattern this repo's own README predicts:
+What the rounds did close, in what did ship:
 
-- **The inherited obligation failed open under `--human-gate-scope irreversible`.**
-  It was keyed off `tier != "L3"`, so at L3 with the narrowed scope the tier said
-  "not required" and the inherited check never ran: an unapproved migration could
-  ship under a later non-irreversible L3 change. Required-by-tier and
-  required-by-inheritance are now tracked apart, and either one stops the merge.
-- **`check` never re-read HEAD.** A test or reviewer command that commits,
-  amends or resets leaves a clean tree while the evidence describes a commit
-  that is no longer checked out.
-- **The verdict marker must be the reviewer's closing word.** Accepting
-  `VERDICT: PASS` anywhere meant a prompt echo at the top, followed by a review
-  that never reached a verdict, counted as approval. A trailing footer (Codex
-  prints "tokens used") is tolerated; review content after the marker is not.
-- **One STOP, always.** `check` could exit 2 with `coverloop: error:` when
-  attest hit a usage error, breaking the exit-1/one-reason interface it promises.
+- **The reviewer is named outside the repo, and runs outside it.** Roles and
+  commands come from `~/.config/coverloop/reviewers.json` (or
+  `$COVERLOOP_REVIEWERS`), never the worktree; `check` refuses a policy that
+  resolves inside the repo under review (symlinks included), a
+  group/world-writable one, and a `.coverloop/config.json` that defines
+  reviewers at all. Token checks alone could not hold — `python3 -m reviewer`
+  picks up a planted `reviewer.py`, `sh <scripts/reviewer` hides the path in a
+  redirect token — so the command now executes from a scratch directory with
+  `PYTHONPATH` dropped and every repo-reachable `PATH` entry filtered out. What
+  it needs arrives explicitly: `$COVERLOOP_REPO`, `$COVERLOOP_DIFF`,
+  `$COVERLOOP_BASE`. The packet covers the same span the floor was computed
+  over, a `git` failure while producing it stops the run rather than handing a
+  reviewer an empty diff, and the scratch copy is cleaned up on every path.
+- **The verdict is a machine protocol.** Exactly `VERDICT: PASS`, as the
+  reviewer's closing word (only a CLI footer may follow), with no other
+  `VERDICT:` line anywhere in the transcript — matched case-insensitively so a
+  lowercase `verdict: fail` is caught and rejected rather than skipped.
+  `PASS WITH RISKS`, `APPROVE`, `LGTM`, a truncated log and silence all fail.
+- **`check` holds its own boundary.** It refuses a dirty tree, re-checks the
+  tree and HEAD after the tests and reviewers have run (a test that repairs the
+  code it tests must not earn `SAFE TO MERGE` for the broken commit being
+  shipped), honours attest's exit status so evidence git would ignore stops the
+  run, reports exactly one `STOP:` and exit 1 — and in `--json` owns file
+  descriptor 1, not just Python's `sys.stdout`, since the test command and the
+  reviewers are subprocesses that inherit it.
+- **An elevation cannot claim the classifier's exemption.** Under
+  `--human-gate-scope irreversible` the exemption reads the classified paths,
+  and `--raise-tier` exists precisely because the classifier under-reads the
+  change. An elevation's recorded reason also survives the ordinary
+  `check` -> `attest --approve` flow instead of being folded back into
+  "derived".
+- **The test suite no longer spends production review budget.** It drives the
+  real reviewer CLIs with a stubbed transport — nothing is sent — but
+  `log_egress` still wrote `attempt` markers to the operator's production egress
+  log, and the daily cap counts exactly those. A full run burned ~30 slots, so
+  after a few runs every real review that day was refused; that is why the GLM
+  red-team failed closed in four of the five rounds. The suite now runs against
+  a temporary log and FAILS if the production one is touched at all.
 
-Two operational fixes came out of running it for real: the GLM red-team was
-returning truncated output on a large diff (moved to the xhigh wrapper), and
-both reviewers were being handed a 941 KB diff because previously committed
-reviewer transcripts were in it — the reviewed diff now excludes
-`.coverloop/reports/`.
-
-A third cold review returned **VERDICT: FAIL** with seven more findings, five of
-them fail-opens in the previous rounds' own fixes:
-
-- **L0 shed the inherited obligation entirely** — `evaluate` returned success
-  for L0 before it ever looked at it, so a docs-only commit carried an
-  unapproved L3 into main.
-- **`check --json` printed `"verdict": "fail"` and exited 0**, so every caller
-  that reads the status the way CI does saw a missing human approval as success.
-  Its stdout is now the JSON document and nothing else.
-- **An elevation could claim the classifier's own exemption.** Under
-  `--human-gate-scope irreversible` the exemption asks the path classifier — and
-  `--raise-tier` exists precisely because the classifier under-reads the change.
-  An elevated tier now always requires the human.
-- **The marker did not have to be the reviewer's last word**: `VERDICT: PASS`
-  followed by "critical defect remains" passed, and a lowercase `verdict: fail`
-  after it was not even seen. Marker matching is case-insensitive (so a
-  non-canonical verdict is caught and rejected), and only a CLI footer may
-  follow the closing marker.
-- **The in-repo reviewer guard was bypassable** with `sh scripts/reviewer` — an
-  extensionless, non-executable file. Any regular file in the tree is refused
-  now; directories still pass, which is what keeps a pathspec working.
-- **`scope=irreversible` was retroactively sticky**: re-judging a historical L3
-  with the default policy turned a legitimately exempt change into a permanent
-  obligation on every later commit. Ancestors are judged by the same policy.
-- **A later `attest` erased the elevation reason** on the ordinary
-  `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
-
-A fourth round found three more, and the reviewer-independence one was a design
-answer rather than another patch:
-
-- **Reviewers now run OUTSIDE the worktree.** Token heuristics cannot cover
-  shell semantics: `python3 -m reviewer` picks up a planted `reviewer.py`, and
-  `sh <scripts/reviewer` hides the path in a redirect token. The command now
-  executes from a scratch directory, and what it needs arrives explicitly —
-  `$COVERLOOP_REPO`, `$COVERLOOP_DIFF`, `$COVERLOOP_BASE`. The in-repo token
-  guard stays as a tripwire but is no longer the boundary.
-- **An unapproved elevation is carried through `--base`** — CI's path. The floor
-  there comes from the span's paths, which by definition cannot show an
-  elevation, so an unapproved `--raise-tier L3` followed by a one-line fix
-  passed CI at L1. An elevated ancestor is also never exempt under
-  `--human-gate-scope irreversible`, for the same reason.
-- **`--json` owns file descriptor 1**, not just Python's `sys.stdout`: the test
-  command and the reviewers are subprocesses that inherit fd 1, and nearly every
-  real test command prints.
-
-46 new regression tests lock the falsification table from the research pass and
-every finding above (274 in the suite). Explicitly **not** done in this release, and still open: a signed
+Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
-`codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
-the L3 GLM requirement.
+`codex`/`glm` report keys, item 2 above, and any change to `human_gate_scope`,
+`STALE`, or the L3 GLM requirement.
 
 ## 2026-08-22 — the baseline earns its trust, and the loop closes (PROTOCOL v2.10.8)
 
