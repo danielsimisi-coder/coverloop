@@ -1316,7 +1316,14 @@ def _cmd_attest_locked(args, root):
             f"--{flag} {requested} is below the deterministic floor {derived} for the changes "
             f"since the last verified evidence ({'; '.join(auto_reasons[:4])}). The floor "
             f"cannot be lowered. Omit the flag to record the derived tier {derived}.")
-    if requested and tier_max(requested, derived) == requested and requested != derived:
+    # `raise_to and requested == derived` is INCLUDED on purpose. An explicit
+    # `--raise-tier L3 --reason "also changes authz policy"` on a path that
+    # already floors at L3 says something the classifier does not know, and
+    # dropping it as "nothing to raise" recorded tier_source=derived — which the
+    # gate then trusted to waive the human under --human-gate-scope
+    # irreversible. An explicit statement of intent is never silently discarded.
+    if requested and tier_max(requested, derived) == requested and (
+            requested != derived or raise_to):
         # Elevation above the floor: allowed, upward only, and recorded with a
         # reason that survives in the committed report. The NEW interface
         # (--raise-tier) insists on --reason: an elevation nobody can explain is
@@ -1327,13 +1334,16 @@ def _cmd_attest_locked(args, root):
         # stderr points at the better flag. Compatibility never means silence.
         if raise_to and not reason:
             fail_usage(
-                f"elevating {derived} -> {requested} above the deterministic floor requires "
-                f"--reason \"<why the classifier cannot see this risk>\" (recorded in the "
-                f"report). Omit the flag to record the derived tier {derived}.")
+                f"--raise-tier {requested} requires --reason \"<why the classifier cannot see "
+                f"this risk>\" (recorded in the report), even when the derived floor is already "
+                f"{derived}: the reason is the part the classifier does not know. Omit the flag "
+                f"to record the derived tier {derived}.")
         if not reason:
-            reason = "legacy --tier pin — no reason given"
-            print(f"note: --tier {requested} elevates above the derived floor {derived} without a "
-                  f"reason; recorded as such. Prefer `--raise-tier {requested} --reason \"...\"`.",
+            reason = ("legacy --tier pin — no reason given" if requested != derived
+                      else "legacy --tier pin at the derived floor — no reason given")
+            print(f"note: --tier {requested} is a caller-declared tier, not a derived one, and no "
+                  f"reason was given (derived floor {derived}); recorded as such. "
+                  f"Prefer `--raise-tier {requested} --reason \"...\"`.",
                   file=sys.stderr)
         final_tier = requested
         elevation = {"from": derived, "to": requested, "reason": reason, "at": now_utc()}
@@ -2277,8 +2287,9 @@ def main(argv=None):
     pa.add_argument("--tier", choices=TIERS,
                     help="LEGACY floor pin. The tier is now DERIVED from the changed paths "
                          "with the gate's own floor semantics; omit this. Kept for "
-                         "compatibility: below the floor it is refused, above it it needs "
-                         "--reason (see --raise-tier)")
+                         "compatibility: below the floor it is refused; at or above it, it is "
+                         "accepted and recorded as a caller-declared tier with an explicit "
+                         "'no reason given' marker (prefer --raise-tier --reason)")
     pa.add_argument("--raise-tier", dest="raise_tier", choices=TIERS,
                     help="elevate ABOVE the derived floor for a risk the path classifier "
                          "cannot see (a milestone gate covering many migrations; a config "

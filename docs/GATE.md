@@ -133,9 +133,11 @@ Fail-closed rules:
   (`--base origin/<base_ref>`); the base is never read from in-repo config.
 - Changing `.coverloop/config.json` is **never** waived — it alters gate behavior.
 - **`--min-tier` is a floor, not an override:** the effective tier is
-  `max(--min-tier, the report's self-declared tier)`, so a pin can only RAISE
-  requirements, never downgrade an L3 change. `attest` tier is monotonic — it
-  won't silently downgrade an existing report (`--force` to override). The
+  `max(--min-tier, the report's own tier, the floor derived from the changed
+  paths)`, so a pin can only RAISE requirements, never downgrade an L3 change.
+  `attest` derives the tier rather than accepting one, and it is monotonic — it
+  won't silently downgrade an existing report (`--force` to override, recorded
+  as `tier_source: forced`). The
   recorded test command must match the project's current `test_command`.
 - `--approve` requires `--approver <name>`: approval must be attributable.
 
@@ -189,10 +191,12 @@ jobs:
 Then in the repo settings: **Branches → branch protection → require the
 `coverloop / gate` status check.** From that moment a change can't merge without
 either the evidence its tier requires (tests, the reviews, a named approval) or
-a maintainer explicitly overriding a required check. Two honest caveats: the
-**tier is self-declared** unless CI pins a floor (so pin `--min-tier` to the
-lowest tier that must always be met — the example uses L2), and branch
-protection's override is a human decision, not something the gate can prevent.
+a maintainer explicitly overriding a required check. One honest caveat remains:
+branch protection's override is a human decision, not something the gate can
+prevent. (The tier itself is no longer self-declared — since v2.11 `attest`
+derives it from the changed paths, and CI derives the same floor with
+`classify --quiet --base`; a pinned `--min-tier` is now a second floor rather
+than the only one.)
 What the gate removes is *silent* merges of unreviewed code.
 
 (If the repo vendors `bin/coverloop` — which this one does — replace the
@@ -237,10 +241,14 @@ anywhere, and an entry claiming `attached` while carrying a captured run's
 `exit_code` is rejected as inconsistent.
 
 **Known residuals (by design, until a GitHub App exists):**
-- **Tier is self-declared** unless CI pins it. A PR could label an L3 change L0
-  to dodge gates; defense is the committed, reviewable tier field plus a pinned
-  floor — `coverloop gate --ci --min-tier L2` forces ≥L2 evidence on every PR
-  regardless of what the report claims. Pin it to your repo's risk appetite.
+- **A tier can be RAISED by intent, never lowered.** Since v2.11 `attest`
+  derives the tier from the changed paths, refuses anything below that floor,
+  and records where the tier came from (`derived` / `elevated` / `forced`). What
+  it still cannot see is intent: a genuinely dangerous change in an
+  innocuous-looking file needs `--raise-tier <T> --reason "..."` from you. A
+  `--force`d tier below the floor stays possible for the legacy `--tier` pin,
+  is recorded as such, and does not fool the gate — it recomputes the floor
+  itself.
 - **Human approval is *named*, not *authenticated*.** `--approver daniel`
   records who approved, but doesn't verify it was really them via a GitHub
   review/environment approval. Treat the approver field as attributable intent,
