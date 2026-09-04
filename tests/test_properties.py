@@ -2305,6 +2305,21 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         # a real reviewer's trailing footer is still fine
         self.assertEqual(tv("VERDICT: PASS\ntokens used\n151,117"), "pass")
 
+    def test_a_pathspec_is_not_mistaken_for_an_in_repo_reviewer(self):
+        # The first version of the in-repo check refused `git diff -- .`
+        # because "." resolves to the repo root: a guard that fires on the
+        # reviewer's own correct command teaches people to remove the guard.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            open(os.path.join(d, "notes.txt"), "w").write("data\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "data")
+            outside = os.path.join(self.policy_dir, "pass.sh")
+            self._policy(cmds={
+                "codex": f"git diff HEAD~1..HEAD -- . ':(exclude)notes.txt' && {outside}",
+                "glm": outside})
+            r = self._cl(d, "check")
+            self.assertNotIn("lives inside the repository", r.stderr)
+
     def test_check_stops_if_head_moves_during_the_run(self):
         # A command that commits or resets leaves a CLEAN tree while the
         # evidence now describes a commit that is no longer checked out.

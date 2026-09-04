@@ -2355,11 +2355,19 @@ def reviewer_policy(root):
     for role, cmd in cmds.items():
         for tok in cmd.replace("|", " ").replace(";", " ").split():
             tok = tok.strip("\"'")
-            if not tok or tok.startswith("-"):
+            if not tok or tok.startswith("-") or tok in (".", ".."):
                 continue
             cand = os.path.realpath(os.path.join(root_real, tok)) if not os.path.isabs(tok) \
                 else os.path.realpath(tok)
-            if (cand == root_real or cand.startswith(root_real + os.sep)) and os.path.exists(cand):
+            if not (cand.startswith(root_real + os.sep) and os.path.isfile(cand)):
+                continue
+            # A file inside the repo is only a hazard if it can RUN: an
+            # executable, or a script some interpreter will be handed. A
+            # pathspec ("git diff -- .") or a data file argument is not, and
+            # refusing those made the tool refuse its own reviewer command.
+            runnable = os.access(cand, os.X_OK) or os.path.splitext(cand)[1] in (
+                ".sh", ".bash", ".py", ".rb", ".pl", ".js", ".mjs", ".ts")
+            if runnable:
                 return None, (f"reviewer policy {path}: the {role} command runs {tok!r}, which "
                               f"lives inside the repository under review — the change could "
                               f"rewrite its own reviewer. Point it at a command outside the repo.")
