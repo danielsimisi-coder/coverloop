@@ -59,7 +59,10 @@ input, not re-litigated:
 
 - **The reviewer policy is TRUSTED input, not a security boundary.** It lives
   outside the worktree (`~/.config/coverloop/reviewers.json`) so the change
-  under review cannot alter it — that guarantee is real and worth keeping. The
+  under review cannot alter it *through the committed diff* — which is the whole
+  guarantee, and worth keeping. It is not protection against arbitrary local
+  code: the repo's own test command runs with the operator's privileges and
+  could rewrite that file (see the next bullet). The
   in-repo command check is a *tripwire*: useful, never complete. Document it as
   something to write with sudoers-level care.
 - **Repository-controlled tests are not sandboxed.** The configured test
