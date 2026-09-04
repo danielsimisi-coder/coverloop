@@ -56,8 +56,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Six cold review rounds ran against this change; the gate stopped its own merge
-every time. 32 findings, all verified against the code, and the pattern in them
+Seven cold review rounds ran against this change; the gate stopped its own merge
+every time. 35 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -119,8 +119,18 @@ What the rounds did close, in what did ship:
   the floor fleet-wide on adoption, which is the over-classification this tool
   warns about. `check` now compares the current command against the one the
   last ancestor report actually ran, and raises to L2 when it changed. (Reading
-  the baseline's config instead would never fire: rewriting the command
-  invalidates that evidence by construction, dropping the baseline to the root.)
+  the baseline's config, or the last report's command, would never fire:
+  rewriting the command invalidates that evidence by construction and drops the
+  baseline to the root, and a deleted report is indistinguishable from
+  first-time setup. It reads the config file's OWN git history instead — one
+  commit touching it means adoption, two or more means it changed, and git
+  failing to answer fails closed. The promotion is written into the report, not
+  just used locally: evaluating L2 while recording L1 left CI's gate reading L1
+  and never asking for the transcript.)
+- **The review packet shows everything the floor judged.** Excluding all of
+  `.coverloop/reports/` hid `.coverloop/reports/evil.sql` — which classifies L3
+  like any other path, since only the exact SHA-shaped artifacts are evidence.
+  The floor said L3 while both reviewers read a packet without the cause.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

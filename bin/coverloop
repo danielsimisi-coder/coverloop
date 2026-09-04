@@ -2373,24 +2373,34 @@ def _stop(reason):
     sys.exit(1)
 
 
-def _last_recorded_test_command(root, sha):
-    """The test command the newest ancestor report actually ran, or None.
+def _previous_test_command(root):
+    """(command, readable) for the version of test_command BEFORE the most
+    recent commit that touched the gate config.
 
-    Deliberately independent of whether that report VALIDATES: a rewritten
-    test_command invalidates it by construction, and that is precisely the case
-    this exists to catch.
+    Read from the config file's own git history rather than from reports or
+    from the evidence baseline, because both of those vanish in exactly the
+    case this exists to catch: rewriting test_command invalidates the ancestor
+    evidence (the recorded command must match the current one), which drops the
+    baseline to the root, and a deleted report is otherwise indistinguishable
+    from first-time setup.
+
+    A config with only ONE commit touching it was created, not changed — that is
+    adoption, and a floor that fires on adoption is a floor people route around.
+    `readable` is False only when git could not answer, which fails closed.
     """
-    out = git(["rev-list", "--max-count=200", sha], cwd=root)
-    if not out:
-        return None
-    for c in out.split()[1:]:
-        if not os.path.exists(report_path(root, c)):
-            continue
-        rep, _why = load_report(root, c)
-        cmd = ((rep or {}).get("tests") or {}).get("command")
-        if cmd:
-            return str(cmd)
-    return None
+    out = git(["rev-list", "-2", "HEAD", "--", CONFIG_FILE], cwd=root)
+    if out is None:
+        return None, False
+    commits = out.split()
+    if len(commits) < 2:
+        return None, True          # created, never changed
+    prev = git(["show", f"{commits[1]}:{CONFIG_FILE}"], cwd=root)
+    if prev is None:
+        return None, False
+    try:
+        return ((json.loads(prev) or {}).get("test_command"), True)
+    except ValueError:
+        return None, False
 
 
 def cmd_check(args):
@@ -2474,6 +2484,27 @@ def cmd_check(args):
     #    come from config ("reviewer_commands": {"codex": "...", "glm": "..."});
     #    with none configured, check STOPs and names the missing role rather
     #    than silently downgrading to a self-attested verdict.
+    # `test_command` is what "tests: pass" MEANS, and reviewers only run at
+    # L2/L3, so a commit rewriting it to `true` was ordinary L1 source by path:
+    # no meaningful tests, no review, SAFE TO MERGE. Compared against the last
+    # command a REPORT recorded, not against the baseline's config, because
+    # rewriting the command invalidates that evidence by construction and drops
+    # the baseline to the root — where the check would never fire.
+    #
+    # This runs BEFORE the attest namespace is built: raising only the local
+    # `tier` let check evaluate L2 while RECORDING L1, and CI's gate then read
+    # L1 and never asked for the transcript.
+    prev_cmd, history_readable = _previous_test_command(root)
+    cur_cmd = cfg.get("test_command")
+    if (prev_cmd and prev_cmd != cur_cmd) or not history_readable:
+        why = (f"the test command changed ({prev_cmd!r} -> {cur_cmd!r})"
+               if prev_cmd and prev_cmd != cur_cmd else
+               "the previous test command could not be read from git")
+        if tier_max(tier, "L2") != tier:
+            tier = "L2"
+            raise_to, reason = "L2", f"{why} — what 'tests: pass' means is part of what needs reviewing"
+        reasons = list(reasons) + [f"L2: {why}"]
+
     # Reviewer commands run from a scratch directory OUTSIDE the worktree, and
     # with the search paths that could lead back into it removed. Changing the
     # cwd alone was not enough: PYTHONPATH or a repo directory on PATH still let
@@ -2500,7 +2531,14 @@ def cmd_check(args):
     # covered them (a two-dot diff excludes what the root introduced). The
     # reviewers have to see exactly what the floor judged, or a root-commit
     # migration derives L3 while both reviewers read a packet without it.
-    exclude = ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"]
+    # Only the exact SHA-shaped artifacts are evidence. `:(exclude)reports/*`
+    # also hid anything else parked there — and `.coverloop/reports/evil.sql`
+    # classifies L3 like any other path, so it derived an L3 floor while both
+    # reviewers got a packet without it.
+    span_files = _git_paths(["diff", "--name-only"] + span, root) or []
+    if len(span) == 1 and span[0] == sha:
+        span_files = _git_paths(["show", "--name-only", "--pretty=format:", sha], root) or []
+    exclude = ["--", "."] + [":(exclude)" + f for f in span_files if is_report_artifact(f)]
     parts = []
     if len(span) == 1 and span[0] == sha:
         parts.append(git(["show", "--patch", sha] + exclude, cwd=root))
@@ -2542,18 +2580,6 @@ def cmd_check(args):
     # review. Classifying the config FILE was too blunt — it sits in the first
     # span of every repo after `init`, and a floor that fires on adoption is a
     # floor people route around. What needs the review is the CHANGE to it.
-    # Compared against the last command a REPORT recorded, not against the
-    # baseline's config: rewriting test_command invalidates that evidence (the
-    # recorded command must match the current one), which drops the baseline to
-    # the root — so reading the config there would find nothing and the check
-    # would never fire on exactly the change it exists for.
-    old_cmd = _last_recorded_test_command(root, sha)
-    if old_cmd and old_cmd != cfg.get("test_command"):
-        tier = tier_max(tier, "L2")
-        reasons = list(reasons) + [
-            f"L2: the test command changed since the last evidence ({old_cmd!r} -> "
-            f"{cfg.get('test_command')!r}) — what 'tests: pass' means is part of "
-            f"what needs reviewing"]
     cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):

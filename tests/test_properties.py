@@ -1920,8 +1920,11 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         open(p, "w").write(body)
 
     def _report(self, d):
-        reports = sorted(glob_reports(d))
-        return json.load(open(reports[-1]))
+        # HEAD's report — NOT sorted(...)[-1], which orders by SHA hex and so
+        # picks an arbitrary older report once a repo has more than one.
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                              capture_output=True, text=True).stdout.strip()
+        return json.load(open(os.path.join(d, ".coverloop", "reports", head + ".json")))
 
     # ---- item 1: the tier is derived ------------------------------------
     def test_tier_is_derived_from_the_paths_with_no_flag_at_all(self):
@@ -2181,7 +2184,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         # A test that repairs the code it is testing would otherwise earn a
         # SAFE TO MERGE for the broken commit that is actually being shipped.
         with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
             cfg_path = os.path.join(d, ".coverloop", "config.json")
             cfg = json.load(open(cfg_path))
             cfg["test_command"] = "echo repaired >> README.md"
@@ -2246,7 +2249,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         # A command that commits or resets leaves a CLEAN tree while the
         # evidence now describes a commit that is no longer checked out.
         with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
             cfg_path = os.path.join(d, ".coverloop", "config.json")
             cfg = json.load(open(cfg_path))
             cfg["test_command"] = ("echo x > sneak.txt && git add sneak.txt && "
@@ -2352,7 +2355,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         # redirect_stdout only moves Python's writes; the test SUBPROCESS
         # inherits fd 1, and nearly every real test command prints.
         with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d)
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
             cfg_path = os.path.join(d, ".coverloop", "config.json")
             cfg = json.load(open(cfg_path))
             cfg["test_command"] = "echo 'ran 41 tests, all green'"
@@ -2382,6 +2385,59 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("requires an independent codex review", r.stderr)
+
+    def test_the_test_command_promotion_is_recorded_not_just_evaluated(self):
+        # Raising only the local `tier` let check evaluate L2 while RECORDING
+        # L1 — and CI's gate then read L1 and never asked for the transcript.
+        stub = os.path.join(self.policy_dir, "pass.sh")
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = "true   # nothing runs"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "tweak the harness")
+            self._cl(d, "check")
+            self.assertEqual(self._report(d)["risk_tier"], "L2",
+                             "the report CI reads must carry the raised tier")
+
+    def test_the_tamper_check_fails_closed_when_history_is_unreadable(self):
+        # An older or deleted report must not be indistinguishable from
+        # first-time setup: that reads a weakened test command as adoption.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = "true   # nothing runs"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            for rep in glob_reports(d):          # the evidence is gone
+                os.remove(rep)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "tweak and forget")
+            cmd, readable = self.mod._previous_test_command(d)
+            self.assertEqual(cmd, "true", "read from git, not from the deleted reports")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_the_review_packet_shows_non_evidence_files_parked_in_reports(self):
+        # Only the exact SHA-shaped artifacts are evidence. Excluding the whole
+        # directory hid `.coverloop/reports/evil.sql`, which classifies L3 like
+        # any other path — an L3 floor with a packet that omits the cause.
+        out_file = os.path.join(self.policy_dir, "packet2.diff")
+        captured = os.path.join(self.policy_dir, "capture2.sh")
+        open(captured, "w").write(
+            f'#!/bin/sh\ncat "$COVERLOOP_DIFF" > {out_file}\necho "VERDICT: PASS"\n')
+        os.chmod(captured, 0o755)
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "capture2.sh", "glm": "capture2.sh"})
+            self._write(d, ".coverloop/reports/evil.sql", "drop table users;\n")
+            run("git", "add", "-Af"); run("git", "commit", "-qm", "parked")
+            self._cl(d, "check")
+            packet = open(out_file, encoding="utf-8").read()
+            self.assertIn("evil.sql", packet)
 
     def test_an_untouched_test_command_does_not_raise_the_tier(self):
         with tempfile.TemporaryDirectory() as d:
