@@ -994,11 +994,16 @@ def capture_run(root, sha, name, cmd, cwd=None, env=None):
         # change under review supply its own reviewer. The repo and a
         # pre-computed diff reach the command through COVERLOOP_REPO /
         # COVERLOOP_DIFF instead.
+        # stderr INTO stdout, not concatenated after it: a normal CLI prints
+        # progress on stderr and its verdict on stdout, and appending the one
+        # to the other turned "…progress… VERDICT: PASS" into "VERDICT: PASS
+        # …progress…", which the closing-marker rule then rejected.
         proc = subprocess.run(cmd, shell=True, cwd=cwd or root, env=env,
-                              capture_output=True, timeout=1800)
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=1800)
     except (OSError, subprocess.TimeoutExpired) as e:
         fail_usage(f"could not run {name} reviewer command: {e}")
-    output = ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", errors="replace")
+    output = (proc.stdout or b"").decode("utf-8", errors="replace")
     if proc.returncode != 0:
         # A failed run's output is untrusted error text (env dumps, stack state
         # that routinely carries tokens). It is also NOT valid evidence (the gate
@@ -2472,6 +2477,27 @@ def _reviewed_test_command(root, prior, base=None):
     return _at(versions[0])
 
 
+def _resolved_command_targets(cmd, env):
+    """Every word of a shell command that resolves to a real file, followed
+    through PATH and through symlinks.
+
+    A word-split, not a shell parser — it is a tripwire and errs toward
+    noticing. See the honest limit in docs/GATE.md: the reviewer policy is
+    TRUSTED input. This catches a command that reaches into the repository by
+    accident or by an obvious trick; it cannot make an operator-written command
+    safe, and no static check of a shell string could.
+    """
+    out = []
+    for tok in re.split(r"[|;&\n]+|\s+", cmd or ""):
+        tok = tok.strip("\"'")
+        if not tok or tok.startswith("-") or "=" in tok:
+            continue
+        exe = tok if os.path.sep in tok else shutil.which(tok, path=env.get("PATH"))
+        if exe and os.path.exists(exe):
+            out.append(os.path.realpath(exe))
+    return out
+
+
 def _reviewer_binary_fingerprints(cmds, env):
     """sha256 of each reviewer command's resolved executable, before anything
     else runs.
@@ -2676,16 +2702,20 @@ def cmd_check(args):
         _stop("the secret filter (glm_secret_filter) could not be imported, so the diff "
               "cannot be scanned before reviewers see it — install it beside bin/coverloop "
               "or run the reviewers yourself and attach the transcript with --codex-log")
+    # Scan the RAW diff and stop, rather than redacting and continuing. The
+    # reviewer is handed $COVERLOOP_REPO and is expected to read files, so a
+    # value merely removed from the packet can be reopened at source and sent
+    # anyway — the redaction made the packet clean while the secret stayed one
+    # `cat` away. A committed credential has to be dealt with, not laundered.
+    try:
+        found = _secret.scan(diff_text)
+    except Exception:
+        found = ["scan failed"]
+    if found:
+        _stop(f"the change contains what looks like a secret "
+              f"({', '.join(sorted(set(found))[:3])}) and the reviewers can read the "
+              f"working tree — remove it from the diff, rotate the credential, and re-run")
     diff_text = redact_secrets(diff_text)
-    if True:
-        try:
-            found = _secret.scan(diff_text)
-        except Exception:
-            found = ["scan failed"]
-        if found:
-            _stop(f"the change contains what looks like a secret ({', '.join(sorted(set(found))[:3])}) "
-                  f"and reviewers may send it to a model — remove it from the diff, rotate the "
-                  f"credential, and re-run")
     with open(diff_file, "w", encoding="utf-8", errors="replace") as fh:
         fh.write(diff_text + ("" if diff_text.endswith("\n") else "\n"))
     review_env = {k: v for k, v in os.environ.items()
@@ -2792,17 +2822,13 @@ def cmd_check(args):
     # symlink, and refuse if it lands in the tree under review.
     root_real = os.path.realpath(root)
     for role in need:
-        for tok in (cmds.get(role) or "").split():
-            tok = tok.strip("\"'")
-            if not tok or tok.startswith("-") or "=" in tok:
-                continue
-            exe = (tok if os.path.sep in tok
-                   else shutil.which(tok, path=review_env.get("PATH")))
-            real = os.path.realpath(exe) if exe else None
-            if real and real.startswith(root_real + os.sep):
+        # EVERY word, not just the first: `cat "$COVERLOOP_DIFF" | sneaky` put
+        # the repo-controlled half behind a pipe, where a guard that stopped at
+        # the command word never looked.
+        for real in _resolved_command_targets(cmds.get(role) or "", review_env):
+            if real.startswith(root_real + os.sep):
                 _stop(f"the {role} reviewer resolves to {real}, inside the repository under "
                       f"review — the change could rewrite its own reviewer")
-            break
     before = _reviewer_binary_fingerprints({r: cmds[r] for r in need if cmds.get(r)},
                                            review_env)
     reviewer_ns = copy.copy(a)

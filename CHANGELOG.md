@@ -55,8 +55,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Eleven cold review rounds ran against this change; the gate stopped its own
-merge every time. 49 findings, all verified against the code, and the pattern in them
+Twelve cold review rounds ran against this change; the gate stopped its own
+merge every time. 52 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -178,6 +178,23 @@ What the rounds did close, in what did ship:
   derived the tier, refusing exactly the L0/L1 changes the quick start begins
   with — a first command that will not run until you configure a reviewer you do
   not yet need. It is loaded lazily and required the moment a reviewer is.
+- **The reviewer-command guard is a tripwire, and now says so.** It was
+  extended five separate times across these rounds — a bare token, a script
+  suffix, an `sh <file` redirect, a PATH symlink, a pipeline's second half —
+  which is the shape of a claim that cannot be met: no static check of a shell
+  string is complete. It still resolves every word through `PATH`, follows
+  symlinks and refuses anything landing in the tree under review, but
+  `docs/GATE.md` now states the real boundary: **the reviewer policy is trusted
+  input**, to be written as carefully as a sudoers file. What the design does
+  guarantee is narrower and still worth having — the change under review cannot
+  alter it.
+- **A secret in the diff stops the run.** Redacting it out of the packet was not
+  enough: reviewers are handed `$COVERLOOP_REPO` and expected to read files, so
+  a value removed from the packet stayed one `cat` away. Stricter, and less code
+  than another guard.
+- **A reviewer that logs progress to stderr still passes.** Captured output
+  concatenated stderr AFTER stdout, destroying chronological order, so a normal
+  CLI's closing `VERDICT: PASS` stopped being last and was rejected.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

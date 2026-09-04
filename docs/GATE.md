@@ -58,6 +58,20 @@ the primitives below — it adds no new authority and skips no check:
 
    A reviewer that needs the working tree does `cd "$COVERLOOP_REPO"` itself —
    an explicit choice in the operator's own file, not an implicit search path.
+
+   **The honest limit: the policy is TRUSTED input.** `check` resolves every
+   word of the command through `PATH`, follows symlinks, and refuses anything
+   landing in the tree under review — but that is a **tripwire**, not a security
+   boundary. It was extended five separate times across this release's review
+   rounds (a bare token, a script suffix, a `sh <file` redirect, a PATH symlink,
+   a pipeline's second half), and no static check of a shell string can be
+   complete. The same is true of the working tree: reviewers are given
+   `$COVERLOOP_REPO` and are expected to read it, so a value merely removed from
+   the packet can be reopened at source — which is why a secret found in the
+   diff **stops the run** rather than being redacted out of it.
+
+   Write the policy as carefully as you would write a sudoers file. What the
+   design does guarantee is that the *change under review* cannot alter it.
 5. **read each verdict from its transcript.** The verdict is a **machine
    protocol**: the transcript must contain a line that is exactly
    `VERDICT: PASS`, and no other `VERDICT:` line. `PASS WITH RISKS`, `APPROVE`,

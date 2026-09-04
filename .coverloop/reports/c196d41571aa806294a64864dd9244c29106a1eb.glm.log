@@ -1,0 +1,47 @@
+## 1. Verdict: PASS WITH RISKS
+
+No definite fail-open regression or deterministic-floor bypass is provable from the diff. The tier-derivation, elevation-only semantics, baseline conservatism, reviewer-independence enforcement, verdict-protocol parsing, and dirty-tree/HEAD-movement guards are all fail-closed and well-tested. The residual risks below depend on pre-existing code not shown in the diff (notably `reviewer_check`'s hash verification), which I cannot falsify from the provided evidence.
+
+## 2. P0 blockers
+None identified.
+
+The strongest candidate I could construct — a test command rewriting a captured reviewer transcript to append `VERDICT: PASS` after the reviewer pass but before verdict parsing — is only a fail-open IF `reviewer_check` does not re-verify the transcript's stored sha256 against the file in the `require_captured=True` path. The diff does not show `reviewer_check`'s body, but the protocol's documented "hash-bound transcripts" invariant and the unchanged signature strongly imply hash verification exists. Without direct evidence of its absence, this cannot be marked P0.
+
+## 3. P1 serious issues
+
+- **Transcript-tampering window depends on unshown hash verification.** `cmd_check` runs reviewers first, then the operator-privileged test command, then re-reads each `<sha>.<role>.log` from disk to parse the verdict and overwrites `report[role]["status"]="pass"` + `findings_open=0` before `save_report` and `evaluate(..., require_captured=True)`. If `reviewer_check` recomputes and compares the transcript hash, a tampered file fails closed (safe). If it only trusts the report's status field, this is a fail-open. The 11-round history and the "hash-bound transcripts" design make the safe interpretation likely, but the diff itself does not prove it. **Action: confirm `reviewer_check` recomputes the transcript sha256 in the `require_captured` path and add a regression test where the test command rewrites the transcript file.**
+
+- **Misleading baseline comment vs. stricter code.** `_validated_baseline`'s docstring now says the ancestor need only pass "VERIFICATION ... NOT authorization," but the actual `evaluate(...)` call uses the default `human_gate_required=True`, so the baseline still requires the named human approval (the conservative, deferred-item-2 behavior). The code is *more* strict than the comment. This is not a fail-open today, but the comment is a trap for a future maintainer who might "align" the code with the prose and ship the exact fail-open the changelog says was deferred five times. **Action: rewrite the comment to match the code (full evaluation, authorization included).**
+
+## 4. P2 improvements
+
+- `if True:` block around the outbound secret scan is a leftover dev artifact; collapse to unconditional.
+- Legacy `--tier <T>` above the floor is accepted with only a "no reason given" marker and a stderr note. This is intentional for SHA-pinned CI compatibility, but it is an unexplained elevation path; consider requiring `--reason` even for the legacy flag in a future contract bump.
+- At L2, `evaluate` reads the fixed `"codex"` report key, so `check` refuses a non-codex primary. The docs claim "Codex is a default, not an assumption," but the code hardcodes it at L2. Known limitation, documented, but the prose oversells the configurability.
+- `_reviewer_binary_fingerprints` only resolves the first command word and only hashes the resolved executable; a wrapper that restores the original before exit is acknowledged as a residual limit. The reviewers-first ordering mitigates the worst case, but the fingerprint tripwire is weak. Document this more loudly in `docs/GATE.md`.
+- TOCTOU on the reviewer policy file: `lstat`/mode check and `load_json` are not atomic. Low risk on an operator-owned machine, but a symlink swap between the check and the read is theoretically possible.
+- In `--json` mode, early `_stop` paths (e.g., reviewer did not pass, tests failed) exit 1 with no JSON document on stdout — only the gate-evaluation failure path emits JSON. Automation that parses stdout will get an empty document for most STOP reasons. Either always emit a JSON failure document or document that exit code is the only reliable signal.
+- `conftest.py`-style harness changes (a `python3 -m pytest` invocation whose behavior is altered by a repo-controlled conftest) are not caught by `_command_paths`, since the conftest path is not a token in the command string. The conftest change itself enters the floor, but the test-command promotion logic won't fire. Edge case.
+- `human_gate_required=True` is computed for an L2 elevation in `cmd_gate`/`cmd_check`, but `evaluate`'s `if tier == "L3":` guard means it is silently ignored at L2. This is consistent with "human gate is L3-only" by design, but the dead parameter passing is confusing.
+
+## 5. Missing tests / verification
+
+- No test asserting that a test command which rewrites `.coverloop/reports/<sha>.<role>.log` to end in `VERDICT: PASS` is caught (the hash-verification path above).
+- No test for the concurrent-`check` critical-section fix described in the changelog (two runs on the same commit, one FAIL one PASS). The lock is held, but the regression is not pinned by a test.
+- No test that an L3 report with `tier_source="elevated"` still requires the human gate under `--human-gate-scope irreversible` end-to-end through `check` (the existing test goes through `gate` directly, not `check`).
+- No test that `--force --tier L0` on an L3 migration still fails the real `gate` (the changelog claims it, but `check`'s direct `evaluate` call with the forced tier is not exercised).
+- No test covering `transcript_verdict` with CRLF line endings or a marker line containing only `VERDICT:` with no body.
+
+## 6. Likely false positives / what to ignore
+
+- The `if tier == "L3":` guard added in `evaluate` is not a skip of the human gate for L3; it correctly scopes the human-gate block to L3 only. Non-L3 tiers were never meaningfully gated by `human_gate_required` in practice.
+- Legacy `--tier` above the floor being accepted without `--reason` is intentional compatibility for the four SHA-pinned CI workflows; it is an upward elevation, never a lowering.
+- `--force` recording a below-floor tier is documented and the gate still computes its own floor independently; the report is also rejected as a baseline by `_validated_baseline`'s `tier_max(tier, floor) != tier` check.
+- The session hook shrinking to seven lines is a prose reduction; enforcement moved to code (`check`), which is fail-closed. The 1%-compliance model-line rule being dropped is not a security regression.
+- `require_captured=True` in `_validated_baseline` is strictly more conservative than the prior behavior (fewer reports advance the baseline), so it cannot widen the floor.
+
+## 7. Suggested next action
+
+Confirm in the pre-existing `reviewer_check` body that the transcript sha256 is recomputed and compared to the report's stored hash in the `require_captured` path, and add the test described in §5 (test command rewrites transcript). Fix the contradictory `_validated_baseline` comment to match the stricter code. Then this is shippable.
+
+VERDICT: PASS

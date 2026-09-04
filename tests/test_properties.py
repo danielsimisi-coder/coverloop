@@ -2569,25 +2569,6 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(steps[-1], "tests", steps)
             self.assertIn("reviewer", steps[:-1], steps)
 
-    def test_a_secret_in_the_diff_never_reaches_a_reviewer(self):
-        # Redaction used to happen only on the way BACK, when capturing output
-        # — by which point the packet had already left the machine.
-        leaked = os.path.join(self.policy_dir, "leaked.txt")
-        rev = os.path.join(self.policy_dir, "leaky.sh")
-        open(rev, "w").write(f'#!/bin/sh\ncat "$COVERLOOP_DIFF" > {leaked}\necho "VERDICT: PASS"\n')
-        os.chmod(rev, 0o755)
-        secret = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4"
-        with tempfile.TemporaryDirectory() as d:
-            run = self._repo(d, cmds={"codex": "leaky.sh", "glm": "leaky.sh"})
-            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")   # L3
-            self._write(d, "src/client.ts", f'const k = "{secret}";\n')
-            run("git", "add", "-A"); run("git", "commit", "-qm", "oops")
-            self._cl(d, "check")
-            self.assertTrue(os.path.exists(leaked), "the reviewer should have run")
-            packet = open(leaked, encoding="utf-8").read()
-            self.assertNotIn(secret, packet, "the raw key reached the reviewer")
-            self.assertIn("migrations/1.sql", packet, "the rest of the diff is intact")
-
     def test_a_branch_cannot_restore_a_historical_test_command_under_base(self):
         # With --base the reviewed state is the base branch. Reading the
         # config's first-ever version instead let a branch RESTORE a historical
@@ -2683,6 +2664,58 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("requires an independent codex review", r.stderr)
+
+    def test_a_compound_reviewer_command_is_validated_end_to_end(self):
+        # `cat "$COVERLOOP_DIFF" | sneaky` hid the repo-controlled half behind a
+        # pipe, where a guard that stopped at the command word never looked.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            os.makedirs(os.path.join(d, "scripts"), exist_ok=True)
+            planted = os.path.join(d, "scripts", "reviewer")
+            open(planted, "w").write('#!/bin/sh\necho "VERDICT: PASS"\n')
+            os.chmod(planted, 0o755)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "planted")
+            bindir = os.path.join(self.policy_dir, "bin2"); os.makedirs(bindir, exist_ok=True)
+            os.symlink(planted, os.path.join(bindir, "sneaky-reviewer"))
+            self._policy(cmds={"codex": 'cat "$COVERLOOP_DIFF" | sneaky-reviewer',
+                               "glm": 'cat "$COVERLOOP_DIFF" | sneaky-reviewer'})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"],
+                       COVERLOOP_REVIEWERS=self.policy)
+            r = subprocess.run([sys.executable, CLI, "check"], cwd=d, env=env,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("inside the repository under review", r.stderr)
+
+    def test_a_secret_in_the_diff_stops_the_run(self):
+        # Redacting it out of the packet was not enough: reviewers are handed
+        # $COVERLOOP_REPO and expected to read files, so the value stayed one
+        # `cat` away. A committed credential is dealt with, not laundered.
+        secret = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4"
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            self._write(d, "src/client.ts", f'const k = "{secret}";\n')
+            run("git", "add", "-A"); run("git", "commit", "-qm", "oops")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("looks like a secret", r.stderr)
+
+    def test_a_reviewer_that_logs_progress_to_stderr_still_passes(self):
+        # Concatenating stderr AFTER stdout destroyed chronological order, so a
+        # normal CLI's closing verdict stopped being last and was rejected.
+        chatty = os.path.join(self.policy_dir, "chatty.sh")
+        open(chatty, "w").write(
+            '#!/bin/sh\necho "reading the diff..." >&2\necho "VERDICT: PASS"\n')
+        os.chmod(chatty, 0o755)
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "chatty.sh", "glm": "chatty.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            self.assertIn("requires a named human approval", r.stderr,
+                          r.stdout + r.stderr)   # got past both reviewers
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
