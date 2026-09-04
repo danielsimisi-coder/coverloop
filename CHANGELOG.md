@@ -53,11 +53,12 @@ builder reads at session start, and two defects in the test harness itself.
   and this change is preventive: the entry point is explicitly the last thing in
   the file, with a comment saying why.
 
-- **The two executables this release changes now have tests.** `tests/test_hooks.sh`
+- **The hook and the self-test now have tests.** `tests/test_hooks.sh`
   covers the SessionStart contract — silent outside a protocol project, silent
   for an unmarked `CLAUDE.md`, exactly three lines for each of the three
-  markers, each invariant phrase present, and no specific operator named — plus
-  the self-test's match/differ comparison. Before this, CI would not have caught
+  markers, and the contract text locked verbatim so any edit to it has to be
+  deliberate — plus the self-test reporting match, differ, and
+  cannot-verify. Before this, CI would not have caught
   a broken marker set, a lost line, or a comparison that stopped comparing.
 
 - **`protocol-selftest` no longer reports a current hook as stale.** It parsed

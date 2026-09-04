@@ -100,17 +100,20 @@ d="$(mktemp -d)"; printf 'just a readme\n' > "$d/CLAUDE.md"
 out="$( cd "$d" && bash "$SC" 2>/dev/null )"
 [ -z "$out" ] && ok "unmarked CLAUDE.md: silent" || bad "spoke for an unmarked CLAUDE.md"
 
-# 4) the invariants that must never quietly disappear
+# 4) the contract text itself, locked verbatim. Substring checks let any
+#    unlisted invariant be dropped, and any name other than one hard-coded
+#    example be added. The text IS the deliverable, so changing it should
+#    require changing this expectation deliberately.
 d="$(mktemp -d)"; printf 'PROTOCOL_VERSION: v0\n' > "$d/CLAUDE.md"
 body="$( cd "$d" && bash "$SC" 2>/dev/null )"
-for phrase in "coverloop gate" "Never lower the deterministic risk floor" \
-              "Never record an approval on a human's behalf" "secrets"; do
-  case "$body" in *"$phrase"*) ok "contract states: $phrase" ;;
-                  *) bad "contract lost: $phrase" ;; esac
-done
-# it must not name a particular person — this plugin is public
-case "$body" in *Daniel*) bad "contract names a specific operator" ;;
-                *) ok "contract names no specific operator" ;; esac
+expected="$(cat <<'EXPECTED'
+[coverloop] Build normally. Run the relevant tests as you go.
+Before merge/deploy: `coverloop gate` must pass at HEAD (use its absolute path if it is not on PATH). It fails closed on missing evidence — record that evidence with `coverloop attest` (tests, the independent reviews the tier requires, and a named human approval where one is required). Resolve what the gate names; do not work around it.
+Never lower the deterministic risk floor. Never record an approval on a human's behalf. Never bypass a red test or a red review. Never send secrets, .env contents, keys, or PII to any model. Irreversible production actions — migrations, raw SQL, schema/data-model changes, money paths, auth/RLS — are the operator's call, not yours.
+EXPECTED
+)"
+[ "$body" = "$expected" ] && ok "contract text matches verbatim" \
+  || { bad "contract text changed — update tests/test_hooks.sh deliberately"; diff <(printf '%s\n' "$expected") <(printf '%s\n' "$body") | head -6; }
 
 echo "== protocol-selftest hook comparison =="
 ST="$HERE/bin/protocol-selftest"
@@ -133,6 +136,20 @@ h="$(mkhome "$stale")"
 out="$( HOME="$h" bash "$ST" 2>&1 )"
 case "$out" in *"differs from the repo's"*) ok "stale installed hook: reported" ;;
                *) bad "stale installed hook not reported" ;; esac
+
+# A clone this script cannot locate must WARN, never PASS. Exercised for real:
+# the self-test is copied to a standalone bin/ whose parent is not a checkout,
+# with a HOME that has neither ~/protocol-loop nor ~/coverloop — so SRC really
+# is empty. Running the repo copy would not reach this path, because its own
+# parent directory IS a clone.
+h="$(mkhome "$stale")"; mkdir -p "$h/bin"; cp "$ST" "$h/bin/protocol-selftest"
+out="$( cd / && HOME="$h" bash "$h/bin/protocol-selftest" 2>&1 )"
+case "$out" in *"cannot verify the installed session-contract.sh"*)
+    ok "no locatable clone: warns, does not PASS" ;;
+  *) bad "no locatable clone: did not warn" ;; esac
+case "$out" in *"PASS  session-contract.sh matches"*)
+    bad "claimed a match with no clone to compare against" ;;
+  *) ok "no locatable clone: claims no match" ;; esac
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]

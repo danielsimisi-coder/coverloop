@@ -52,7 +52,10 @@ if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
   # installed FILE with the repo's instead:
   # that is what "this machine needs a pull" actually means.
   if [ -z "$SRC" ]; then
-    ok "session-contract.sh installed (no repo clone to compare against)"
+    # NOT ok: a clone this script cannot find (anywhere but ~/protocol-loop,
+    # ~/coverloop, or the executable's own parent) means the comparison did not
+    # happen. Reporting PASS there let a stale hook through silently.
+    warn "no protocol repo clone found — cannot verify the installed session-contract.sh"
   elif [ ! -f "$SRC/hooks/session-contract.sh" ]; then
     # A clone WITHOUT the reference hook is a broken clone, not "nothing to
     # compare" — reporting PASS there hid the one case where the comparison
