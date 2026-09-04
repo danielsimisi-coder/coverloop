@@ -56,15 +56,19 @@ builder reads at session start, and two defects in the test harness itself.
 - **The hook and the self-test now have tests.** `tests/test_hooks.sh`
   covers the SessionStart contract — silent outside a protocol project, silent
   for an unmarked `CLAUDE.md`, exactly three lines for each of the three
-  markers, and the contract text locked verbatim so any edit to it has to be
-  deliberate — plus the self-test reporting match, differ, and
-  cannot-verify. Before this, CI would not have caught
+  markers, the marker set held closed against additions, and the contract text
+  locked verbatim so any edit to it has to be deliberate — plus the self-test
+  reporting PASS on a match and WARN on a difference or an absent reference. Before this, CI would not have caught
   a broken marker set, a lost line, or a comparison that stopped comparing.
 
 - **`protocol-selftest` no longer reports a current hook as stale.** It parsed
   the `[vX PROTOCOL` banner the shortened hook deliberately does not print. It
-  compares the installed file with the repo's instead — which is what "this
-  machine needs a pull" actually means.
+  compares the installed file with a repo copy's instead — which is what "this
+  machine needs a pull" actually means — and warns rather than passing when it
+  cannot find one. Its reference is the first of `~/protocol-loop`,
+  `~/coverloop`, or the executable's own parent that looks like a checkout; with
+  several clones on one machine it may compare against a different one than you
+  expect. That selection predates this release.
 
 **Known limitation, unchanged by this release:** the distributable
 `docs/OPERATING_CONTRACT.md` is still v2.6 — it predates the

@@ -100,6 +100,17 @@ d="$(mktemp -d)"; printf 'just a readme\n' > "$d/CLAUDE.md"
 out="$( cd "$d" && bash "$SC" 2>/dev/null )"
 [ -z "$out" ] && ok "unmarked CLAUDE.md: silent" || bad "spoke for an unmarked CLAUDE.md"
 
+# 3b) the marker SET is closed. Proving three markers activate it does not stop
+#     a FOURTH being added; `.coverloop/` is the exact drift this repo has
+#     already had once (it triggered one hook and not the other). Widening the
+#     set is a decision, not a side effect — this test makes it visible.
+for nonmarker in .coverloop .claude docs/RISK_MAP.md coverloop.json; do
+  d="$(mktemp -d)"; mkdir -p "$d/docs"
+  case "$nonmarker" in */*) : > "$d/$nonmarker" ;; .*) mkdir -p "$d/$nonmarker" ;; *) : > "$d/$nonmarker" ;; esac
+  out="$( cd "$d" && bash "$SC" 2>/dev/null )"
+  [ -z "$out" ] && ok "not a marker: $nonmarker" || bad "$nonmarker became a trigger"
+done
+
 # 4) the contract text itself, locked verbatim. Substring checks let any
 #    unlisted invariant be dropped, and any name other than one hard-coded
 #    example be added. The text IS the deliverable, so changing it should
@@ -129,13 +140,14 @@ mkhome() {  # $1 = file to install AS session-contract.sh
 }
 h="$(mkhome "$SC")"
 out="$( HOME="$h" bash "$ST" 2>&1 )"
-case "$out" in *"session-contract.sh matches the repo"*) ok "identical installed hook: matches" ;;
-               *) bad "identical installed hook not reported as matching" ;; esac
+case "$out" in *"PASS  session-contract.sh matches the repo"*) ok "identical installed hook: PASS" ;;
+               *) bad "identical installed hook not reported as PASS" ;; esac
 stale="$(mktemp)"; printf '#!/bin/sh\necho stale\n' > "$stale"
 h="$(mkhome "$stale")"
 out="$( HOME="$h" bash "$ST" 2>&1 )"
-case "$out" in *"differs from the repo's"*) ok "stale installed hook: reported" ;;
-               *) bad "stale installed hook not reported" ;; esac
+case "$out" in *"WARN  installed session-contract.sh"*"differs from the repo's"*)
+    ok "stale installed hook: WARN" ;;
+  *) bad "stale installed hook not reported as WARN" ;; esac
 
 # A clone this script cannot locate must WARN, never PASS. Exercised for real:
 # the self-test is copied to a standalone bin/ whose parent is not a checkout,
@@ -144,9 +156,9 @@ case "$out" in *"differs from the repo's"*) ok "stale installed hook: reported" 
 # parent directory IS a clone.
 h="$(mkhome "$stale")"; mkdir -p "$h/bin"; cp "$ST" "$h/bin/protocol-selftest"
 out="$( cd / && HOME="$h" bash "$h/bin/protocol-selftest" 2>&1 )"
-case "$out" in *"cannot verify the installed session-contract.sh"*)
-    ok "no locatable clone: warns, does not PASS" ;;
-  *) bad "no locatable clone: did not warn" ;; esac
+case "$out" in *"WARN  no protocol repo clone found"*"cannot verify the installed session-contract.sh"*)
+    ok "no locatable clone: WARN, not PASS" ;;
+  *) bad "no locatable clone: did not WARN" ;; esac
 case "$out" in *"PASS  session-contract.sh matches"*)
     bad "claimed a match with no clone to compare against" ;;
   *) ok "no locatable clone: claims no match" ;; esac
