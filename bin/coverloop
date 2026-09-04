@@ -351,10 +351,10 @@ def _validated_baseline(root, sha, limit=2000):
     """
     shallow = git(["rev-parse", "--is-shallow-repository"], cwd=root)
     if shallow is None or shallow.strip() == "true":
-        return None, False, None
+        return None, False
     out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
     if not out:
-        return None, False, None
+        return None, False
     commits = out.split()
     attested = []
     for c in commits[1:]:
@@ -366,7 +366,7 @@ def _validated_baseline(root, sha, limit=2000):
             break
     root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
     if not root_out:
-        return None, False, None
+        return None, False
     baseline = root_out.split()[-1]
     validated = False
     cfg, _cfg_err = load_json(os.path.join(root, CONFIG_FILE))
@@ -376,20 +376,27 @@ def _validated_baseline(root, sha, limit=2000):
             continue
         seg = _git_paths(["diff", "--name-only", f"{baseline}..{c}"], root)
         if seg is None:
-            return None, False, None
+            return None, False
         if not validated:
             # The segment reaching back to the bare root must include the
             # root's own files — a two-dot diff excludes what the root itself
             # introduced, and nothing else ever accounts for those.
             own = _git_paths(["show", "--name-only", "--pretty=format:", baseline], root)
             if own is None:
-                return None, False, None
+                return None, False
             seg = list(seg) + own
         tier = rep["risk_tier"]
         floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
         if tier_max(tier, floor) != tier:
             continue  # under-declares its segment — not a valid baseline
-        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd)
+        # require_captured: a bare `--codex pass --glm pass --approve` records a
+        # CLAIM that nothing ran. Accepting it as a baseline let a later L1
+        # change start after it, and `check` schedules no reviewer below L2 —
+        # so the mandatory independent review disappeared for the whole span.
+        # Strictly more conservative than not requiring it: fewer reports
+        # advance the baseline, so more paths stay in the floor.
+        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
+                               require_captured=True)
         if not ok:
             continue  # a tier claim with no evidence behind it is not a baseline
         baseline = c
@@ -2366,6 +2373,26 @@ def _stop(reason):
     sys.exit(1)
 
 
+def _last_recorded_test_command(root, sha):
+    """The test command the newest ancestor report actually ran, or None.
+
+    Deliberately independent of whether that report VALIDATES: a rewritten
+    test_command invalidates it by construction, and that is precisely the case
+    this exists to catch.
+    """
+    out = git(["rev-list", "--max-count=200", sha], cwd=root)
+    if not out:
+        return None
+    for c in out.split()[1:]:
+        if not os.path.exists(report_path(root, c)):
+            continue
+        rep, _why = load_report(root, c)
+        cmd = ((rep or {}).get("tests") or {}).get("command")
+        if cmd:
+            return str(cmd)
+    return None
+
+
 def cmd_check(args):
     """The one-command boundary: derive the floor, run the tests, run the
     reviewers the tier requires, record it all bound to HEAD, then gate.
@@ -2456,6 +2483,7 @@ def cmd_check(args):
     #   $COVERLOOP_DIFF  the diff this run is judging — the SAME span the floor
     #                    was computed over, not just HEAD
     #   $COVERLOOP_BASE  the base ref, when one was given
+    prior = None
     review_dir = tempfile.mkdtemp(prefix="coverloop-review-")
     _SCRATCH_DIRS.append(review_dir)
     atexit.register(_cleanup_scratch)
@@ -2463,23 +2491,34 @@ def cmd_check(args):
     if getattr(args, "base", None):
         span = [f"{args.base}...HEAD"]
     else:
-        prior, _validated = _validated_baseline(root, sha)
+        prior, prior_validated = _validated_baseline(root, sha)
         if prior is None:
-            shutil.rmtree(review_dir, ignore_errors=True)
             _stop("cannot determine the span to review (shallow clone or git failure) — "
                   "fetch full history or pass --base")
         span = [sha] if prior == sha else [f"{prior}..{sha}"]
-    diff_text = git(["diff"] + span + ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root) \
-        if ".." in span[0] or "..." in span[0] else \
-        git(["show", "--patch", sha, "--", ".", ":(exclude)" + REPORTS_DIR + "/*"], cwd=root)
-    if diff_text is None:
+    # The floor classifies the bare root's OWN files when no evidence ever
+    # covered them (a two-dot diff excludes what the root introduced). The
+    # reviewers have to see exactly what the floor judged, or a root-commit
+    # migration derives L3 while both reviewers read a packet without it.
+    exclude = ["--", ".", ":(exclude)" + REPORTS_DIR + "/*"]
+    parts = []
+    if len(span) == 1 and span[0] == sha:
+        parts.append(git(["show", "--patch", sha] + exclude, cwd=root))
+    else:
+        parts.append(git(["diff"] + span + exclude, cwd=root))
+        if not getattr(args, "base", None) and not prior_validated:
+            parts.append(git(["show", "--patch", prior] + exclude, cwd=root))
+    if any(part is None for part in parts):
         # An empty packet is not "nothing to review" — it is a reviewer looking
         # at nothing and saying PASS. git failing here must stop the run.
-        shutil.rmtree(review_dir, ignore_errors=True)
         _stop("could not produce the diff for the reviewers to read (git failed) — "
               "refusing to review an empty packet")
+    # The git wrapper strips the trailing newline, which makes the file an
+    # invalid patch: `git apply` reports "corrupt patch at line N", so a
+    # patch-based reviewer cannot reconstruct the change at all.
+    diff_text = "\n".join(part for part in parts if part)
     with open(diff_file, "w", encoding="utf-8", errors="replace") as fh:
-        fh.write(diff_text)
+        fh.write(diff_text + ("" if diff_text.endswith("\n") else "\n"))
     review_env = {k: v for k, v in os.environ.items()
                   if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
     # Drop every PATH entry that is empty (= cwd), relative, or inside the repo.
@@ -2497,6 +2536,24 @@ def cmd_check(args):
         glm=None, glm_findings=None, glm_run=None, glm_log=None,
         approve=False, approver=None, base=getattr(args, "base", None), quiet=True,
         reviewer_cwd=review_dir, reviewer_env=review_env)
+    # `test_command` is what "tests: pass" MEANS, and reviewers only run at
+    # L2/L3. A commit that rewrites it to `true` is ordinary L1 source by path,
+    # so it earned SAFE TO MERGE with no meaningful tests and no independent
+    # review. Classifying the config FILE was too blunt — it sits in the first
+    # span of every repo after `init`, and a floor that fires on adoption is a
+    # floor people route around. What needs the review is the CHANGE to it.
+    # Compared against the last command a REPORT recorded, not against the
+    # baseline's config: rewriting test_command invalidates that evidence (the
+    # recorded command must match the current one), which drops the baseline to
+    # the root — so reading the config there would find nothing and the check
+    # would never fire on exactly the change it exists for.
+    old_cmd = _last_recorded_test_command(root, sha)
+    if old_cmd and old_cmd != cfg.get("test_command"):
+        tier = tier_max(tier, "L2")
+        reasons = list(reasons) + [
+            f"L2: the test command changed since the last evidence ({old_cmd!r} -> "
+            f"{cfg.get('test_command')!r}) — what 'tests: pass' means is part of "
+            f"what needs reviewing"]
     cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):
@@ -2535,6 +2592,7 @@ def cmd_check(args):
         json_out = os.dup(1)
         os.dup2(2, 1)
     say = (lambda *a: print(*a, file=sys.stderr)) if json_mode else print
+
     say(f"coverloop check — {sha[:12]} — derived tier {tier}"
         + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:

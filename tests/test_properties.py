@@ -1848,8 +1848,6 @@ class NinthRoundRegressions(unittest.TestCase):
                          "a second artifact predicate came back")
         self.assertIn("is_report_artifact(path)", src)
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class TenthRoundDerivedTierAndCheck(unittest.TestCase):
@@ -2365,6 +2363,84 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(doc["verdict"], "pass")
             self.assertEqual(r.returncode, 0)
 
+    def test_rewriting_the_test_command_earns_a_review(self):
+        # test_command is what "tests: pass" MEANS, and reviewers only run at
+        # L2/L3. A commit rewriting it to `true` is ordinary L1 source by path,
+        # so it earned SAFE TO MERGE with no meaningful tests and no review.
+        # Classifying the config FILE would be too blunt — it is in the first
+        # span of every repo after `init`, and a floor that fires on adoption
+        # is a floor people route around. The CHANGE is what needs the review.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})          # no reviewer configured
+            self._cl(d, "attest", "--tests")      # evidence, so a baseline exists
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = "true   # nothing runs"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "tweak the harness")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("requires an independent codex review", r.stderr)
+
+    def test_an_untouched_test_command_does_not_raise_the_tier(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            self._write(d, "docs/note.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "docs")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("SAFE TO MERGE", r.stdout)
+
+    def test_a_self_attested_ancestor_is_not_a_baseline(self):
+        # A bare `--codex pass --glm pass --approve` records a claim that
+        # nothing ran. Accepting it as a baseline let a later L1 change start
+        # after it, and check schedules no reviewer below L2 — so the mandatory
+        # independent review disappeared for the whole span.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
+                     "--approve", "--approver", "Someone")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
+            g = self._cl(d, "gate")
+            self.assertIn("tier L3", g.stdout, "the migration is still in the floor")
+            self.assertEqual(g.returncode, 1, g.stdout)
+
+    def test_the_review_packet_is_a_valid_patch_over_the_whole_span(self):
+        # Two defects in one: the git wrapper strips the trailing newline (so
+        # `git apply` reports "corrupt patch"), and a two-dot diff from the bare
+        # root excludes everything the root commit introduced — which the FLOOR
+        # does classify. Both meant the reviewers judged something other than
+        # what the gate did.
+        captured = os.path.join(self.policy_dir, "capture.sh")
+        out_file = os.path.join(self.policy_dir, "packet.diff")
+        open(captured, "w").write(
+            f'#!/bin/sh\ncat "$COVERLOOP_DIFF" > {out_file}\necho "VERDICT: PASS"\n')
+        os.chmod(captured, 0o755)
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "capture.sh", "glm": "capture.sh"})
+            # a migration in the repo's own root-adjacent history, then a commit
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "check")
+            packet = open(out_file, encoding="utf-8").read()
+            self.assertTrue(packet.endswith("\n"), "a patch without a final newline is corrupt")
+            self.assertIn("supabase/migrations/1.sql", packet,
+                          "the reviewers must see every file the floor classified")
+            check = subprocess.run(["git", "apply", "--stat", out_file], cwd=d,
+                                   capture_output=True, text=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d)
@@ -2378,3 +2454,12 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
 def glob_reports(d):
     import glob as _g
     return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))
+
+
+# The entry point stays at the very END of this file. `unittest.main()` collects
+# what is defined ABOVE it, so a class appended later is silently invisible to
+# `python3 tests/test_properties.py` — which is exactly how CI runs it. That
+# happened: 102 of 264 tests were running in CI, and every v2.11 regression
+# added in this release was among the missing ones.
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

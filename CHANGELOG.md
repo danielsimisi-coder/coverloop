@@ -56,8 +56,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Five cold review rounds ran against this change; the gate stopped its own merge
-every time. 26 findings, all verified against the code, and the pattern in them
+Six cold review rounds ran against this change; the gate stopped its own merge
+every time. 32 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -106,6 +106,21 @@ What the rounds did close, in what did ship:
   change. An elevation's recorded reason also survives the ordinary
   `check` -> `attest --approve` flow instead of being folded back into
   "derived".
+- **CI was running 102 of 264 tests.** `unittest.main()` sat above classes
+  appended later in `tests/test_properties.py`, and CI invokes that file
+  directly — so every regression added in this release was invisible to it. The
+  entry point now lives at the end of the file, where what it collects cannot
+  silently shrink.
+- **A repo could weaken its own test gate.** `test_command` is what
+  "tests: pass" *means*, and reviewers only run at L2/L3, so a commit rewriting
+  it to `true` was ordinary L1 source by path: no meaningful tests, no review,
+  `SAFE TO MERGE`. Classifying the config FILE as L2 was tried first and
+  reverted — it sits in the first span of every repo after `init`, so it raised
+  the floor fleet-wide on adoption, which is the over-classification this tool
+  warns about. `check` now compares the current command against the one the
+  last ancestor report actually ran, and raises to L2 when it changed. (Reading
+  the baseline's config instead would never fire: rewriting the command
+  invalidates that evidence by construction, dropping the baseline to the root.)
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress
