@@ -22,6 +22,12 @@ builder reads at session start, and two defects in the test harness itself.
   where it is fail-closed; prose is reserved for what no command can enforce.
   The set of projects the hook applies to is unchanged.
 
+  Two wiring warnings left the hook with it — a missing `.claude/loop.conf`
+  (the Stop-hook test gate dormant) and `docs/MEMORY.md` over its entry cap.
+  Neither was enforcement, and neither is lost: `protocol-selftest` already
+  reports both. They moved from *every session* to *when you ask*, which is
+  where a wiring check belongs.
+
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is ever sent — but
   `log_egress` still wrote `attempt` markers to the operator's **production**
