@@ -56,9 +56,12 @@ builder reads at session start, and two defects in the test harness itself.
 - **The hook and the self-test now have tests.** `tests/test_hooks.sh`
   covers the SessionStart contract — silent outside a protocol project, silent
   for an unmarked `CLAUDE.md`, exactly three lines for each of the three
-  markers, the marker set held closed against additions, and the contract text
-  locked verbatim so any edit to it has to be deliberate — plus the self-test
-  reporting PASS on a match and WARN on a difference or an absent reference. Before this, CI would not have caught
+  markers, the project predicate and the contract text both locked verbatim so
+  widening the hook's scope or changing what it says has to be deliberate —
+  plus all four self-test outcomes: PASS on a match, WARN on a difference, on an
+  unlocatable clone, and on a clone missing the reference hook. The test entry
+  point is pinned structurally too: a test reads this file and fails if anything
+  is defined below `unittest.main()`, which is the historical silent skip. Before this, CI would not have caught
   a broken marker set, a lost line, or a comparison that stopped comparing.
 
 - **`protocol-selftest` no longer reports a current hook as stale.** It parsed

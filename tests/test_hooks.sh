@@ -100,16 +100,22 @@ d="$(mktemp -d)"; printf 'just a readme\n' > "$d/CLAUDE.md"
 out="$( cd "$d" && bash "$SC" 2>/dev/null )"
 [ -z "$out" ] && ok "unmarked CLAUDE.md: silent" || bad "spoke for an unmarked CLAUDE.md"
 
-# 3b) the marker SET is closed. Proving three markers activate it does not stop
-#     a FOURTH being added; `.coverloop/` is the exact drift this repo has
-#     already had once (it triggered one hook and not the other). Widening the
-#     set is a decision, not a side effect — this test makes it visible.
-for nonmarker in .coverloop .claude docs/RISK_MAP.md coverloop.json; do
-  d="$(mktemp -d)"; mkdir -p "$d/docs"
-  case "$nonmarker" in */*) : > "$d/$nonmarker" ;; .*) mkdir -p "$d/$nonmarker" ;; *) : > "$d/$nonmarker" ;; esac
-  out="$( cd "$d" && bash "$SC" 2>/dev/null )"
-  [ -z "$out" ] && ok "not a marker: $nonmarker" || bad "$nonmarker became a trigger"
-done
+# 3b) the marker SET is closed, enforced STRUCTURALLY. Enumerating non-markers
+#     can never be complete — adding `|| [ -f README.md ]` would widen the hook
+#     while a list of four stayed green — so the predicate itself is locked.
+#     `.coverloop/` is the exact drift this repo has had once before.
+# Compared with line-continuations folded and whitespace squeezed, so the check
+# is about WHAT the predicate tests, not how it is wrapped.
+norm() { tr '\n' ' ' | sed 's/\\ / /g; s/  */ /g; s/^ //; s/ $//'; }
+pred="$(sed -n '/^in_protocol_project() {/,/^}/p' "$SC" | norm)"
+expected_pred='in_protocol_project() { { [ -f CLAUDE.md ] && grep -q "PROTOCOL_VERSION\|Operating Contract" CLAUDE.md 2>/dev/null; } || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ] }'
+[ "$pred" = "$expected_pred" ] && ok "project predicate locked" \
+  || { bad "project predicate changed — widening the set must be deliberate"
+       printf '    expected: %s\n    actual:   %s\n' "$expected_pred" "$pred"; }
+# and it still behaves: a repo with only .coverloop/ is not a protocol project
+d="$(mktemp -d)"; mkdir -p "$d/.coverloop"
+out="$( cd "$d" && bash "$SC" 2>/dev/null )"
+[ -z "$out" ] && ok ".coverloop alone: silent" || bad ".coverloop became a trigger"
 
 # 4) the contract text itself, locked verbatim. Substring checks let any
 #    unlisted invariant be dropped, and any name other than one hard-coded
@@ -162,6 +168,15 @@ case "$out" in *"WARN  no protocol repo clone found"*"cannot verify the installe
 case "$out" in *"PASS  session-contract.sh matches"*)
     bad "claimed a match with no clone to compare against" ;;
   *) ok "no locatable clone: claims no match" ;; esac
+
+# a located clone whose reference hook is missing must WARN, not pass
+h="$(mkhome "$stale")"; mkdir -p "$h/protocol-loop" "$h/bin"
+cp "$ST" "$h/bin/protocol-selftest"
+printf 'PROTOCOL_VERSION: v0\n' > "$h/protocol-loop/CLAUDE.md"
+out="$( cd / && HOME="$h" bash "$h/bin/protocol-selftest" 2>&1 )"
+case "$out" in *"WARN"*"has no hooks/session-contract.sh"*)
+    ok "clone without the reference hook: WARN" ;;
+  *) bad "clone without the reference hook: not reported" ;; esac
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]

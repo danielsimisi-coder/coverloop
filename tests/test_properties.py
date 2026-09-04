@@ -1869,6 +1869,44 @@ class NinthRoundRegressions(unittest.TestCase):
         self.assertIn("is_report_artifact(path)", src)
 
 
+class SuiteCollectsItself(unittest.TestCase):
+    """The entry point is load-bearing, not decorative.
+
+    CI runs this file directly, and `unittest.main()` collects only what is
+    defined ABOVE it — so a class appended below is silently skipped. A comment
+    saying so does not prevent it; this does.
+    """
+
+    def test_nothing_is_defined_after_the_entry_point(self):
+        src = open(__file__, encoding="utf-8").read().splitlines()
+        entry = [i for i, ln in enumerate(src) if ln.startswith('if __name__ == "__main__"')]
+        self.assertEqual(len(entry), 1, "exactly one entry point expected")
+        after = src[entry[0]:]
+        offenders = [ln for ln in after
+                     if ln.startswith("class ") or ln.startswith("def ")]
+        self.assertEqual(offenders, [],
+                         "defined below unittest.main(); it will be silently skipped when "
+                         "CI runs this file directly — move it above the entry point")
+
+    def test_the_production_log_tripwire_actually_trips(self):
+        # The guard that keeps the suite off the operator's quota log is itself
+        # worth a test: it compares size and mtime, and must notice a change.
+        probe = os.path.join(_SUITE_LOG_DIR or tempfile.gettempdir(), "tripwire-probe.log")
+        saved = globals()["PROD_EGRESS_LOG"]
+        try:
+            globals()["PROD_EGRESS_LOG"] = probe
+            open(probe, "w").write("one\n")
+            before = _prod_log_fingerprint()
+            self.assertIsNotNone(before)
+            open(probe, "a").write("two\n")
+            self.assertNotEqual(_prod_log_fingerprint(), before,
+                                "a written-to log must not look untouched")
+            os.remove(probe)
+            self.assertIsNone(_prod_log_fingerprint())
+        finally:
+            globals()["PROD_EGRESS_LOG"] = saved
+
+
 # The entry point stays at the very END of this file. `unittest.main()` collects
 # what is defined ABOVE it, so a class appended later is silently invisible to
 # `python tests/test_properties.py` — which is how CI runs it
