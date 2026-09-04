@@ -1,0 +1,51 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "ff2f216fde771b08b8fbe10adf0171b487922eb2",
+  "risk_tier": "L3",
+  "created_at": "2026-09-04T09:45:38Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-09-04T09:48:19Z"
+  },
+  "codex": {
+    "status": "fail",
+    "findings_open": 0,
+    "recorded_at": "2026-09-04T09:48:19Z",
+    "source": "captured",
+    "command": "cd \"$COVERLOOP_REPO\" && codex exec --sandbox read-only -c model_reasoning_effort=xhigh \"You are a cold independent reviewer. You did not write this code. The change under review is in the diff file named by $COVERLOOP_DIFF; read it and any repository file you need. Review it for correctness, security, and fail-open regressions in the gate logic. Cite file:line for every finding and separate real defects from style. Your reply MUST end with a line containing exactly 'VERDICT: PASS' (nothing may block the merge) or exactly 'VERDICT: FAIL'. No other wording is accepted.\" < /dev/null",
+    "exit_code": 0,
+    "output_file": ".coverloop/reports/ff2f216fde771b08b8fbe10adf0171b487922eb2.codex.log",
+    "output_sha256": "4971aee729774b285c965d03795b38f2228824ed326fffcca608e36cc0d1557e",
+    "output_lines": 9024,
+    "ran_at": "2026-09-04T09:57:31Z"
+  },
+  "glm": {
+    "status": "fail",
+    "findings_open": 0,
+    "recorded_at": "2026-09-04T09:57:31Z",
+    "source": "captured",
+    "command": "GLM_MAX_CHARS=400000 GLM_REASONING_EFFORT=high GLM_MAX_COMPLETION_TOKENS=65536 glm-review --mode redteam \"Adversarial cold review of this diff to a fail-closed evidence gate. Hunt fail-open regressions, bypasses of the deterministic risk floor, and evidence that can be forged. Your reply MUST end with a line containing exactly 'VERDICT: PASS' or exactly 'VERDICT: FAIL'. No other wording is accepted.\" < \"$COVERLOOP_DIFF\"",
+    "exit_code": 0,
+    "output_file": ".coverloop/reports/ff2f216fde771b08b8fbe10adf0171b487922eb2.glm.log",
+    "output_sha256": "7774a3d83ffd7196b2cb32aff82e2c26490fca2abcfe29d49aed938d97237409",
+    "output_lines": 58,
+    "ran_at": "2026-09-04T10:00:17Z"
+  },
+  "human_gate": null,
+  "tier_source": "elevated",
+  "floor": {
+    "tier": "L2",
+    "reasons": [
+      "L1: source change (no specific rule matched) (.claude-plugin/plugin.json)",
+      "L0: documentation / styling (inert regardless of name) (.coverloop/reports/04f5efe12307764a75411a370b55aa280ca4da41.codex.log)",
+      "L2: breadth \u2014 38 files changed (>= 10)"
+    ]
+  },
+  "elevation": {
+    "from": "L2",
+    "to": "L3",
+    "reason": "changes the attestation authority itself: reviewer execution, verdict parsing and what SAFE TO MERGE means \u2014 the path classifier reads this as L2 and cannot see that",
+    "at": "2026-09-04T09:45:38Z"
+  }
+}

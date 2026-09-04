@@ -19,20 +19,19 @@ and none by weakening a gate.
   plus a migration note on stderr — so every pre-2.11 caller, including the four
   SHA-pinned CI workflows, keeps passing unchanged.
 
-- **Verification is not authorization.** The gate's baseline walk used to demand
-  a human signature before it would trust an ancestor's evidence. In the fleet
-  that dropped 238 fully reviewed L3 commits from the baseline: their files fell
-  back into every later change's floor, so docs-only commits inherited L3 from
-  the repo root and the gate's floors were systematically inflated. The walk now
-  asks the *verification* question — tier covers the segment, tests passed,
-  required reviews passed — via an explicit `EVIDENCE_VERIFICATION` scope. The
-  human gate is unchanged where it decides anything: `gate` and `check` still
-  fail on it at HEAD, and an ancestor with missing or failing tests or reviews
-  still stops the baseline dead (both directions are regression-locked).
+- **The baseline is unchanged, and deliberately conservative.** The walk still
+  demands a human signature before it will trust an ancestor's evidence. In the
+  fleet that drops 238 fully reviewed L3 commits from the baseline: their files
+  fall back into every later change's floor, so docs-only commits inherit L3
+  from the repo root and the floors are systematically inflated. Accepting
+  merely-VERIFIED evidence there was item 2 of this release, and it is
+  DEFERRED — see the review history below. Over-classification costs review
+  time; the alternative, as five rounds demonstrated, was a gate with a way
+  around it.
 
 - **`coverloop check` — one command at the merge boundary.** Refuse a dirty tree
-  → derive the tier → run the tests → run the reviews that tier requires and
-  capture their transcripts → bind to HEAD → run the real `gate`. It prints
+  → derive the tier → run the reviews that tier requires and capture their
+  transcripts → run the tests → bind to HEAD → run the real `gate`. It prints
   `SAFE TO MERGE` or exactly **one** `STOP: <reason>`, and it is a wrapper over
   the existing primitives with no new authority: `classify`, `attest` and `gate`
   are untouched and still what CI runs. The reviewer lineage is configuration,
@@ -56,8 +55,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Eight cold review rounds ran against this change; the gate stopped its own merge
-every time. 39 findings, all verified against the code, and the pattern in them
+Nine cold review rounds ran against this change; the gate stopped its own merge
+every time. 43 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -141,6 +140,20 @@ What the rounds did close, in what did ship:
   is allowed at every tier, and raising an existing report's tier kept the
   recorded approval — so an L1 sign-off authorized a later L3 elevation whose
   reason did not exist when it was given. Raising the tier now clears it.
+- **Reviewers run BEFORE the repository-controlled tests.** The configured test
+  command is arbitrary code with the operator's privileges, and the reviewers
+  are what it would most like to replace. Hashing the reviewer executable around
+  the test run does not settle it — a fake wrapper restores the original before
+  it exits, and only the first command word is ever resolved — so the reviewers
+  now run first, in their own attest pass, before any repository-controlled code
+  executes. The fingerprints remain as a tripwire for an earlier swap. The
+  residual limit is real: an arbitrary test command can do anything to local
+  state, and a gate is not a sandbox.
+- **The packet is scanned before it leaves, not after.** A reviewer command may
+  ship the diff to an external model, but redaction only ran on the way BACK,
+  when capturing output — by which point a committed credential had already
+  left the machine. The diff is redacted and scanned before any reviewer process
+  starts, and a secret that survives redaction stops the run outright.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

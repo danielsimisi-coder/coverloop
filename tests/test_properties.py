@@ -2537,6 +2537,47 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         self.assertEqual(tv("VERDICT: PASS"), "pass")
         self.assertEqual(tv("VERDICT: PASS\nVERDICT: PASS"), "fail")
 
+    def test_the_reviewers_run_before_the_repo_controlled_tests(self):
+        # The test command is arbitrary code with the operator's privileges,
+        # and the reviewers are what it would most like to replace. Hashing the
+        # executable around the test run does not settle it: a fake wrapper can
+        # restore the original before exiting. So the reviewers go first.
+        order = os.path.join(self.policy_dir, "order.txt")
+        rev = os.path.join(self.policy_dir, "ordered.sh")
+        open(rev, "w").write(f'#!/bin/sh\necho reviewer >> {order}\necho "VERDICT: PASS"\n')
+        os.chmod(rev, 0o755)
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "ordered.sh", "glm": "ordered.sh"})
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["test_command"] = f"echo tests >> {order}"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            self._cl(d, "check")
+            steps = open(order).read().split()
+            self.assertEqual(steps[-1], "tests", steps)
+            self.assertIn("reviewer", steps[:-1], steps)
+
+    def test_a_secret_in_the_diff_never_reaches_a_reviewer(self):
+        # Redaction used to happen only on the way BACK, when capturing output
+        # — by which point the packet had already left the machine.
+        leaked = os.path.join(self.policy_dir, "leaked.txt")
+        rev = os.path.join(self.policy_dir, "leaky.sh")
+        open(rev, "w").write(f'#!/bin/sh\ncat "$COVERLOOP_DIFF" > {leaked}\necho "VERDICT: PASS"\n')
+        os.chmod(rev, 0o755)
+        secret = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4"
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "leaky.sh", "glm": "leaky.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")   # L3
+            self._write(d, "src/client.ts", f'const k = "{secret}";\n')
+            run("git", "add", "-A"); run("git", "commit", "-qm", "oops")
+            self._cl(d, "check")
+            self.assertTrue(os.path.exists(leaked), "the reviewer should have run")
+            packet = open(leaked, encoding="utf-8").read()
+            self.assertNotIn(secret, packet, "the raw key reached the reviewer")
+            self.assertIn("migrations/1.sql", packet, "the rest of the diff is intact")
+
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d)

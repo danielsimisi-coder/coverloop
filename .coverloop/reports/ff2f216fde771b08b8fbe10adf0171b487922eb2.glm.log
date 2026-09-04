@@ -1,0 +1,58 @@
+## Adversarial Cold Review — Coverloop v2.11.0
+
+### 1. Verdict: PASS WITH RISKS
+
+### 2. P0 blockers
+None found. No direct evidence of a fail-open regression, deterministic floor bypass, or forgeable evidence path that merges unsafe code.
+
+### 3. P1 serious issues
+
+**P1-1: `check` calls `evaluate()` directly, not `cmd_gate()` — claim/implementation mismatch.**
+The code and docs repeatedly state "run the real `gate`" and "gate — the real one, unchanged. Its checks are the final word." But `cmd_check` constructs a gate `Namespace` `g` and then calls `evaluate(report, tier, files, ...)` directly. `g` is mostly unused (only `g.base` feeds `changed_files`). Any future check added inside `cmd_gate` (e.g., signed-commit enforcement, stale-evidence detection, report-shape guards) will NOT be picked up by `check` automatically. This is a maintenance hazard that can silently diverge the "one command" from the "real gate." Not a current fail-open, but the architectural seam is real and the docs overstate what was implemented.
+
+**P1-2: `--force --tier <below-floor>` writes a downgraded `risk_tier` to the report.**
+```python
+final_tier = derived if not getattr(args, "force", False) or not requested else requested
+```
+With `--force --tier L0` on a migration, `final_tier = L0` and `tier_source = "forced"`. The gate recomputes its own floor and takes MAX, and `_validated_baseline` skips under-declaring reports, so this does not currently bypass `gate` or `check`. But the report on disk now says `risk_tier: L0` for a migration. Any tool or human that reads the report's `risk_tier` without re-deriving the floor sees a lie. The `--force` escape hatch is documented as "recorded, not hidden," but the recorded value is misleading. Consider writing `risk_tier` as the MAX(floor, requested) even under force, and recording the attempted downgrade separately.
+
+### 4. P2 improvements
+
+**P2-1: `_VERDICT_FOOTER` allows up to 10 purely-numeric lines after `VERDICT: PASS`.**
+`[\d,.]+` matches lines like `0`, `1`, `151,117`. A reviewer (or a malicious test command that appends to the transcript) could emit `VERDICT: PASS\n0\n0\n...` and still pass. Real risk is low (a second `VERDICT:` line would trigger the `len(markers) != 1` fail), but the footer allowance is broader than the stated intent ("tokens used" footers only).
+
+**P2-2: `reviewer_policy` token check is a word-split heuristic.**
+The code acknowledges this. Constructs like `sh <scripts/reviewer` bypass the token check (the `<` prefix makes the token non-resolvable). The scratch-dir + PATH-filter defense is what actually catches this class, which is sound, but the token check itself gives false confidence. Document it as defense-in-depth, not a guarantee.
+
+**P2-3: `_reviewer_binary_fingerprints` only fingerprints the first command word.**
+For `sh scripts/reviewer`, it fingerprints `/bin/sh`, not `scripts/reviewer`. The in-repo check catches the script path separately, and the binary fingerprint catches a swapped `codex`/`glm` wrapper. But a test command that overwrites a non-command-word script (e.g., a config file the reviewer reads) would not be detected. Acceptable given the stated scope ("closes that swap"), but worth noting.
+
+**P2-4: `test_command` weakening can become the new baseline if reviewed and approved.**
+If a commit changes `test_command` to `true`, it raises to L2 and gets reviewed. If the reviewer approves, that commit becomes a validated baseline. Subsequent commits compare against `"true"` and do not re-raise. This is by design ("the reviewer is the gate"), but it means a single bad review permanently weakens the test gate for all successors. Consider recording the `test_command` hash in the report and flagging if the current command matches a known-weak pattern.
+
+**P2-5: Legacy `--tier` above floor works without `--reason`.**
+This is an explicit compatibility concession for the four SHA-pinned CI workflows. It records `"legacy --tier pin — no reason given"` and prints a migration note. This is an elevation (upward only), so it is stricter, not weaker. But it means the "elevations require a reason" rule has a permanent exception. Acceptable for compatibility; flag for future removal.
+
+### 5. Missing tests / verification
+
+- **No test for `--force` downgrade behavior.** The fact that `--force --tier L0` on a migration writes `risk_tier: L0` to disk is not asserted. A test should verify that `gate` still fails on such a report and that `_validated_baseline` rejects it.
+- **No test for `check` with `--base` and a root-commit migration.** The `--base` path skips the `prior_validated` inclusion logic. The packet-integrity test (`test_the_review_packet_is_a_valid_patch_over_the_whole_span`) does not use `--base`.
+- **No test for `check` when `cmd_gate` would add a check that `evaluate` does not.** This is the P1-1 gap — there is no regression lock ensuring `check` and `gate` stay in sync.
+- **No test for the `--force` + `--raise-tier` interaction.** Can `--force` lower an elevated tier back to the floor? The code path is unclear.
+- **No test for concurrent `check` runs** (the `_attest_lock` is acquired, but `check` also writes reports outside the lock during verdict resolution).
+
+### 6. Likely false positives / what to ignore
+
+- **"The baseline walk no longer requires human approval"** — This was the deferred "verification is not authorization" change. The code explicitly keeps `require_captured=True` and full evaluation (including human approval) for baseline advancement. The CHANGELOG and `docs/GATE.md` both document the deferral. Not a regression.
+- **"`attest` no longer refuses below-floor tiers"** — It still refuses; the refusal is just in a different code path (`tier_max(requested, derived) != requested`). The logic is correct.
+- **"Legacy `--tier` is a bypass"** — It only works above the floor and is recorded as an elevation. Not a bypass.
+- **"`check` doesn't run the real gate"** — Functionally, `evaluate` is the core of `cmd_gate`, and `check` replicates the wrapper logic (floor, human-gate-scope). The P1-1 concern is about future divergence, not a current bypass.
+
+### 7. Suggested next action
+
+Ship as-is. The diff is conservative, well-tested (39 findings closed, 8 review rounds), and explicitly defers the one change that produced fail-open regressions. Before the next release:
+1. Add a regression test that `check` and `gate` produce the same verdict on the same evidence (P1-1 sync lock).
+2. Add a test for `--force` downgrade on a migration (P1-2).
+3. Consider having `check` call `cmd_gate` directly instead of `evaluate`, to eliminate the divergence seam entirely.
+
+VERDICT: PASS

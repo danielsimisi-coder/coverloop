@@ -40,6 +40,7 @@ evidence); 2 = usage or environment error.
 import argparse
 import atexit
 import contextlib
+import copy
 import datetime
 import hashlib
 import itertools
@@ -2252,19 +2253,20 @@ _VERDICT_MARKER = re.compile(r"^[ \t]*VERDICT:.*$", re.M | re.I)
 # verdict means the reviewer kept talking, and the marker was not its last word.
 _VERDICT_FOOTER = re.compile(
     r"^(tokens?[ _]used\s*:?\s*[\d,.]*\s*[kmb]?|[\d,.]+|[-=_*]{3,})$", re.I)
+_VERDICT_FOOTER_MAX = 3   # a CLI footer, not room for a paragraph
 _VERDICT_CANONICAL_PASS = "VERDICT: PASS"
 _VERDICT_CANONICAL_FAIL = "VERDICT: FAIL"
 
 
-def transcript_verdict(text, tail_lines=10):
+def transcript_verdict(text):
     """Return "pass" only for an unambiguous canonical PASS marker at the end.
 
     Three conditions, all fail-closed:
       * at least one `VERDICT:` line exists;
       * EVERY such line is byte-for-byte "VERDICT: PASS" after trimming — no
         "PASS WITH RISKS", no lowercase, no "APPROVE";
-      * the last one is among the final `tail_lines` non-empty lines, so it is
-        the reviewer's closing word rather than something near the top.
+      * nothing but a short CLI footer follows it, so it is the reviewer's
+        closing word rather than something near the top.
 
     The whole transcript is read, not a tail window: a review that says FAIL and
     then emits 5 KB of appendix would otherwise have its failure scroll out of
@@ -2285,7 +2287,8 @@ def transcript_verdict(text, tail_lines=10):
         # neither is a verdict this should resolve in the change's favour.
         return "fail"
     trailing = [body for _i, body in live[markers[-1][0] + 1:]]
-    if len(trailing) > tail_lines or any(not _VERDICT_FOOTER.match(t) for t in trailing):
+    if (len(trailing) > _VERDICT_FOOTER_MAX
+            or any(not _VERDICT_FOOTER.match(t) for t in trailing)):
         return "fail"          # the reviewer kept talking; the marker was not its last word
     return "pass"
 
@@ -2612,6 +2615,22 @@ def cmd_check(args):
     # invalid patch: `git apply` reports "corrupt patch at line N", so a
     # patch-based reviewer cannot reconstruct the change at all.
     diff_text = "\n".join(part for part in parts if part)
+    # A reviewer command may ship this packet to an external model. Redaction
+    # used to happen only on the way BACK, when capturing output — by which
+    # point a committed credential had already left the machine. Scan and
+    # redact before any reviewer process starts, and refuse outright if the
+    # scan still finds a secret in the redacted text: a privacy gate that
+    # forwards the packet anyway is not a privacy gate.
+    diff_text = redact_secrets(diff_text)
+    if _secret is not None:
+        try:
+            found = _secret.scan(diff_text)
+        except Exception:
+            found = ["scan failed"]
+        if found:
+            _stop(f"the change contains what looks like a secret ({', '.join(sorted(set(found))[:3])}) "
+                  f"and reviewers may send it to a model — remove it from the diff, rotate the "
+                  f"credential, and re-run")
     with open(diff_file, "w", encoding="utf-8", errors="replace") as fh:
         fh.write(diff_text + ("" if diff_text.endswith("\n") else "\n"))
     review_env = {k: v for k, v in os.environ.items()
@@ -2680,19 +2699,39 @@ def cmd_check(args):
         + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:
         say(f"  - {r}")
+    # ORDER MATTERS. The configured test command is arbitrary code running with
+    # the operator's privileges; the reviewers are the thing it would most like
+    # to replace. Hashing the reviewer executable around the test run does not
+    # settle it — a fake wrapper can restore the original before it exits, and
+    # only the first command word is ever resolved. So the reviewers run FIRST,
+    # in their own attest pass, before any repository-controlled code executes
+    # in this invocation. The fingerprints stay as a tripwire for a swap that
+    # happened earlier. The residual limit is real and documented: an arbitrary
+    # test command can do anything to local state, and a gate is not a sandbox.
+    def _attest(ns, what):
+        try:
+            with _attest_lock(root):
+                return _cmd_attest_locked(ns, root)
+        except SystemExit as exc:
+            # attest reports usage errors (no test_command configured, a
+            # reviewer command that timed out) with fail_usage -> exit 2 and no
+            # STOP line. `check` promises exit 1 and exactly one STOP, so
+            # translate rather than letting a second exit convention leak out.
+            if exc.code:
+                _stop(f"attest could not run the {what} (see the error above)")
+            raise
+
     before = _reviewer_binary_fingerprints({r: cmds[r] for r in need if cmds.get(r)},
                                            review_env)
-    try:
-        with _attest_lock(root):
-            rc = _cmd_attest_locked(a, root)
-    except SystemExit as exc:
-        # attest reports usage errors (no test_command configured, a reviewer
-        # command that timed out) with fail_usage -> exit 2 and no STOP line.
-        # `check` promises exit 1 and exactly one STOP, so translate rather than
-        # letting a second exit convention leak out of the boundary command.
-        if exc.code:
-            _stop("attest could not run (see the error above)")
-        raise
+    reviewer_ns = copy.copy(a)
+    reviewer_ns.tests = False
+    test_ns = copy.copy(a)
+    test_ns.raise_tier, test_ns.reason = None, None
+    for role in need:
+        setattr(test_ns, role, None)
+        setattr(test_ns, f"{role}_run", None)
+    rc = _attest(reviewer_ns, "reviews") if need else 0
+    rc = _attest(test_ns, "tests") or rc
     report, why, malformed = find_report(root, sha)
     if report is None:
         print(f"STOP: attest did not produce a report — {why}", file=sys.stderr)

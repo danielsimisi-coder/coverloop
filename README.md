@@ -165,8 +165,8 @@ STOP: L3 requires a named human approval — `coverloop attest --approve --appro
 {
   "reviewers": { "primary": "codex", "secondary": "glm" },
   "reviewer_commands": {
-    "codex": "codex exec --sandbox read-only ... end with exactly 'VERDICT: PASS' or 'VERDICT: FAIL'",
-    "glm":   "git diff origin/main...HEAD | glm-redteam \"... end with exactly 'VERDICT: PASS' ...\""
+    "codex": "codex exec --sandbox read-only ... read $COVERLOOP_DIFF ... end with exactly 'VERDICT: PASS'",
+    "glm":   "glm-redteam \"... end with exactly 'VERDICT: PASS' ...\" < \"$COVERLOOP_DIFF\""
   }
 }
 ```
