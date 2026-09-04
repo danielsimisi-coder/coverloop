@@ -70,11 +70,12 @@ of this release.
 support a marketplace plugin install. It looks for reviewer CLIs under `~/bin`
 and hooks under `~/.claude/hooks` (registered in `~/.claude/settings.json`),
 while a plugin install puts `bin/` on `PATH` and merges hooks from the plugin
-manifest — so it reports both as missing. The hook comparison does prefer
-`$CLAUDE_PLUGIN_ROOT` when that variable is set, but Claude Code exports it to
-plugin subprocesses, **not** to a shell you run the self-test from, so in normal
-use it is unset. The plugin-root preference and the file comparison are new
-here; the marketplace limitation itself predates the release and is left alone.
+manifest — so it reports both as missing. Reading `$CLAUDE_PLUGIN_ROOT` to find
+the active hook was tried during review and removed: Claude Code exports it to
+plugin subprocesses rather than to a shell, so it is unset in normal use, and
+when it is set the reference clone and the active hook can come from two
+different installations. Only the banner-to-file comparison is new here; the
+marketplace limitation predates the release and is left alone.
 
 **Two larger changes were built, reviewed, and deliberately not shipped.**
 `coverloop check` (a one-command merge boundary) and the derived risk tier each

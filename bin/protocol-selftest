@@ -35,13 +35,13 @@ if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this u
 if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.7 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
 
 # ---------- machine: hooks installed + wired ----------
-# A marketplace install runs the hooks from ${CLAUDE_PLUGIN_ROOT}/hooks (see
-# .claude-plugin/plugin.json); a manual install puts them in ~/.claude/hooks.
-# Checking only the latter could compare an inactive legacy copy while the
-# active plugin hook went unexamined.
-HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/hooks}"
-[ -n "$HOOKS_DIR" ] && [ -d "$HOOKS_DIR" ] || HOOKS_DIR="$HOME/.claude/hooks"
-MISSING=""
+# Manual-install layout. A marketplace plugin install runs its hooks from
+# ${CLAUDE_PLUGIN_ROOT}/hooks instead, which this script does not inspect — see
+# the known limitation in CHANGELOG.md. Reading CLAUDE_PLUGIN_ROOT here was
+# tried and removed: Claude Code exports it to plugin subprocesses rather than
+# to a shell, so it is unset in normal use, and when it IS set the reference
+# clone and the active hook can come from two different installations.
+HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
 for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
   [ -f "$HOOKS_DIR/$h" ] || MISSING="$MISSING $h"
 done

@@ -14,6 +14,11 @@ it computed and why — and refuse anything below that floor.
 `--raise-tier <T> --reason "..."` would elevate **upward only**, for risk a path
 classifier cannot see, writing the reason into the report.
 
+Compatibility was kept, and matters for reading the branch: the legacy `--tier`
+pin still works at or above the floor (recorded as a caller-declared tier), and
+`--force` can still record a tier below it (recorded as `forced`), with `gate`
+recomputing the real floor either way.
+
 The motivation is measured and still stands: across nine repos hand-declared
 tiers were wrong in both directions — 35% too high on validated baselines, and
 **47% of one repo's reports declared L2 on segments whose floor was L3**. A tier

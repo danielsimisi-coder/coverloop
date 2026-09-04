@@ -26,8 +26,10 @@ eight-step ceremony around `attest` was what people skipped.
 
 ## Why it is not in this release
 
-Twelve cold review rounds (Codex at xhigh, GLM red-team), and **zero rounds
-with no new P0/P1**. `CHANGELOG.md` here carries a summary; the
+Twelve cold Codex review rounds at xhigh, and **zero rounds with no new
+P0/P1**. The GLM red-team was attempted throughout but failed closed in four of
+the first five rounds — a truncated reply, an exhausted daily cap, an oversized
+packet twice — and only participated from round eight onward. `CHANGELOG.md` here carries a summary; the
 round-by-round detail lives in the preserved branch — its own version of
 `CHANGELOG.md` and, findings-by-round, its commit messages.
 
