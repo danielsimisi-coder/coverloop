@@ -22,8 +22,21 @@ coverloop gate  [--min-tier L0..L3]     # verify; exit 0 = pass, 1 = missing/fai
 Evidence lives in `.coverloop/reports/<HEAD-sha>.json` — one report per
 commit, **committed with the change** so it is visible in the PR.
 
+The **tier is derived, not declared**: `attest` classifies the same paths `gate`
+would and records `tier_source` (`derived`), the `floor` it computed and why.
+`--raise-tier <T> --reason "<why the classifier under-reads this>"` elevates
+**upward only** and records the reason; anything below the floor is refused
+(exit 2), as is downgrading an existing report without `--force`. The legacy
+`--tier` pin still works above the floor — it is recorded as an elevation with
+an explicit "no reason given" marker and prints a migration note — so every
+pre-2.11 caller, including the SHA-pinned CI workflows, keeps passing unchanged.
+
+An elevation also cannot be waived by the classifier that could not see the risk
+in the first place: under `--human-gate-scope irreversible`, an elevated tier
+always requires the named human.
+
 ```bash
-coverloop attest --tier L2 --tests            # runs config's test_command, records pass/fail
+coverloop attest --tests                      # runs config's test_command, records pass/fail
 coverloop attest --codex pass                  # record the diff-review verdict (self-attested)
 coverloop attest --codex pass \                # STRONGER: run the reviewer and capture its
   --codex-run "codex exec --sandbox read-only '...'"   # output (hashed, committed as evidence)

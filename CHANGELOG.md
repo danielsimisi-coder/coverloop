@@ -2,6 +2,56 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-09-04 — the tier stops being a declaration (PROTOCOL v2.11.0)
+
+Two changes, both of which can only ever make the gate stricter.
+
+- **The tier is derived, not declared.** `attest` no longer takes the tier from
+  the caller: it classifies the same paths `gate` would, with the same baseline
+  semantics, and records `tier_source`, the computed `floor` and its reasons.
+  Below the floor is refused (exit 2). Across nine repos hand-declared tiers
+  were wrong in both directions — 35% too high on validated baselines, and 47%
+  of one repo's reports declared L2 on segments whose floor was L3.
+  `--raise-tier <T> --reason "..."` elevates **upward only** and writes the
+  reason into the report, for the risk a path classifier cannot see: a milestone
+  gate covering many migrations, a config file that steers auth. An elevation
+  cannot then be waived by that same classifier — under
+  `--human-gate-scope irreversible` an elevated tier always requires the named
+  human — an approval recorded at a lower tier is cleared when the tier is
+  raised, and the elevation's reason survives later attests instead of being
+  folded back into "derived". The legacy `--tier` pin still works above the
+  floor, recorded as an elevation with an explicit "no reason given" marker and
+  a migration note on stderr, so every pre-2.11 caller — including the
+  SHA-pinned CI workflows — keeps passing unchanged.
+
+- **The session-contract hook is seven lines of invariants.** It runs at every
+  session start and after every compaction, and at 6 KB it turned the builder
+  into a process manager: classify every task, pick a model, run two reviewers,
+  re-attest, keep a ledger, end every reply with a model line — measured at **1%
+  compliance** for the last of those. It now says: build normally, run the
+  relevant tests, run the gate before merge/deploy, never lower the floor, never
+  self-approve, never bypass red, never send secrets or PII. Enforcement lives
+  in code, where it is fail-closed; prose is reserved for what no command can
+  enforce.
+
+`classify`, `attest` and `gate` keep their released behaviour otherwise.
+
+**`coverloop check` — the one-command merge boundary — is NOT in this release.**
+It was built and then deliberately pulled: twelve cold review rounds, 52
+verified findings, and no round without a new P0/P1. One mechanism ate its own
+fixes across five consecutive rounds, and one guard ("the reviewer command must
+not be repository-controlled") could not be completed as a static check of a
+shell string. The work, its tests and the full finding history are preserved on
+`followup/coverloop-check-audit` (tag `audit/check-12-rounds`), and
+[`docs/DESIGN-NOTE-check.md`](docs/DESIGN-NOTE-check.md) carries forward the
+trust model the next attempt should start from rather than rediscover.
+
+Two test-harness defects found along the way are fixed here because they affect
+every future release: the suite was writing `attempt` markers to the operator's
+**production** egress log — which the daily spend cap counts, so a full run
+burned ~30 real review slots — and `unittest.main()` sat above classes appended
+later in `tests/test_properties.py`, so **CI was running 102 of 264 tests**.
+
 ## 2026-08-22 — the baseline earns its trust, and the loop closes (PROTOCOL v2.10.8)
 
 A scoped review of v2.10.7's own fix commit found five defects in it. All five

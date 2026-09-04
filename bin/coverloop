@@ -1240,32 +1240,25 @@ def _cmd_attest_locked(args, root):
                 report[rname] = dict(e, output_file=new_rel)
             except OSError:
                 pass
-    if report is None:
-        if not args.tier:
-            fail_usage("no report for HEAD yet — pass --tier L0|L1|L2|L3 to create one")
-        report = new_report(sha, args.tier)
-    elif args.tier:
-        # Tier is MONOTONIC: attest may only RAISE it, never silently downgrade
-        # an existing report (which would drop its evidence requirements). To
-        # lower it, re-attest from scratch (--force) after removing the report.
-        cur = report.get("risk_tier")
-        raised = tier_max(cur, args.tier)
-        if raised != args.tier and not getattr(args, "force", False):
-            fail_usage(f"refusing to downgrade risk_tier {cur} -> {args.tier}; a lower tier "
-                       f"drops evidence requirements. Re-attest with --force to override.")
-        report["risk_tier"] = args.tier if getattr(args, "force", False) else raised
-    if report["risk_tier"] not in TIERS:
-        fail_usage(f"invalid tier {report['risk_tier']!r}")
-
-    # Enforce the deterministic floor HERE, not only at gate time. Without this,
-    # `attest --tier L0` on a migration recorded L0 unchecked, and a LATER gate
-    # call could end up trusting that L0 report as a legitimate baseline for its
-    # OWN incremental scan — silently re-exporting the unvalidated claim forever
-    # after, even though nobody ever actually checked it against the floor. Once
-    # attest itself refuses to under-declare, any report reaching disk already
-    # satisfies tier >= floor(baseline..this commit), so gate can safely trust
-    # committed evidence as a real baseline instead of re-walking full history
-    # on every call.
+    # ------------------------------------------------------------------ tier
+    # The tier is DERIVED, not declared. Across nine repos, hand-declared tiers
+    # were wrong in both directions — 35% too high on validated baselines, and,
+    # far worse, 47% of Alex Switchboard reports declared L2 on segments whose
+    # floor was L3. So: with no --tier, the deterministic floor IS the tier, and
+    # it is computed with the SAME function and the SAME baseline semantics the
+    # gate uses (_gate_floor_paths), so attest and gate can never disagree.
+    #
+    # Two things the floor cannot see are still allowed, and only upward:
+    #   --raise-tier L2|L3 --reason "..."   semantic elevation with a durable,
+    #                                       committed reason (a milestone gate
+    #                                       covering fourteen migrations; a
+    #                                       config file that steers auth). The
+    #                                       reason is recorded in the report.
+    #   --tier (legacy)                     kept for compatibility; treated as a
+    #                                       floor pin. Above the derived floor it
+    #                                       needs --reason like --raise-tier.
+    # Nothing lowers the floor. --force only bypasses the "git cannot answer"
+    # refusal and is recorded, never hidden.
     try:
         floor_paths, floor_unknown = _gate_floor_paths(root, args, report, sha)
     except Exception:
@@ -1273,24 +1266,103 @@ def _cmd_attest_locked(args, root):
     if floor_unknown and not getattr(args, "force", False):
         # Skipping the check when git could not answer was a fail-open: break
         # `git diff` and attest happily recorded L0 over a migration (probed
-        # directly). If the floor cannot be computed, nothing can vouch for the
-        # declared tier — refuse before writing. --force still works and is not
-        # hidden: gate computes its own floor and fails closed on unknown too.
+        # directly). If the floor cannot be computed, nothing can vouch for any
+        # tier — refuse before writing. --force still works and is not hidden:
+        # gate computes its own floor and fails closed on unknown too.
         fail_usage("cannot determine the changed paths for the floor check "
                    "(is git responding?). Refusing to record an unvalidated tier; "
                    "pass --force to record anyway — the gate will still compute "
                    "its own floor independently.")
+    auto_floor, auto_reasons = ("L0", [])
     if not floor_unknown and floor_paths:
         auto_floor, auto_reasons = classify_paths(floor_paths, BREADTH_L2_FILES)
-        raised = tier_max(report["risk_tier"], auto_floor)
-        if raised != report["risk_tier"] and not getattr(args, "force", False):
-            reasons_str = "; ".join(auto_reasons[:4])
+
+    raise_to = getattr(args, "raise_tier", None)
+    legacy = getattr(args, "tier", None)
+    reason = (getattr(args, "reason", None) or "").strip()
+    requested = tier_max(raise_to, legacy)  # the highest thing the caller asked for
+    if raise_to and legacy and raise_to != legacy:
+        fail_usage("--raise-tier and --tier disagree; pass one (prefer --raise-tier --reason)")
+    if reason and not requested:
+        fail_usage("--reason only accompanies --raise-tier (or the legacy --tier)")
+
+    existing = report.get("risk_tier") if report is not None else None
+    derived = tier_max(auto_floor, existing)   # never below what is already recorded
+    if requested and tier_max(requested, derived) != requested and not getattr(args, "force", False):
+        # Asked for LESS than the derived tier. Two distinct reasons, named
+        # separately because the fix differs: the recorded report already
+        # carries a higher tier (a DOWNGRADE — re-attest from scratch with
+        # --force if that is truly intended), or the changed paths themselves
+        # floor higher (the under-declaration the fleet data showed, L2 on an
+        # L3 segment — nothing lowers that).
+        flag = 'raise-tier' if raise_to else 'tier'
+        if existing and tier_max(existing, requested) != requested and tier_max(existing, auto_floor) == existing:
             fail_usage(
-                f"--tier {report['risk_tier']} is below the deterministic floor "
-                f"{auto_floor} for the changes since the last evidence ({reasons_str}). "
-                f"Re-attest at --tier {auto_floor} or higher, or pass --force to override "
-                f"(recorded, not hidden — the gate will still see the true floor).")
-        report["risk_tier"] = raised
+                f"refusing to downgrade risk_tier {existing} -> {requested}; a lower tier drops "
+                f"evidence requirements. Re-attest with --force to override.")
+        fail_usage(
+            f"--{flag} {requested} is below the deterministic floor {derived} for the changes "
+            f"since the last verified evidence ({'; '.join(auto_reasons[:4])}). The floor "
+            f"cannot be lowered. Omit the flag to record the derived tier {derived}.")
+    if requested and tier_max(requested, derived) == requested and requested != derived:
+        # Elevation above the floor: allowed, upward only, and recorded with a
+        # reason that survives in the committed report. The NEW interface
+        # (--raise-tier) insists on --reason: an elevation nobody can explain is
+        # indistinguishable from a habit, and habits are what made one repo
+        # declare L3 on 100% of its changes. The LEGACY flag (--tier) is kept
+        # working for every existing script and CI job: above the floor it is
+        # accepted, but the report says plainly that no reason was given, and
+        # stderr points at the better flag. Compatibility never means silence.
+        if raise_to and not reason:
+            fail_usage(
+                f"elevating {derived} -> {requested} above the deterministic floor requires "
+                f"--reason \"<why the classifier cannot see this risk>\" (recorded in the "
+                f"report). Omit the flag to record the derived tier {derived}.")
+        if not reason:
+            reason = "legacy --tier pin — no reason given"
+            print(f"note: --tier {requested} elevates above the derived floor {derived} without a "
+                  f"reason; recorded as such. Prefer `--raise-tier {requested} --reason \"...\"`.",
+                  file=sys.stderr)
+        final_tier = requested
+        elevation = {"from": derived, "to": requested, "reason": reason, "at": now_utc()}
+        tier_source = "elevated"
+    else:
+        final_tier = derived if not getattr(args, "force", False) or not requested else requested
+        elevation = None
+        tier_source = "derived" if not (requested and getattr(args, "force", False)) else "forced"
+
+    if report is None:
+        report = new_report(sha, final_tier)
+    else:
+        if tier_max(existing, final_tier) != final_tier and not getattr(args, "force", False):
+            fail_usage(f"refusing to downgrade risk_tier {existing} -> {final_tier}; a lower tier "
+                       f"drops evidence requirements. Re-attest with --force to override.")
+        report["risk_tier"] = final_tier
+    prior_elevation = report.get("elevation") if report else None
+    if (not elevation and prior_elevation and tier_source == "derived"
+            and prior_elevation.get("to") == report["risk_tier"]):
+        # The tier is still the elevated one — it only looks "derived" now
+        # because `derived` folds in the existing report's tier. Dropping the
+        # provenance here erased the recorded reason on the ordinary
+        # `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
+        elevation, tier_source = prior_elevation, "elevated"
+    if (existing and report.get("human_gate") and tier_max(existing, final_tier) == final_tier
+            and existing != final_tier):
+        # The approval on record was given for a LESSER claim. Carrying it into
+        # a raised tier let an L1 sign-off authorize an L3 elevation whose
+        # reason did not exist when it was given.
+        report.pop("human_gate", None)
+        print(f"note: risk_tier {existing} -> {final_tier} clears the recorded human "
+              f"approval; it was given for the lower tier. Re-approve if still intended.",
+              file=sys.stderr)
+    report["tier_source"] = tier_source
+    report["floor"] = {"tier": auto_floor, "reasons": auto_reasons[:8]}
+    if elevation:
+        report["elevation"] = elevation
+    elif "elevation" in report and tier_source == "derived":
+        report.pop("elevation", None)
+    if report["risk_tier"] not in TIERS:
+        fail_usage(f"invalid tier {report['risk_tier']!r}")
 
     did = []
 
@@ -1360,8 +1432,10 @@ def _cmd_attest_locked(args, root):
         }
         did.append(f"human_gate=approved({args.approver.strip()})")
 
-    if not did and not args.tier:
-        fail_usage("nothing to attest — pass --tests, --codex, --glm, --approve, or --tier")
+    if not did and not args.tier and not getattr(args, "raise_tier", None):
+        # A bare `coverloop attest` is now meaningful: the tier is DERIVED, so
+        # recording it (with the floor and why) is itself the attestation.
+        did.append(f"tier={report['risk_tier']}[{report.get('tier_source', 'derived')}]")
 
     path = save_report(root, report)
     rel = os.path.relpath(path, root)
@@ -2043,7 +2117,13 @@ def cmd_gate(args):
         _changed = auto_paths if not unknown else []
         # No visible change set (a bare HEAD check) is NOT evidence of safety:
         # fall back to demanding the human.
-        human_required = (not _changed) or any(IRREVERSIBLE_RE.search(p) for p in _changed)
+        # An ELEVATED tier is a statement that the classifier under-reads this
+        # change. Letting that same classifier then grant the exemption made
+        # `--raise-tier L3 --reason "this config steers auth"` merge with no
+        # human at all.
+        _elevated = (report or {}).get("tier_source") == "elevated"
+        human_required = (_elevated or (not _changed)
+                          or any(IRREVERSIBLE_RE.search(p) for p in _changed))
 
     verdict, checks = evaluate(report, tier, files,
                                human_gate_required=human_required,
@@ -2158,7 +2238,18 @@ def main(argv=None):
     pc.set_defaults(fn=cmd_classify)
 
     pa = sub.add_parser("attest", help="record evidence for the HEAD commit")
-    pa.add_argument("--tier", choices=TIERS, help="risk tier of this change (monotonic — attest can only raise it)")
+    pa.add_argument("--tier", choices=TIERS,
+                    help="LEGACY floor pin. The tier is now DERIVED from the changed paths "
+                         "with the gate's own floor semantics; omit this. Kept for "
+                         "compatibility: below the floor it is refused, above it it needs "
+                         "--reason (see --raise-tier)")
+    pa.add_argument("--raise-tier", dest="raise_tier", choices=TIERS,
+                    help="elevate ABOVE the derived floor for a risk the path classifier "
+                         "cannot see (a milestone gate covering many migrations; a config "
+                         "file that steers auth). Upward only; requires --reason; both are "
+                         "recorded in the report")
+    pa.add_argument("--reason", help="why the classifier under-reads this change "
+                                     "(recorded with --raise-tier)")
     pa.add_argument("--force", action="store_true", help="allow lowering an existing report's risk tier (dangerous)")
     pa.add_argument("--tests", action="store_true", help="run the configured test command and record the result")
     pa.add_argument("--codex", choices=["pass", "fail"], help="record the Codex diff-review verdict")

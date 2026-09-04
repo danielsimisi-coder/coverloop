@@ -27,6 +27,56 @@ import glm_secret_filter as F
 
 SEED = 20260711  # fixed -> deterministic, reproducible failures
 
+# ---------------------------------------------------------------------------
+# The suite drives the REAL reviewer CLIs (that is the point of the egress
+# tests: they assert on the exact bytes that would leave the machine). Their
+# do_request is stubbed, so nothing is ever sent — but log_egress still wrote
+# `attempt` markers to the PRODUCTION egress log, and the daily spend cap counts
+# exactly those markers. A full suite run therefore burned ~30 slots of the
+# operator's real review budget, and after a few runs every real GLM review that
+# day was refused. That is how a test suite silently consumed production quota.
+#
+# The whole module runs against a temporary log, and tearDownModule FAILS if the
+# production log was touched at all — an accidental production reviewer
+# invocation is a test failure, not a surprise on the invoice.
+# ---------------------------------------------------------------------------
+PROD_EGRESS_LOG = os.path.join(os.path.expanduser("~"), ".config", "openrouter", "egress.log")
+_SUITE_LOG_DIR = None
+_PROD_LOG_BEFORE = None
+
+
+def _prod_log_fingerprint():
+    try:
+        st = os.stat(PROD_EGRESS_LOG)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def setUpModule():
+    global _SUITE_LOG_DIR, _PROD_LOG_BEFORE
+    _PROD_LOG_BEFORE = _prod_log_fingerprint()
+    _SUITE_LOG_DIR = tempfile.mkdtemp(prefix="coverloop-suite-egress-")
+    os.environ["COVERLOOP_EGRESS_LOG"] = os.path.join(_SUITE_LOG_DIR, "egress.log")
+
+
+def tearDownModule():
+    import shutil as _sh
+    os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+    if _SUITE_LOG_DIR:
+        _sh.rmtree(_SUITE_LOG_DIR, ignore_errors=True)
+    if _prod_log_fingerprint() != _PROD_LOG_BEFORE:
+        raise AssertionError(
+            f"the test suite wrote to the PRODUCTION egress log ({PROD_EGRESS_LOG}). "
+            f"Those entries are what the daily spend cap counts, so the suite would be "
+            f"consuming the operator's real review budget. Point COVERLOOP_EGRESS_LOG at "
+            f"a temporary file in the test's own setUp.")
+
+
+def suite_egress_log():
+    """The temporary log this module runs against — never the production one."""
+    return os.environ.get("COVERLOOP_EGRESS_LOG") or os.path.join(_SUITE_LOG_DIR or "", "egress.log")
+
 
 # ---- generators for real secret SHAPES (one valid instance per VALUE pattern) ----
 def _rand(rng, alphabet, n):
@@ -623,7 +673,9 @@ class DailyReviewCap(unittest.TestCase):
         os.environ["COVERLOOP_EGRESS_LOG"] = self.log
 
     def tearDown(self):
-        os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+        # Restore the SUITE's temporary log — popping it would let every later
+        # test fall back to the operator's production log.
+        os.environ["COVERLOOP_EGRESS_LOG"] = suite_egress_log()
         os.environ.pop("COVERLOOP_DAILY_REVIEW_CAP", None)
 
     def _write(self, n_today=0, n_old=0, n_result=0, corrupt=False):
@@ -1796,5 +1848,174 @@ class NinthRoundRegressions(unittest.TestCase):
                          "a second artifact predicate came back")
         self.assertIn("is_report_artifact(path)", src)
 
+
+class DerivedTier(unittest.TestCase):
+    """v2.11: the risk tier is DERIVED from the changed paths with the gate's
+    own floor semantics, and may only be elevated upward, with a durable reason
+    recorded in the report."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _repo(self, d, reviewers=None, cmds=None):
+        run = lambda *a, **k: subprocess.run(a, cwd=d, capture_output=True, text=True, **k)
+        run("git", "init", "-q", "-b", "main", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "t")
+        open(os.path.join(d, "README.md"), "w").write("x\n")
+        run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+        self._cl(d, "init")
+        cfg_path = os.path.join(d, ".coverloop", "config.json")
+        cfg = json.load(open(cfg_path))
+        cfg["test_command"] = "true"
+        json.dump(cfg, open(cfg_path, "w"), indent=2)
+        run("git", "add", "-A"); run("git", "commit", "-qm", "coverloop")
+        return run
+
+    def _cl(self, d, *a):
+        return subprocess.run([sys.executable, CLI] + list(a), cwd=d,
+                              capture_output=True, text=True)
+
+    def _write(self, d, rel, body="x\n"):
+        p = os.path.join(d, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write(body)
+
+    def _report(self, d):
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                              capture_output=True, text=True).stdout.strip()
+        return json.load(open(os.path.join(d, ".coverloop", "reports", head + ".json")))
+
+    def test_tier_is_derived_from_the_paths_with_no_flag_at_all(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u add c int;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "derived")
+            self.assertEqual(rep["floor"]["tier"], "L3")
+            self.assertTrue(any("migration" in x for x in rep["floor"]["reasons"]))
+
+    def test_a_tier_below_the_deterministic_floor_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "drop table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--tier", "L0", "--tests")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("below the deterministic floor", r.stderr)
+            self.assertFalse(glob_reports(d), "a refused attest must write nothing")
+
+    def test_raise_tier_below_the_floor_is_refused_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "drop table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--raise-tier", "L1", "--reason", "looks small to me")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertFalse(glob_reports(d))
+
+    def test_elevation_above_the_floor_requires_a_durable_reason(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "docs/note.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "doc")
+            bare = self._cl(d, "attest", "--raise-tier", "L3")
+            self.assertEqual(bare.returncode, 2, bare.stdout + bare.stderr)
+            self.assertIn("--reason", bare.stderr)
+            ok = self._cl(d, "attest", "--raise-tier", "L3", "--reason",
+                          "milestone gate covering 14 migrations")
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertEqual(rep["elevation"]["reason"],
+                             "milestone gate covering 14 migrations")
+            self.assertEqual(rep["elevation"]["to"], "L3")
+
+    def test_the_legacy_tier_pin_above_the_floor_still_works_and_says_so(self):
+        # Every pre-2.11 caller (four repos' CI, the docs, the skill) passes
+        # --tier. It must keep working, be recorded as an elevation, and print
+        # the migration note — not fail the way --raise-tier does.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            r = self._cl(d, "attest", "--tier", "L3", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("note:", r.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertIn("legacy", rep["elevation"]["reason"])
+
+    def test_an_existing_report_can_never_be_downgraded_without_force(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tier", "L3", "--tests")
+            r = self._cl(d, "attest", "--tier", "L1")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("refusing to downgrade", r.stderr)
+            self.assertEqual(self._report(d)["risk_tier"], "L3")
+
+    def test_an_elevation_cannot_claim_the_classifier_exemption(self):
+        # --human-gate-scope irreversible exempts changes the CLASSIFIER reads
+        # as reversible. An elevation exists because the classifier under-reads
+        # the change, so it must not be excused by that same classifier.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
+                     "--raise-tier", "L3", "--reason", "this config steers auth")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertIn("human gate", g.stdout)
+            self.assertIn("NOT APPROVED", g.stdout)
+            self.assertEqual(g.returncode, 1)
+
+    def test_an_elevation_reason_survives_a_later_attest(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--raise-tier", "L3", "--reason", "milestone gate")
+            self._cl(d, "attest", "--approve", "--approver", "Daniel")
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertEqual(rep["elevation"]["reason"], "milestone gate")
+
+    def test_a_lower_tier_approval_does_not_survive_an_elevation(self):
+        # attest --approve is allowed at every tier. Carrying an L1 sign-off
+        # into a later L3 elevation let it authorize a reason that did not
+        # exist when it was given.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests", "--approve", "--approver", "Daniel")
+            self.assertTrue(self._report(d)["human_gate"]["approved"])
+            self._cl(d, "attest", "--raise-tier", "L3", "--reason", "steers auth")
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertNotIn("human_gate", rep,
+                             "an approval given at L1 cannot authorize an L3 elevation")
+
+
+def glob_reports(d):
+    import glob as _g
+    return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))
+
+# The entry point stays at the very END of this file. `unittest.main()` collects
+# what is defined ABOVE it, so a class appended later is silently invisible to
+# `python3 tests/test_properties.py` — which is exactly how CI runs it. That
+# happened: 102 of 264 tests were running in CI.
 if __name__ == "__main__":
     unittest.main(verbosity=2)

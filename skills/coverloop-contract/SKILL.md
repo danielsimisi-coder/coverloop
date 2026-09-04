@@ -28,7 +28,7 @@ Take the **MAX** of what it reports and your own judgement. It reads the paths t
 | **anything unrecognised** | **L1 — never L0** |
 | 10+ files changed | **at least L2** |
 
-You may **raise** a tier. **You may never lower a deterministic floor** — not to save tokens, not because it "looks fine". Unsure between two tiers? Take the heavier one.
+You may **raise** a tier — `attest --raise-tier <T> --reason "<why>"` records the reason in the report. **You may never lower a deterministic floor** — not to save tokens, not because it "looks fine". Unsure between two tiers? Take the heavier one.
 
 ## 2. What each tier must earn
 
@@ -54,7 +54,7 @@ The reviewer sees the change as a **cold artifact** — a diff/files packet in a
 ## 4. Record evidence, then let the gate decide
 
 ```bash
-coverloop attest --tier L2 --tests            # run + record the tests
+coverloop attest --tests                      # run + record the tests (tier derived)
 coverloop attest --codex-log review.txt       # attach the review you already ran
 coverloop gate --min-tier "$(coverloop classify --quiet)"
 ```

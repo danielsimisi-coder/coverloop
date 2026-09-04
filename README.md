@@ -140,7 +140,7 @@ Reminders are for people who already behave. For everyone else there's an **enfo
 ```bash
 coverloop init                                  # once per repo
 coverloop classify                              # what risk is this change, really?
-coverloop attest --tier L2 --tests              # run + record tests
+coverloop attest --tests                       # run + record tests (the tier is derived)
 coverloop attest --codex pass                   # record the independent review
 coverloop gate --min-tier "$(coverloop classify --quiet)"   # exit 0 only if the evidence is complete
 ```
@@ -164,7 +164,7 @@ Migrations · SQL · schema · auth/RLS · billing · secrets/`.env` · CI-deplo
 
 Three things make this trustworthy rather than decorative:
 
-- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier; `attest --tier` already refuses to downgrade. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
+- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier. `attest` doesn't ask you for a tier any more — it derives this same floor and refuses anything below it; `--raise-tier L3 --reason "milestone gate covers 14 migrations"` elevates for risk the classifier can't see, upward only, with the reason recorded in the report. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
 - **It's path-based on purpose.** Paths are cheap, stable, and reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in the diff*. Content sniffing was rejected: easy to defeat with formatting, and its false negatives read like safety.
 - **Over-classification is treated as a real cost.** A floor that cries L3 at a stylesheet trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions. (That bug was ours: `hooks/` once matched this repo's own shell hooks. It's pinned by a regression test now.)
 
