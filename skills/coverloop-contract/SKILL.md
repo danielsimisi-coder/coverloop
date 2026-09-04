@@ -59,7 +59,7 @@ Build normally, run the relevant tests as you go, and at the merge/deploy bounda
 coverloop check      # SAFE TO MERGE (exit 0), or one STOP: <reason> (exit 1)
 ```
 
-It refuses a dirty tree, derives the tier, runs the tests, runs the independent reviews that tier requires (roles and commands from `.coverloop/config.json`), binds the evidence to HEAD and runs the real gate. **Resolve the STOP; do not work around it.** For risk the classifier cannot see: `coverloop check --raise-tier L3 --reason "<why>"` — upward only.
+It refuses a dirty tree, derives the tier, runs the tests, runs the independent reviews that tier requires (roles and commands from **`~/.config/coverloop/reviewers.json`** — outside the repo, so a change cannot nominate its own reviewer), binds the evidence to HEAD and runs the real gate. A review counts as passed only if its transcript ends with exactly `VERDICT: PASS`. **Resolve the STOP; do not work around it.** For risk the classifier cannot see: `coverloop check --raise-tier L3 --reason "<why>"` — upward only.
 
 The primitives are unchanged and are still the right tools for CI and for debugging a STOP:
 

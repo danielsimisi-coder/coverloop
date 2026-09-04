@@ -159,7 +159,21 @@ capturing glm reviewer: glm-review --diff
 STOP: L3 requires a named human approval — `coverloop attest --approve --approver <name>` then re-run check
 ```
 
-Which reviewers `check` runs is **configuration, not architecture** — `.coverloop/config.json` carries `"reviewers": {"primary": "codex", "secondary": "glm"}` and the commands to run them; swap in whatever two lineages you trust. The low-level commands are unchanged and still there for CI, for debugging a STOP, and for attaching a review you already ran interactively:
+**Who reviews is named by you, outside the repository.** Roles and commands live in `~/.config/coverloop/reviewers.json` (override with `$COVERLOOP_REVIEWERS`), never in the worktree — a change that could nominate its own reviewer could nominate a stub that prints "pass". `check` refuses a policy that resolves inside the repo under review, one anyone else can write, and a `.coverloop/config.json` that tries to define reviewers itself. Swap in whatever two lineages you trust:
+
+```json
+{
+  "reviewers": { "primary": "codex", "secondary": "glm" },
+  "reviewer_commands": {
+    "codex": "codex exec --sandbox read-only ... end with exactly 'VERDICT: PASS' or 'VERDICT: FAIL'",
+    "glm":   "git diff origin/main...HEAD | glm-redteam \"... end with exactly 'VERDICT: PASS' ...\""
+  }
+}
+```
+
+**The verdict is a machine protocol, not prose.** The transcript must end with a line that is exactly `VERDICT: PASS` or exactly `VERDICT: FAIL`. `PASS WITH RISKS`, `APPROVE`, `LGTM`, a truncated log, or silence are all a **fail** — a gate that infers approval from hedged English is a gate that can be talked into anything.
+
+The low-level commands are unchanged and still there for CI, for debugging a STOP, and for attaching a review you already ran interactively:
 
 ```bash
 coverloop classify                              # what risk is this change, really?

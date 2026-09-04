@@ -1,13 +1,5 @@
 {
   "schema": "coverloop-config/v1",
   "test_command": "python3 -m unittest discover -s tests",
-  "default_base": "origin/main",
-  "reviewers": {
-    "primary": "codex",
-    "secondary": "glm"
-  },
-  "reviewer_commands": {
-    "codex": "codex exec --sandbox read-only -c model_reasoning_effort=xhigh \"You are a cold independent reviewer. You did not write this code. Run `git diff origin/main...HEAD` (and read any file you need) and review that change for correctness, security, and fail-open regressions in the gate logic. Cite file:line for every finding and separate real defects from style. End your reply with exactly one line: 'VERDICT: PASS' if nothing must block the merge, otherwise 'VERDICT: FAIL'.\" < /dev/null",
-    "glm": "git diff origin/main...HEAD | glm-redteam \"Adversarial cold review of this diff to a fail-closed evidence gate. Hunt fail-open regressions, bypasses of the risk floor, and evidence that can be forged. End with exactly one line: 'VERDICT: PASS' or 'VERDICT: FAIL'.\""
-  }
+  "default_base": "origin/main"
 }

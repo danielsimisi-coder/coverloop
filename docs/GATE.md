@@ -24,14 +24,32 @@ the primitives below — it adds no new authority and skips no check:
 2. **derive the tier** from the paths changed since the last *verified* evidence
    (§ *the baseline*, below) — the same floor semantics `gate` uses.
 3. **run the test command** from `.coverloop/config.json`.
-4. **run the reviews that tier requires** and capture their transcripts. Roles
-   come from config: `"reviewers": {"primary": "codex", "secondary": "glm"}`
-   with `"reviewer_commands": {"codex": "...", "glm": "..."}`. L2 needs the
-   primary; L3 needs both. A missing command is a STOP that names the role — it
-   never silently downgrades to a self-attested verdict.
-5. **read each verdict from its transcript.** Only an unambiguous `VERDICT: PASS`
-   (or `SHIP`) tail, with no `FAIL`/`BLOCK`/`ISSUES` marker, counts as a pass.
-   Anything else — including an unreadable log — stays `fail` and is persisted.
+4. **run the reviews that tier requires** and capture their transcripts. L2
+   needs the primary reviewer; L3 needs both. A missing command is a STOP that
+   names the role — it never silently downgrades to a self-attested verdict.
+
+   **Who reviews is not the repository's decision.** Roles and commands are read
+   from `~/.config/coverloop/reviewers.json` (or `$COVERLOOP_REVIEWERS`), on the
+   operator's machine, outside any worktree:
+
+   ```json
+   {"reviewers": {"primary": "codex", "secondary": "glm"},
+    "reviewer_commands": {"codex": "<cold review cmd>", "glm": "<red-team cmd>"}}
+   ```
+
+   If the commands lived in the repo, a diff could replace its own reviewer with
+   a stub that prints the pass marker and `check` would run it — the change
+   would be signing its own evidence. So `check` refuses: a policy path that
+   resolves inside the repo under review (including via a symlink), a policy
+   file that is group- or world-writable, and a `.coverloop/config.json` that
+   defines `reviewers`/`reviewer_commands` at all.
+5. **read each verdict from its transcript.** The verdict is a **machine
+   protocol**: the transcript must contain a line that is exactly
+   `VERDICT: PASS`, and no other `VERDICT:` line. `PASS WITH RISKS`, `APPROVE`,
+   `LGTM`, `verdict: pass` in lowercase, a marker pushed out of the 4 KB tail
+   window by a long log, an unreadable file, or no marker at all are all a
+   `fail` — persisted as one. The reviewer *prompt* is what asks for the canonical
+   line; the gate never infers approval from prose.
 6. **run `gate`** with `--require-transcript`. Its checks are the final word.
 
 Exit 0 prints `SAFE TO MERGE`. Exit 1 prints exactly **one** `STOP: <reason>`.

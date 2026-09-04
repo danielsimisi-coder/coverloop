@@ -1814,6 +1814,24 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         cls.mod = _load_coverloop()
 
     # ---- fixtures -------------------------------------------------------
+    def setUp(self):
+        # The reviewer policy is deliberately OUTSIDE the repo under review, so
+        # every fixture keeps it in its own directory.
+        self.policy_dir = tempfile.mkdtemp()
+        self.policy = os.path.join(self.policy_dir, "reviewers.json")
+
+    def tearDown(self):
+        import shutil as _sh
+        _sh.rmtree(self.policy_dir, ignore_errors=True)
+
+    def _policy(self, reviewers=None, cmds=None, mode=0o600):
+        body = {"reviewers": reviewers or {"primary": "codex", "secondary": "glm"},
+                "reviewer_commands": cmds if cmds is not None else {}}
+        with open(self.policy, "w") as fh:
+            json.dump(body, fh)
+        os.chmod(self.policy, mode)
+        return self.policy
+
     def _repo(self, d, reviewers=None, cmds=None):
         run = lambda *a, **k: subprocess.run(a, cwd=d, capture_output=True, text=True, **k)
         run("git", "init", "-q", "-b", "main", ".")
@@ -1831,17 +1849,20 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         cfg_path = os.path.join(d, ".coverloop", "config.json")
         cfg = json.load(open(cfg_path))
         cfg["test_command"] = "true"
-        if reviewers:
-            cfg["reviewers"] = reviewers
-        if cmds is not None:
-            cfg["reviewer_commands"] = cmds
         json.dump(cfg, open(cfg_path, "w"), indent=2)
+        # Reviewer commands are paths inside the repo (the stubs above) but the
+        # POLICY naming them lives outside it — that is the whole point.
+        if cmds:
+            cmds = {k: os.path.join(d, v.lstrip("./")) for k, v in cmds.items()}
+        self._policy(reviewers, cmds)
         run("git", "add", "-A"); run("git", "commit", "-qm", "coverloop")
         return run
 
-    def _cl(self, d, *a):
+    def _cl(self, d, *a, policy=None):
+        env = dict(os.environ)
+        env["COVERLOOP_REVIEWERS"] = policy or self.policy
         return subprocess.run([sys.executable, CLI] + list(a), cwd=d,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=env)
 
     def _write(self, d, rel, body="x\n"):
         p = os.path.join(d, rel)
@@ -2022,6 +2043,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1)
             self.assertIn("reviewer_commands.codex", r.stderr)
+            self.assertIn(self.policy, r.stderr)
             self.assertEqual(r.stderr.count("STOP:"), 1,
                              "check reports exactly one reason")
 
@@ -2067,25 +2089,27 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
             self.assertIn("SAFE TO MERGE", after.stdout)
 
-    def test_the_verdict_parser_reads_what_real_reviewers_actually_write(self):
-        # Sampled from the fleet's captured transcripts. A parser that only knew
-        # uppercase "VERDICT: PASS" scored GLM's own scale a fail every time.
+    def test_only_the_canonical_verdict_marker_is_a_pass(self):
+        # The verdict is a machine protocol, not prose. Inferring approval from
+        # "PASS WITH RISKS" or "APPROVE" would land a hedged review as a pass
+        # with zero open findings; every non-canonical form fails closed.
         tv = self.mod.transcript_verdict
         for text, want in (
                 ("VERDICT: PASS", "pass"),
-                ("VERDICT: SHIP", "pass"),
-                ("Verdict: PASS WITH RISKS", "pass"),   # the reviewer's "no blocker"
-                ("1. Verdict: APPROVE", "pass"),
-                ("verdict: fail", "fail"),              # lowercase happens
-                ("Verdict: BLOCK", "fail"),
-                ("1. Verdict: REQUEST CHANGES\nP0: ...", "fail"),
-                ("Verdict: no-go", "fail"),
-                ("VERDICT: PASS\n...\nVERDICT: FAIL", "fail"),  # any fail loses
-                ("looks good to me", "fail"),           # no verdict at all
-                ("APPROVE", "fail"),                    # unlabelled: not a verdict
+                ("  VERDICT: PASS  ", "pass"),
+                ("VERDICT: PASS\ntokens used: 91k", "pass"),   # a trailing footer is fine
+                ("VERDICT: FAIL", "fail"),
+                ("verdict: pass", "fail"),                     # not canonical
+                ("VERDICT:PASS", "fail"),
+                ("VERDICT: PASS.", "fail"),
+                ("1. VERDICT: PASS", "fail"),
+                ("VERDICT: PASS WITH RISKS", "fail"),
+                ("VERDICT: APPROVE", "fail"),
+                ("VERDICT: SHIP", "fail"),
+                ("VERDICT: LGTM", "fail"),
+                ("VERDICT: FAIL\nVERDICT: PASS", "fail"),      # ambiguous loses
+                ("looks good to me", "fail"),
                 ("", "fail"),
-                # the rubric echoed out of the prompt is not a verdict
-                ("Verdict: PASS / PASS WITH RISKS / REQUEST CHANGES / BLOCK", "fail"),
         ):
             with self.subTest(text=text[:40]):
                 self.assertEqual(tv(text), want)
@@ -2093,6 +2117,59 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
     def test_a_verdict_outside_the_tail_window_does_not_count(self):
         self.assertEqual(
             self.mod.transcript_verdict("VERDICT: PASS" + "x" * 5000), "fail")
+
+    # ---- the reviewer may not be nominated by the change ----------------
+    def test_a_repo_may_not_nominate_its_own_reviewer(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path))
+            cfg["reviewer_commands"] = {"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"}
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "steer the reviewer")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("may not nominate its own reviewer", r.stderr)
+
+    def test_a_policy_that_resolves_into_the_repo_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
+            inside = os.path.join(d, "reviewers.json")
+            open(inside, "w").write(json.dumps(
+                {"reviewer_commands": {"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"}}))
+            run("git", "add", "-A"); run("git", "commit", "-qm", "planted policy")
+            r = self._cl(d, "check", policy=inside)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("inside the repository under review", r.stderr)
+
+    def test_a_symlinked_policy_pointing_into_the_repo_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
+            planted = os.path.join(d, "reviewers.json")
+            open(planted, "w").write("{}")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "planted")
+            link = os.path.join(self.policy_dir, "link.json")
+            os.symlink(planted, link)
+            r = self._cl(d, "check", policy=link)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("inside the repository under review", r.stderr)
+
+    def test_a_world_writable_policy_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
+            os.chmod(self.policy, 0o666)
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("writable", r.stderr)
+
+    def test_a_missing_policy_stops_and_says_where_to_put_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            os.remove(self.policy)
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("no reviewer policy at", r.stderr)
+            self.assertIn(self.policy, r.stderr)
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:

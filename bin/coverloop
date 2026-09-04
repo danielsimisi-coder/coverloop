@@ -46,6 +46,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2208,43 +2209,96 @@ def cmd_gate(args):
 # only knew uppercase "VERDICT: PASS" scored every one of those a fail —
 # fail-closed, but useless: it would have made `check` unusable with the very
 # reviewers this repo ships. Unknown wording still fails.
-_VERDICT_LINE = re.compile(r"\bverdicts?\s*[:\-]\s*([A-Za-z][A-Za-z \t/_-]{0,40})", re.I)
-_VERDICT_FAIL = ("fail", "block", "reject", "request change", "changes request",
-                 "issues", "needs work", "no-go", "no go")
-_VERDICT_PASS = ("pass", "ship", "approve", "approved", "lgtm")
-
-
-def _verdict_class(phrase):
-    hits = [w for w in _VERDICT_FAIL + _VERDICT_PASS if phrase.startswith(w)]
-    if not hits:
-        return None
-    return "fail" if max(hits, key=len) in _VERDICT_FAIL else "pass"
+# The reviewer's verdict is a MACHINE PROTOCOL, not prose to be interpreted.
+# Exactly one canonical marker line counts:
+#
+#     VERDICT: PASS        (or)        VERDICT: FAIL
+#
+# The reviewer PROMPT tells the reviewer to end with it; the gate does not try
+# to infer approval from natural language. "PASS WITH RISKS", "APPROVE",
+# "LGTM", "SHIP" and every other human phrasing are NOT a pass — inferring one
+# would let a hedged review land as `pass` with zero open findings. Missing,
+# malformed, truncated, ambiguous or non-canonical: FAIL CLOSED.
+_VERDICT_MARKER = re.compile(r"^[ \t]*VERDICT:.*$", re.M)
+_VERDICT_CANONICAL_PASS = "VERDICT: PASS"
+_VERDICT_CANONICAL_FAIL = "VERDICT: FAIL"
 
 
 def transcript_verdict(text, window=4000):
-    """Read a reviewer's own verdict out of the tail of its transcript.
+    """Return "pass" only for an unambiguous canonical PASS marker.
 
-    Fail-closed in both directions: any recognised failing verdict in the
-    window loses, an unrecognised or absent verdict loses, and only an
-    unambiguous passing verdict wins. "PASS WITH RISKS" is a pass — it is the
-    reviewer's own scale for "no blocker" — while "REQUEST CHANGES" is not. A
-    line that lists the whole scale ("Verdict: PASS / REQUEST CHANGES / BLOCK")
-    is a rubric echoed from the prompt, not a verdict, and is skipped rather
-    than read as whichever outcome it happens to name first.
+    The LAST marker line in the tail window decides (reviewers restate; a
+    reviewer's own last word is the one that counts), and any earlier canonical
+    FAIL still loses — a transcript that says FAIL anywhere and PASS later is
+    exactly the ambiguity this refuses to resolve in the change's favour.
+    Anything that is not byte-for-byte one of the two canonical lines, after
+    trimming surrounding whitespace, is a fail.
     """
     tail = (text or "")[-window:]
-    seen_pass = False
-    for m in _VERDICT_LINE.finditer(tail):
-        phrase = " ".join(m.group(1).lower().replace("/", " ").split())
-        if (any(w in phrase for w in _VERDICT_FAIL)
-                and any(w in phrase for w in _VERDICT_PASS)):
-            continue                      # a rubric names both outcomes
-        cls = _verdict_class(phrase)
-        if cls == "fail":
-            return "fail"
-        if cls == "pass":
-            seen_pass = True
-    return "pass" if seen_pass else "fail"
+    markers = [m.group(0).strip() for m in _VERDICT_MARKER.finditer(tail)]
+    if not markers:
+        return "fail"
+    if any(m != _VERDICT_CANONICAL_PASS for m in markers):
+        return "fail"
+    return "pass"
+
+
+def _reviewer_policy_path():
+    """Where the operator's trusted reviewer policy lives. Deliberately OUTSIDE
+    any repository: see reviewer_policy()."""
+    return os.environ.get("COVERLOOP_REVIEWERS") or os.path.join(
+        os.path.expanduser("~"), ".config", "coverloop", "reviewers.json")
+
+
+def reviewer_policy(root):
+    """Load WHO reviews and WHAT COMMAND runs them, from a trusted source.
+
+    The independence of the review is the whole product. If the commands lived
+    in the repository, a diff could replace its own reviewer with a stub that
+    prints the canonical pass marker, and `check` would dutifully run it — the
+    change under review would be signing its own evidence. So the policy is
+    read from the operator's own machine, never from the worktree, and it is
+    refused if it is reachable from inside the repo (a symlink or a path under
+    the root) or if anyone but the owner can write it.
+
+    Returns (policy, None) or (None, reason).
+    """
+    path = _reviewer_policy_path()
+    real = os.path.realpath(path)
+    root_real = os.path.realpath(root)
+    if real == root_real or real.startswith(root_real + os.sep):
+        return None, (f"reviewer policy {path} resolves inside the repository under review "
+                      f"({real}) — the reviewer must not be nominated by the change")
+    try:
+        st = os.lstat(real)
+    except OSError:
+        return None, (f"no reviewer policy at {path}. Create it (outside any repo) as:\n"
+                      '  {"reviewers": {"primary": "codex", "secondary": "glm"},\n'
+                      '   "reviewer_commands": {"codex": "<cold review cmd>", '
+                      '"glm": "<red-team cmd>"}}\n'
+                      "  Each command must make its reviewer end with the line "
+                      "'VERDICT: PASS' or 'VERDICT: FAIL'.")
+    if not stat.S_ISREG(st.st_mode):
+        return None, f"reviewer policy {path} is not a regular file"
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return None, (f"reviewer policy {path} is group/world-writable "
+                      f"({oct(st.st_mode & 0o777)}) — anyone could swap the reviewer; "
+                      f"run: chmod 600 {path}")
+    data, err = load_json(real)
+    if err:
+        return None, f"reviewer policy {path}: {err}"
+    data = data or {}
+    roles = data.get("reviewers") or {}
+    primary = roles.get("primary", "codex")
+    secondary = roles.get("secondary", "glm")
+    if (primary not in ("codex", "glm") or secondary not in ("codex", "glm")
+            or primary == secondary):
+        return None, (f"reviewer policy {path}: reviewers must name two distinct roles from "
+                      "{codex, glm} (report keys are fixed for compatibility)")
+    cmds = data.get("reviewer_commands") or {}
+    if not isinstance(cmds, dict) or any(not isinstance(v, str) for v in cmds.values()):
+        return None, f"reviewer policy {path}: reviewer_commands must map a role to a command string"
+    return {"path": path, "primary": primary, "secondary": secondary, "commands": cmds}, None
 
 
 def _stop(reason):
@@ -2265,10 +2319,10 @@ def cmd_check(args):
     only removes the eight-step ceremony the builder used to orchestrate by hand.
 
     Fail-closed at every step: the first thing that cannot be verified stops the
-    run and is named. Reviewer roles come from .coverloop/config.json
-    ("reviewers": {"primary": <name>, "secondary": <name>}, default
-    codex/glm) so the builder lineage can change without a code change; the
-    report keys stay "codex"/"glm" for compatibility with every existing report.
+    run and is named. WHO reviews and WHAT COMMAND runs them comes from the
+    operator's trusted policy OUTSIDE the repository (see reviewer_policy) — a
+    change cannot nominate its own reviewer. The report keys stay "codex"/"glm"
+    for compatibility with every existing report.
     """
     root = repo_root()
     sha = head_sha(root)
@@ -2277,13 +2331,16 @@ def cmd_check(args):
         print(f"STOP: {cfg_err} — run `coverloop init` and commit {CONFIG_FILE}", file=sys.stderr)
         sys.exit(1)
     cfg = cfg or {}
-    reviewers = cfg.get("reviewers") or {}
-    primary = reviewers.get("primary", "codex")
-    secondary = reviewers.get("secondary", "glm")
-    if primary not in ("codex", "glm") or secondary not in ("codex", "glm") or primary == secondary:
-        print("STOP: .coverloop/config.json reviewers must name two distinct roles from "
-              "{codex, glm} (report keys are fixed for compatibility)", file=sys.stderr)
+    if cfg.get("reviewer_commands") or cfg.get("reviewers"):
+        print(f"STOP: {CONFIG_FILE} defines reviewers/reviewer_commands, but a change under "
+              f"review may not nominate its own reviewer. Move them to {_reviewer_policy_path()} "
+              f"(outside the repo) and delete them from {CONFIG_FILE}.", file=sys.stderr)
         sys.exit(1)
+    policy, perr = reviewer_policy(root)
+    if perr:
+        print(f"STOP: {perr}", file=sys.stderr)
+        sys.exit(1)
+    primary, secondary = policy["primary"], policy["secondary"]
 
     # A dirty tree means evidence bound to HEAD would not describe the code that
     # ships. Refuse up front — the single most common process failure in the
@@ -2339,7 +2396,7 @@ def cmd_check(args):
         codex=None, codex_findings=None, codex_run=None, codex_log=None,
         glm=None, glm_findings=None, glm_run=None, glm_log=None,
         approve=False, approver=None, base=getattr(args, "base", None), quiet=True)
-    cmds = cfg.get("reviewer_commands") or {}
+    cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):
         need.append(primary)
@@ -2349,7 +2406,7 @@ def cmd_check(args):
         cmd = cmds.get(role)
         if not cmd:
             print(f"STOP: tier {tier} requires an independent {role} review but "
-                  f".coverloop/config.json has no reviewer_commands.{role}", file=sys.stderr)
+                  f"{policy['path']} has no reviewer_commands.{role}", file=sys.stderr)
             sys.exit(1)
         setattr(a, f"{role}_run", cmd)
         # The verdict is read back from the transcript AFTER the run (below);

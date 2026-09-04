@@ -51,8 +51,13 @@ and none by weakening a gate.
   secrets or PII. Enforcement lives in code, where it is fail-closed; prose is
   reserved for what no command can enforce.
 
-18 new regression tests lock the falsification table from the research pass
-(246 total). Explicitly **not** done in this release, and still open: a signed
+This release was itself elevated to **L3**. The path classifier reads it as L2,
+but the diff changes the attestation authority itself — baseline validation,
+reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
+exactly the intent-level risk `--raise-tier --reason` exists for.
+
+25 new regression tests lock the falsification table from the research pass.
+Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
 `codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
 the L3 GLM requirement.
