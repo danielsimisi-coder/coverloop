@@ -9,7 +9,7 @@
 # self-test, and end every reply with a model line. Measured against real
 # sessions, the model line was followed 1% of the time and the rest turned the
 # builder into a process manager. Coverloop's enforcement lives in `coverloop
-# check` (fail-closed, in code), not in prose. Prose here is only for the rules
+# gate` (fail-closed, in code), not in prose. Prose here is only for the rules
 # that no command can enforce.
 set -u
 
@@ -21,7 +21,7 @@ in_protocol_project || exit 0
 
 cat <<'EOF'
 [coverloop] Build normally. Run the relevant tests as you go.
-Before merge/deploy: `coverloop check` — it derives the risk tier, runs tests and the required independent reviews, binds the evidence to HEAD, and prints SAFE TO MERGE or one STOP reason. Resolve the STOP; do not work around it.
+Before merge/deploy: `coverloop gate` must pass at HEAD. It derives the risk tier from what you changed and fails closed on missing evidence — record that evidence with `coverloop attest` (tests, the independent reviews the tier requires, and a named human approval where one is required). Resolve what the gate names; do not work around it.
 Never lower the deterministic risk floor. Never record an approval on a human's behalf. Never bypass a red test or a red review. Never send secrets, .env contents, keys, or PII to any model. Irreversible production actions (migrations, money, auth/RLS, deploys) are Daniel's call.
 EOF
 exit 0

@@ -2009,6 +2009,51 @@ class DerivedTier(unittest.TestCase):
                              "an approval given at L1 cannot authorize an L3 elevation")
 
 
+    def test_a_forced_tier_cannot_claim_the_classifier_exemption(self):
+        # --raise-tier L3 --reason "..." then --force --tier L3 flipped
+        # tier_source to "forced", which a check matching only "elevated"
+        # did not recognise — and the human requirement disappeared.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
+                     "--raise-tier", "L3", "--reason", "this config steers auth")
+            self._cl(d, "attest", "--force", "--tier", "L3")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertIn("NOT APPROVED", g.stdout, g.stdout)
+            self.assertEqual(g.returncode, 1, g.stdout)
+
+    def test_raise_tier_never_lowers_even_with_force(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--raise-tier", "L1", "--reason", "looks small",
+                         "--force", "--tests")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("only ever raises", r.stderr)
+
+    def test_a_forced_below_floor_tier_is_recorded_as_forced(self):
+        # --force stays available for the legacy pin (released behaviour), but
+        # it is never silent: the report says so, and the gate recomputes.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--force", "--tier", "L0", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L0")
+            self.assertEqual(rep["tier_source"], "forced")
+            self.assertEqual(rep["floor"]["tier"], "L3")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            g = self._cl(d, "gate")
+            self.assertIn("tier L3", g.stdout, "the gate computes its own floor")
+            self.assertEqual(g.returncode, 1)
+
+
 def glob_reports(d):
     import glob as _g
     return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))

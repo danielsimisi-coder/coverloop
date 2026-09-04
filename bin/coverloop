@@ -1288,6 +1288,12 @@ def _cmd_attest_locked(args, root):
 
     existing = report.get("risk_tier") if report is not None else None
     derived = tier_max(auto_floor, existing)   # never below what is already recorded
+    if raise_to and tier_max(raise_to, derived) != raise_to:
+        # --force is the escape hatch for the LEGACY --tier pin; it was never
+        # meant to make a flag whose whole name is "raise" lower anything.
+        fail_usage(f"--raise-tier {raise_to} is below the derived tier {derived}; --raise-tier "
+                   f"only ever raises. Use --tier --force if a downgrade is genuinely intended "
+                   f"(recorded as forced, and the gate still computes its own floor).")
     if requested and tier_max(requested, derived) != requested and not getattr(args, "force", False):
         # Asked for LESS than the derived tier. Two distinct reasons, named
         # separately because the fix differs: the recorded report already
@@ -2121,7 +2127,12 @@ def cmd_gate(args):
         # change. Letting that same classifier then grant the exemption made
         # `--raise-tier L3 --reason "this config steers auth"` merge with no
         # human at all.
-        _elevated = (report or {}).get("tier_source") == "elevated"
+        # Any tier the CALLER had a hand in — "elevated" or "forced" — cannot
+        # then be excused by the classifier it overrode. Matching only
+        # "elevated" let `--raise-tier L3 --reason ...` followed by
+        # `--force --tier L3` flip the source to "forced" and take the
+        # exemption back, dropping the human requirement entirely.
+        _elevated = (report or {}).get("tier_source", "derived") != "derived"
         human_required = (_elevated or (not _changed)
                           or any(IRREVERSIBLE_RE.search(p) for p in _changed))
 
@@ -2250,7 +2261,12 @@ def main(argv=None):
                          "recorded in the report")
     pa.add_argument("--reason", help="why the classifier under-reads this change "
                                      "(recorded with --raise-tier)")
-    pa.add_argument("--force", action="store_true", help="allow lowering an existing report's risk tier (dangerous)")
+    pa.add_argument("--force", action="store_true",
+                    help="record a tier BELOW the derived floor with the legacy --tier pin "
+                         "(dangerous; recorded as tier_source=forced, never available to "
+                         "--raise-tier). It does not lower the floor: gate recomputes it "
+                         "independently and still fails closed, and a forced tier cannot claim "
+                         "the --human-gate-scope irreversible exemption")
     pa.add_argument("--tests", action="store_true", help="run the configured test command and record the result")
     pa.add_argument("--codex", choices=["pass", "fail"], help="record the Codex diff-review verdict")
     pa.add_argument("--codex-findings", type=int, help="open Codex findings (default 0)")
