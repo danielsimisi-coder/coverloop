@@ -32,9 +32,10 @@ SEED = 20260711  # fixed -> deterministic, reproducible failures
 # tests: they assert on the exact bytes that would leave the machine). Their
 # do_request is stubbed, so nothing is ever sent — but log_egress still wrote
 # `attempt` markers to the PRODUCTION egress log, and the daily spend cap counts
-# exactly those markers. A full suite run therefore burned ~30 slots of the
-# operator's real review budget, and after a few runs every real GLM review that
-# day was refused. That is how a test suite silently consumed production quota.
+# exactly those markers — 6 per run, measured (13 log lines: 6 attempts, 6
+# results, 1 refusal). Small per run, and the reason every real review was
+# refused by late afternoon after a day of re-running the suite. That is how a
+# test suite silently consumed production quota.
 #
 # The whole module runs against a temporary log, and tearDownModule FAILS if the
 # production log was touched at all — an accidental production reviewer

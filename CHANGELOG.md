@@ -25,9 +25,13 @@ builder reads at session start, and two defects in the test harness itself.
 
   Two wiring warnings left the hook with it — a missing `.claude/loop.conf`
   (the Stop-hook test gate dormant) and `docs/MEMORY.md` over its entry cap.
-  Neither was enforcement, and neither is lost: `protocol-selftest` already
-  reports both. They moved from *every session* to *when you ask*, which is
-  where a wiring check belongs.
+  Neither was enforcement. In a project checkout `protocol-selftest` reports
+  both already, so there they move from *every session* to *when you ask* —
+  which is where a wiring check belongs. One gap is real and worth naming: the
+  self-test skips its project checks when run inside the protocol repo itself
+  (`[ "$PROJ" != "$SRC" ]`), and that checkout has `.coverloop/` but no
+  `.claude/loop.conf` — so for this repo alone, nothing now reports that its
+  Stop-hook test gate is dormant.
 
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is ever sent — but
