@@ -20,18 +20,18 @@ builder reads at session start, and two defects in the test harness itself.
   `coverloop gate` pass before merge or deploy, never lower the deterministic
   floor, never record an approval on a human's behalf, never bypass a red test
   or review, never send secrets or PII to a model. Enforcement lives in code,
-  where it is fail-closed; prose is reserved for what no command can enforce.
+  where it is fail-closed; what stays in prose is a pointer at it plus the
+  handful of rules no command enforces.
   The set of projects the hook applies to is unchanged.
 
   Two wiring warnings left the hook with it — a missing `.claude/loop.conf`
   (the Stop-hook test gate dormant) and `docs/MEMORY.md` over its entry cap.
-  Neither was enforcement. In a project checkout `protocol-selftest` reports
-  both already, so there they move from *every session* to *when you ask* —
-  which is where a wiring check belongs. One gap is real and worth naming: the
-  self-test skips its project checks when run inside the protocol repo itself
-  (`[ "$PROJ" != "$SRC" ]`), and that checkout has `.coverloop/` but no
-  `.claude/loop.conf` — so for this repo alone, nothing now reports that its
-  Stop-hook test gate is dormant.
+  Neither was enforcement. `protocol-selftest` reports both, so where it applies
+  they move from *every session* to *when you ask* — which is where a wiring
+  check belongs. Two gaps are real and worth naming: the self-test skips its
+  project checks inside the protocol repo itself, and it requires a `CLAUDE.md`,
+  which the hook does not. A docs-only project, or this repo, now gets no report
+  that its Stop-hook test gate is dormant.
 
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is ever sent — but

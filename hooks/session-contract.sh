@@ -7,10 +7,11 @@
 # was 6 KB and mentioned "gate" nineteen times: it told the builder to classify
 # every task, pick a model, run two reviewers, re-attest, keep a ledger, run a
 # self-test, and end every reply with a model line. Measured against real
-# sessions, the model line was followed 1% of the time and the rest turned the
-# builder into a process manager. Coverloop's enforcement lives in `coverloop
-# gate` (fail-closed, in code), not in prose. Prose here is only for the rules
-# that no command can enforce.
+# sessions, the model line was followed in about 1 reply in 100, and the rest
+# turned the builder into a process manager. Coverloop's enforcement lives in
+# `coverloop gate` (fail-closed, in code), not here. What remains is a pointer
+# at that enforcement plus the handful of rules no command can enforce — never
+# self-approve, never send secrets, irreversible actions are the operator's.
 #
 # The marker set is unchanged from the version this replaces — narrowing or
 # widening WHICH projects get the contract is a separate decision from what the
