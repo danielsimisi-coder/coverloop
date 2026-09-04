@@ -9,8 +9,12 @@ set -u
 INPUT="$(cat 2>/dev/null)"
 
 # Only reinforce inside a protocol project.
+# Keep this marker set IDENTICAL to hooks/session-contract.sh. They drifted:
+# this hook knew docs/MULTI_MODEL_PROTOCOL.md but not .coverloop/, the other
+# knew .coverloop/ but not the legacy doc — so legacy projects lost the session
+# contract while .coverloop-only projects lost this last-moment reminder.
 { [ -f CLAUDE.md ] && grep -q "PROTOCOL_VERSION\|Operating Contract" CLAUDE.md 2>/dev/null; } \
-  || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ] || exit 0
+  || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ] || [ -d .coverloop ] || exit 0
 
 # Extract the command (prefer jq). Without jq, DON'T try to precisely parse the
 # JSON — the old grep/sed truncated at the first escaped quote, so a risky

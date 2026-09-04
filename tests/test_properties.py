@@ -2127,6 +2127,41 @@ class DerivedTier(unittest.TestCase):
             self.assertIn("requires --reason", r.stderr)
 
 
+    def test_a_legacy_tier_pin_at_the_same_tier_is_still_caller_declared(self):
+        # The round-3 fix covered --raise-tier but not the legacy pin: `--tier
+        # L3` on a path that already floors L3 fell through as "derived", and a
+        # supplied --reason was discarded with it.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "workers/job.py", "x = 1\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "worker")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
+                     "--tier", "L3", "--reason", "also changes authz policy")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            rep = json.load(open(max(glob_reports(d), key=os.path.getmtime)))
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertEqual(rep["elevation"]["reason"], "also changes authz policy")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertEqual(g.returncode, 1, g.stdout)
+
+    def test_re_attesting_a_pre_2_11_report_with_tier_keeps_it_caller_declared(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests")
+            path = max(glob_reports(d), key=os.path.getmtime)
+            rep = json.load(open(path))
+            rep["risk_tier"] = "L3"
+            for k in ("tier_source", "floor", "elevation"):
+                rep.pop(k, None)
+            json.dump(rep, open(path, "w"), indent=2)
+            self._cl(d, "attest", "--tier", "L3", "--codex", "pass")
+            rep = json.load(open(max(glob_reports(d), key=os.path.getmtime)))
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertNotEqual(rep["risk_tier"], rep["floor"]["tier"])
+
+
 def glob_reports(d):
     import glob as _g
     return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))

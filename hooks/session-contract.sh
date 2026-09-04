@@ -13,9 +13,10 @@
 # that no command can enforce.
 set -u
 
+# Keep this marker set IDENTICAL to hooks/pre-risky-git.sh (see the note there).
 in_protocol_project() {
   { [ -f CLAUDE.md ] && grep -q "PROTOCOL_VERSION\|Operating Contract" CLAUDE.md 2>/dev/null; } \
-    || [ -f docs/OPERATING_CONTRACT.md ] || [ -d .coverloop ]
+    || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ] || [ -d .coverloop ]
 }
 in_protocol_project || exit 0
 

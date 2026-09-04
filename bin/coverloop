@@ -1316,53 +1316,64 @@ def _cmd_attest_locked(args, root):
             f"--{flag} {requested} is below the deterministic floor {derived} for the changes "
             f"since the last verified evidence ({'; '.join(auto_reasons[:4])}). The floor "
             f"cannot be lowered. Omit the flag to record the derived tier {derived}.")
-    # `raise_to and requested == derived` is INCLUDED on purpose. An explicit
-    # `--raise-tier L3 --reason "also changes authz policy"` on a path that
-    # already floors at L3 says something the classifier does not know, and
-    # dropping it as "nothing to raise" recorded tier_source=derived — which the
-    # gate then trusted to waive the human under --human-gate-scope
-    # irreversible. An explicit statement of intent is never silently discarded.
-    if requested and tier_max(requested, derived) == requested and (
-            requested != derived or raise_to):
-        # Elevation above the floor: allowed, upward only, and recorded with a
-        # reason that survives in the committed report. The NEW interface
-        # (--raise-tier) insists on --reason: an elevation nobody can explain is
-        # indistinguishable from a habit, and habits are what made one repo
-        # declare L3 on 100% of its changes. The LEGACY flag (--tier) is kept
-        # working for every existing script and CI job: above the floor it is
-        # accepted, but the report says plainly that no reason was given, and
-        # stderr points at the better flag. Compatibility never means silence.
-        if raise_to and not reason:
-            fail_usage(
-                f"--raise-tier {requested} requires --reason \"<why the classifier cannot see "
-                f"this risk>\" (recorded in the report), even when the derived floor is already "
-                f"{derived}: the reason is the part the classifier does not know. Omit the flag "
-                f"to record the derived tier {derived}.")
+    # "Elevated" means the recorded tier is not what the PATHS justify — either
+    # it sits above the derived floor, or the caller explicitly asserted a risk
+    # the classifier cannot see. Both cases are caller-influenced provenance,
+    # and the gate must not treat them as derived: a `derived` L3 on a
+    # reversible path is waived under --human-gate-scope irreversible, so
+    # discarding this is a human-gate bypass. It was discarded three ways
+    # before this became one rule — a same-tier --raise-tier, a same-tier
+    # legacy --tier, and re-attesting a pre-2.11 report with --tier.
+    if requested and tier_max(requested, derived) != requested and not getattr(
+            args, "force", False):
+        pass                       # already refused above; kept for readability
+    final_tier = derived
+    if requested:
+        final_tier = requested if (tier_max(requested, derived) == requested
+                                   or getattr(args, "force", False)) else derived
+    above_floor = tier_max(final_tier, auto_floor) != auto_floor
+    asserted = bool(raise_to) or bool(reason)
+    forced_below = bool(requested) and getattr(args, "force", False) and \
+        tier_max(requested, derived) != requested
+
+    if raise_to and not reason:
+        fail_usage(
+            f"--raise-tier {requested} requires --reason \"<why the classifier cannot see "
+            f"this risk>\" (recorded in the report), even when the derived floor is already "
+            f"{derived}: the reason is the part the classifier does not know. Omit the flag "
+            f"to record the derived tier {derived}.")
+
+    elevation, tier_source = None, "derived"
+    if forced_below or floor_unknown:
+        tier_source = "forced"
+    elif above_floor or asserted:
+        prior = (report or {}).get("elevation") or {}
         if not reason:
-            reason = ("legacy --tier pin — no reason given" if requested != derived
-                      else "legacy --tier pin at the derived floor — no reason given")
-            print(f"note: --tier {requested} is a caller-declared tier, not a derived one, and no "
-                  f"reason was given (derived floor {derived}); recorded as such. "
-                  f"Prefer `--raise-tier {requested} --reason \"...\"`.",
-                  file=sys.stderr)
-        final_tier = requested
-        elevation = {"from": derived, "to": requested, "reason": reason, "at": now_utc()}
+            if prior.get("to") == final_tier and prior.get("reason"):
+                # The tier is still the elevated one; it only looks derivable
+                # because `derived` folds in the existing report's tier.
+                # Dropping the provenance here erased the recorded reason on the
+                # ordinary attest -> `attest --approve` flow.
+                reason = prior["reason"]
+            elif not requested:
+                # No tier flag, no recorded elevation, yet the tier sits above
+                # the floor: a pre-2.11 report, written when the tier was
+                # DECLARED. Re-attesting must not launder that into "derived".
+                reason = ("pre-2.11 report — tier above the derived floor, "
+                          "provenance unknown")
+            else:
+                # The LEGACY flag (--tier) keeps working for every existing
+                # script and CI job, but the report says plainly that no reason
+                # was given and stderr points at the better flag. Compatibility
+                # never means silence.
+                reason = "legacy --tier pin — no reason given"
+                print(f"note: --tier {final_tier} is a caller-declared tier, not a derived "
+                      f"one, and no reason was given (derived floor {auto_floor}); recorded "
+                      f"as such. Prefer `--raise-tier {final_tier} --reason \"...\"`.",
+                      file=sys.stderr)
+        elevation = {"from": prior.get("from", auto_floor), "to": final_tier,
+                     "reason": reason, "at": prior.get("at") or now_utc()}
         tier_source = "elevated"
-    else:
-        final_tier = derived if not getattr(args, "force", False) or not requested else requested
-        elevation = None
-        tier_source = "derived" if not (requested and getattr(args, "force", False)) else "forced"
-        if floor_unknown:
-            tier_source = "forced"          # nothing was classified; not "derived"
-        elif (not requested and existing and not (report or {}).get("elevation")
-              and tier_max(existing, auto_floor) != auto_floor):
-            # A pre-2.11 report carries a tier above the floor and no
-            # provenance: it was DECLARED by a caller under the old interface.
-            # Re-attesting must not launder that into "derived".
-            tier_source = "elevated"
-            elevation = {"from": auto_floor, "to": existing,
-                         "reason": "pre-2.11 report — tier above the derived floor, "
-                                   "provenance unknown", "at": now_utc()}
 
     if report is None:
         report = new_report(sha, final_tier)
