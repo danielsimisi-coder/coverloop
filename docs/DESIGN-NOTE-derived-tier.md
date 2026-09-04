@@ -7,17 +7,17 @@ condition. Preserved on `followup/derived-tier-audit`
 
 ## What it was
 
-`attest` would stop accepting a tier from its caller. Instead it would classify
-the same paths `gate` does, with the same baseline semantics, record where the
-tier came from (`tier_source`: `derived` / `elevated` / `forced`), the `floor`
-it computed and why — and refuse anything below that floor.
+By default `attest` would stop taking a tier from its caller: it would classify
+the same paths `gate` does, with the same baseline semantics, and record where
+the tier came from (`tier_source`: `derived` / `elevated` / `forced`), the
+`floor` it computed and why. Two exceptions were kept deliberately, and are the
+reason the branch is not as simple as that sentence: the legacy `--tier` pin
+still works at or above the floor, and `--force` can still record below it.
 `--raise-tier <T> --reason "..."` would elevate **upward only**, for risk a path
 classifier cannot see, writing the reason into the report.
 
-Compatibility was kept, and matters for reading the branch: the legacy `--tier`
-pin still works at or above the floor (recorded as a caller-declared tier), and
-`--force` can still record a tier below it (recorded as `forced`), with `gate`
-recomputing the real floor either way.
+Both exceptions are recorded in the report (`elevated`, `forced`) and `gate`
+recomputes the real floor either way.
 
 The motivation is measured and still stands: across nine repos hand-declared
 tiers were wrong in both directions — 35% too high on validated baselines, and

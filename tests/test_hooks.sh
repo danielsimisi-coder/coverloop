@@ -73,5 +73,66 @@ chmod 0666 "$cfg/coverloop/trusted-repos"
 ( cd "$d" && XDG_CONFIG_HOME="$cfg" bash "$HOOK" ) >/dev/null 2>&1
 [ ! -f "$d/RAN_ANYWAY" ] && ok "world-writable trust file: refused (TEST_CMD not run)" || bad "honored a world-writable trust file"
 
+# ---------------------------------------------------------------------------
+# SessionStart contract + protocol-selftest comparison. Both are executables
+# this release changes, and neither had coverage: CI would not have caught a
+# broken marker set, a lost line, or a comparison that stopped comparing.
+# ---------------------------------------------------------------------------
+echo "== SessionStart contract tests =="
+SC="$HERE/hooks/session-contract.sh"
+
+# 1) silent outside a protocol project
+d="$(mktemp -d)"
+out="$( cd "$d" && bash "$SC" 2>/dev/null )"
+[ -z "$out" ] && ok "no protocol marker: silent" || bad "spoke outside a protocol project"
+
+# 2) each marker triggers it, and the output is exactly the promised three lines
+for marker in CLAUDE.md docs/OPERATING_CONTRACT.md docs/MULTI_MODEL_PROTOCOL.md; do
+  d="$(mktemp -d)"; mkdir -p "$d/docs"
+  if [ "$marker" = CLAUDE.md ]; then printf 'PROTOCOL_VERSION: v0\n' > "$d/$marker"
+  else : > "$d/$marker"; fi
+  n="$( cd "$d" && bash "$SC" 2>/dev/null | wc -l | tr -d ' ' )"
+  [ "$n" = 3 ] && ok "marker $marker: three lines" || bad "marker $marker: $n lines, expected 3"
+done
+
+# 3) a CLAUDE.md without the protocol markers must NOT trigger it
+d="$(mktemp -d)"; printf 'just a readme\n' > "$d/CLAUDE.md"
+out="$( cd "$d" && bash "$SC" 2>/dev/null )"
+[ -z "$out" ] && ok "unmarked CLAUDE.md: silent" || bad "spoke for an unmarked CLAUDE.md"
+
+# 4) the invariants that must never quietly disappear
+d="$(mktemp -d)"; printf 'PROTOCOL_VERSION: v0\n' > "$d/CLAUDE.md"
+body="$( cd "$d" && bash "$SC" 2>/dev/null )"
+for phrase in "coverloop gate" "Never lower the deterministic risk floor" \
+              "Never record an approval on a human's behalf" "secrets"; do
+  case "$body" in *"$phrase"*) ok "contract states: $phrase" ;;
+                  *) bad "contract lost: $phrase" ;; esac
+done
+# it must not name a particular person — this plugin is public
+case "$body" in *Daniel*) bad "contract names a specific operator" ;;
+                *) ok "contract names no specific operator" ;; esac
+
+echo "== protocol-selftest hook comparison =="
+ST="$HERE/bin/protocol-selftest"
+mkhome() {  # $1 = file to install AS session-contract.sh
+  h="$(mktemp -d)"; mkdir -p "$h/.claude/hooks"
+  for f in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
+    printf '#!/bin/sh\n' > "$h/.claude/hooks/$f"
+  done
+  # cp, not "$(cat ...)": command substitution strips the trailing newline and
+  # the copy would differ from the source by exactly one byte.
+  cp "$1" "$h/.claude/hooks/session-contract.sh"
+  echo "$h"
+}
+h="$(mkhome "$SC")"
+out="$( HOME="$h" bash "$ST" 2>&1 )"
+case "$out" in *"session-contract.sh matches the repo"*) ok "identical installed hook: matches" ;;
+               *) bad "identical installed hook not reported as matching" ;; esac
+stale="$(mktemp)"; printf '#!/bin/sh\necho stale\n' > "$stale"
+h="$(mkhome "$stale")"
+out="$( HOME="$h" bash "$ST" 2>&1 )"
+case "$out" in *"differs from the repo's"*) ok "stale installed hook: reported" ;;
+               *) bad "stale installed hook not reported" ;; esac
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]
