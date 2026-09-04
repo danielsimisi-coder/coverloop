@@ -28,7 +28,7 @@ Take the **MAX** of what it reports and your own judgement. It reads the paths t
 | **anything unrecognised** | **L1 — never L0** |
 | 10+ files changed | **at least L2** |
 
-You may **raise** a tier. **You may never lower a deterministic floor** — not to save tokens, not because it "looks fine". Unsure between two tiers? Take the heavier one.
+You may **raise** a tier — `attest`/`check` take `--raise-tier <T> --reason "<why>"` and record the reason. **You may never lower a deterministic floor** — not to save tokens, not because it "looks fine". Unsure between two tiers? Take the heavier one.
 
 ## 2. What each tier must earn
 
@@ -53,8 +53,18 @@ The reviewer sees the change as a **cold artifact** — a diff/files packet in a
 
 ## 4. Record evidence, then let the gate decide
 
+Build normally, run the relevant tests as you go, and at the merge/deploy boundary run **one** command:
+
 ```bash
-coverloop attest --tier L2 --tests            # run + record the tests
+coverloop check      # SAFE TO MERGE (exit 0), or one STOP: <reason> (exit 1)
+```
+
+It refuses a dirty tree, derives the tier, runs the tests, runs the independent reviews that tier requires (roles and commands from `.coverloop/config.json`), binds the evidence to HEAD and runs the real gate. **Resolve the STOP; do not work around it.** For risk the classifier cannot see: `coverloop check --raise-tier L3 --reason "<why>"` — upward only.
+
+The primitives are unchanged and are still the right tools for CI and for debugging a STOP:
+
+```bash
+coverloop attest --tests                      # run + record the tests (tier derived, not declared)
 coverloop attest --codex-log review.txt       # attach the review you already ran
 coverloop gate --min-tier "$(coverloop classify --quiet)"
 ```

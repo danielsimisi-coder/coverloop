@@ -1798,3 +1798,312 @@ class NinthRoundRegressions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TenthRoundDerivedTierAndCheck(unittest.TestCase):
+    """v2.11: the tier is DERIVED from the gate's own floor semantics, reviewed
+    evidence advances the baseline without a human signature, and `coverloop
+    check` is the one command a builder runs at the merge boundary.
+
+    Every case here is a falsification from the research pass — each asserts
+    the thing that would silently weaken if the change were wrong.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    # ---- fixtures -------------------------------------------------------
+    def _repo(self, d, reviewers=None, cmds=None):
+        run = lambda *a, **k: subprocess.run(a, cwd=d, capture_output=True, text=True, **k)
+        run("git", "init", "-q", "-b", "main", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "t")
+        os.makedirs(os.path.join(d, "bin"), exist_ok=True)
+        for name, body in (("pass.sh", 'echo reviewed\necho "VERDICT: PASS"\n'),
+                           ("fail.sh", 'echo "found it"\necho "VERDICT: FAIL"\n')):
+            p = os.path.join(d, "bin", name)
+            open(p, "w").write("#!/bin/sh\n" + body)
+            os.chmod(p, 0o755)
+        open(os.path.join(d, "README.md"), "w").write("x\n")
+        run("git", "add", "-A"); run("git", "commit", "-qm", "init")
+        self._cl(d, "init")
+        cfg_path = os.path.join(d, ".coverloop", "config.json")
+        cfg = json.load(open(cfg_path))
+        cfg["test_command"] = "true"
+        if reviewers:
+            cfg["reviewers"] = reviewers
+        if cmds is not None:
+            cfg["reviewer_commands"] = cmds
+        json.dump(cfg, open(cfg_path, "w"), indent=2)
+        run("git", "add", "-A"); run("git", "commit", "-qm", "coverloop")
+        return run
+
+    def _cl(self, d, *a):
+        return subprocess.run([sys.executable, CLI] + list(a), cwd=d,
+                              capture_output=True, text=True)
+
+    def _write(self, d, rel, body="x\n"):
+        p = os.path.join(d, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").write(body)
+
+    def _report(self, d):
+        reports = sorted(glob_reports(d))
+        return json.load(open(reports[-1]))
+
+    # ---- item 1: the tier is derived ------------------------------------
+    def test_tier_is_derived_from_the_paths_with_no_flag_at_all(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u add c int;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "derived")
+            self.assertEqual(rep["floor"]["tier"], "L3")
+            self.assertTrue(any("migration" in x for x in rep["floor"]["reasons"]))
+
+    def test_a_tier_below_the_deterministic_floor_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "drop table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--tier", "L0", "--tests")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("below the deterministic floor", r.stderr)
+            self.assertFalse(glob_reports(d), "a refused attest must write nothing")
+
+    def test_raise_tier_below_the_floor_is_refused_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "drop table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--raise-tier", "L1", "--reason", "looks small to me")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertFalse(glob_reports(d))
+
+    def test_elevation_above_the_floor_requires_a_durable_reason(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "docs/note.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "doc")
+            bare = self._cl(d, "attest", "--raise-tier", "L3")
+            self.assertEqual(bare.returncode, 2, bare.stdout + bare.stderr)
+            self.assertIn("--reason", bare.stderr)
+            ok = self._cl(d, "attest", "--raise-tier", "L3", "--reason",
+                          "milestone gate covering 14 migrations")
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertEqual(rep["elevation"]["reason"],
+                             "milestone gate covering 14 migrations")
+            self.assertEqual(rep["elevation"]["to"], "L3")
+
+    def test_the_legacy_tier_pin_above_the_floor_still_works_and_says_so(self):
+        # Every pre-2.11 caller (four repos' CI, the docs, the skill) passes
+        # --tier. It must keep working, be recorded as an elevation, and print
+        # the migration note — not fail the way --raise-tier does.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            r = self._cl(d, "attest", "--tier", "L3", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("note:", r.stderr)
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertIn("legacy", rep["elevation"]["reason"])
+
+    def test_an_existing_report_can_never_be_downgraded_without_force(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tier", "L3", "--tests")
+            r = self._cl(d, "attest", "--tier", "L1")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("refusing to downgrade", r.stderr)
+            self.assertEqual(self._report(d)["risk_tier"], "L3")
+
+    # ---- item 2: verification vs authorization --------------------------
+    def test_verification_scope_does_not_evaluate_the_human_gate(self):
+        report = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"},
+                  "codex": {"status": "pass", "findings_open": 0},
+                  "glm": {"status": "pass", "findings_open": 0}}
+        auth, achecks = self.mod.evaluate(dict(report), "L3", None, test_command="true",
+                                          scope=self.mod.EVIDENCE_AUTHORIZATION)
+        ver, checks = self.mod.evaluate(dict(report), "L3", None, test_command="true",
+                                        scope=self.mod.EVIDENCE_VERIFICATION)
+        self.assertFalse(auth, "authorization scope must still demand the human gate")
+        self.assertEqual([c["check"] for c in achecks if c["status"] != "pass"],
+                         ["human_gate"], "and nothing else may differ between the scopes")
+        self.assertTrue(ver, "reviewed evidence is verified even without a signature")
+        gate = [c for c in checks if c["check"] == "human_gate"][0]
+        self.assertIn("not evaluated", gate["detail"])
+
+    def test_verification_scope_still_requires_the_reviews(self):
+        report = {"risk_tier": "L3", "tests": {"status": "pass", "command": "true"}}
+        ok, _ = self.mod.evaluate(report, "L3", None, test_command="true",
+                                  scope=self.mod.EVIDENCE_VERIFICATION)
+        self.assertFalse(ok, "verification without the reviews is not verification")
+
+    def test_reviewed_but_unapproved_ancestor_advances_the_baseline(self):
+        # The fleet bug this fixes: 238 fully reviewed L3 commits were dropped
+        # from the baseline because nobody had countersigned them, so every
+        # later docs-only change re-inherited an L3 floor from the repo root.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "attest", "--tests", "--codex", "pass",
+                         "--codex-run", "./bin/pass.sh", "--glm", "pass",
+                         "--glm-run", "./bin/pass.sh")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            # ...and it is NOT mergeable: verification is not authorization.
+            g = self._cl(d, "gate")
+            self.assertEqual(g.returncode, 1)
+            self.assertIn("NOT APPROVED", g.stdout)
+            # A later low-risk change inherits L1, not the ancestor's L3.
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
+            g2 = self._cl(d, "gate")
+            self.assertIn("tier L1", g2.stdout)
+            self.assertEqual(g2.returncode, 0, g2.stdout)
+
+    def test_an_unverified_ancestor_does_not_advance_the_baseline(self):
+        # The control for the case above: dropping the human gate from the
+        # baseline walk must not drop the tests or the reviews with it.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            self._cl(d, "attest", "--tests")          # tests only, no reviews
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
+            g = self._cl(d, "gate")
+            self.assertIn("tier L3", g.stdout)
+            self.assertEqual(g.returncode, 1, g.stdout)
+
+    # ---- item 3: the check boundary -------------------------------------
+    def test_check_stops_on_an_uncommitted_tree(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("STOP: uncommitted changes", r.stderr)
+            self.assertIn("src/a.ts", r.stderr)
+
+    def test_check_passes_a_low_risk_change_with_one_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "docs/note.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "doc")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("SAFE TO MERGE", r.stdout)
+
+    def test_check_names_the_reviewer_role_it_cannot_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("reviewer_commands.codex", r.stderr)
+            self.assertEqual(r.stderr.count("STOP:"), 1,
+                             "check reports exactly one reason")
+
+    def test_check_reads_the_reviewer_lineage_from_config(self):
+        # Codex must not be an irreversible architectural assumption: naming a
+        # different primary changes which reviewer check demands.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, reviewers={"primary": "glm", "secondary": "codex"},
+                             cmds={})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            self.assertIn("reviewer_commands.glm", r.stderr)
+
+    def test_check_refuses_a_nonsense_reviewer_lineage(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, reviewers={"primary": "codex", "secondary": "codex"})
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("two distinct roles", r.stderr)
+
+    def test_check_stops_when_a_reviewer_does_not_return_a_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/fail.sh", "glm": "./bin/pass.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("codex review did not pass", r.stderr)
+            self.assertEqual(self._report(d)["codex"]["status"], "fail",
+                             "the failing verdict is persisted, not just printed")
+
+    def test_check_stops_at_l3_until_a_human_approves_and_then_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            first = self._cl(d, "check")
+            self.assertEqual(first.returncode, 1, first.stdout)
+            self.assertIn("requires a named human approval", first.stderr)
+            self._cl(d, "attest", "--approve", "--approver", "Daniel")
+            after = self._cl(d, "check")
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+            self.assertIn("SAFE TO MERGE", after.stdout)
+
+    def test_the_verdict_parser_reads_what_real_reviewers_actually_write(self):
+        # Sampled from the fleet's captured transcripts. A parser that only knew
+        # uppercase "VERDICT: PASS" scored GLM's own scale a fail every time.
+        tv = self.mod.transcript_verdict
+        for text, want in (
+                ("VERDICT: PASS", "pass"),
+                ("VERDICT: SHIP", "pass"),
+                ("Verdict: PASS WITH RISKS", "pass"),   # the reviewer's "no blocker"
+                ("1. Verdict: APPROVE", "pass"),
+                ("verdict: fail", "fail"),              # lowercase happens
+                ("Verdict: BLOCK", "fail"),
+                ("1. Verdict: REQUEST CHANGES\nP0: ...", "fail"),
+                ("Verdict: no-go", "fail"),
+                ("VERDICT: PASS\n...\nVERDICT: FAIL", "fail"),  # any fail loses
+                ("looks good to me", "fail"),           # no verdict at all
+                ("APPROVE", "fail"),                    # unlabelled: not a verdict
+                ("", "fail"),
+                # the rubric echoed out of the prompt is not a verdict
+                ("Verdict: PASS / PASS WITH RISKS / REQUEST CHANGES / BLOCK", "fail"),
+        ):
+            with self.subTest(text=text[:40]):
+                self.assertEqual(tv(text), want)
+
+    def test_a_verdict_outside_the_tail_window_does_not_count(self):
+        self.assertEqual(
+            self.mod.transcript_verdict("VERDICT: PASS" + "x" * 5000), "fail")
+
+    def test_check_cannot_lower_the_floor_with_raise_tier(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check", "--raise-tier", "L1", "--reason", "small")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("cannot be lowered", r.stderr)
+
+
+def glob_reports(d):
+    import glob as _g
+    return sorted(_g.glob(os.path.join(d, ".coverloop", "reports", "*.json")))

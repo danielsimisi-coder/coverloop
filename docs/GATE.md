@@ -9,21 +9,83 @@ being a claim and becomes a status check.
 It never sends code anywhere and never calls a model. It only reads local
 files and git metadata.
 
-## The three commands
+## The one command, and the three underneath it
+
+```bash
+coverloop check                     # the merge boundary: derive tier, test, review, bind, gate
+```
+
+`check` is what a builder runs before merging or deploying. It is a wrapper over
+the primitives below — it adds no new authority and skips no check:
+
+1. **refuse a dirty tree.** Evidence is bound to HEAD; uncommitted edits would
+   not be described by it. (This was the single most common process failure in
+   the fleet's gate logs, and it used to surface only *after* the reviewers ran.)
+2. **derive the tier** from the paths changed since the last *verified* evidence
+   (§ *the baseline*, below) — the same floor semantics `gate` uses.
+3. **run the test command** from `.coverloop/config.json`.
+4. **run the reviews that tier requires** and capture their transcripts. Roles
+   come from config: `"reviewers": {"primary": "codex", "secondary": "glm"}`
+   with `"reviewer_commands": {"codex": "...", "glm": "..."}`. L2 needs the
+   primary; L3 needs both. A missing command is a STOP that names the role — it
+   never silently downgrades to a self-attested verdict.
+5. **read each verdict from its transcript.** Only an unambiguous `VERDICT: PASS`
+   (or `SHIP`) tail, with no `FAIL`/`BLOCK`/`ISSUES` marker, counts as a pass.
+   Anything else — including an unreadable log — stays `fail` and is persisted.
+6. **run `gate`** with `--require-transcript`. Its checks are the final word.
+
+Exit 0 prints `SAFE TO MERGE`. Exit 1 prints exactly **one** `STOP: <reason>`.
+Elevation works here too: `coverloop check --raise-tier L3 --reason "..."`,
+upward only.
 
 ```bash
 coverloop init                      # once per repo: .coverloop/config.json + reports/
+coverloop classify                  # explain the derived floor for the current change
 coverloop attest [...]              # record evidence for the current HEAD commit
 coverloop gate  [--min-tier L0..L3]     # verify; exit 0 = pass, 1 = missing/failing evidence
 ```
+
+These stay first-class: CI runs `classify` + `gate` (not `check` — CI must not
+be the thing that runs the reviewers), and `attest --codex-log` is still how you
+attach a review you ran interactively.
+
+## Verification is not authorization
+
+The gate walks back from HEAD to find the last commit whose evidence it can
+trust, and only classifies the paths that changed *since* that baseline. Two
+different questions are being asked of a report, and conflating them was a real
+bug:
+
+- **Verified** — the tier covers the segment, the tests passed, and the reviews
+  the tier requires passed. This is what advances the baseline.
+- **Authorized** — verified *and* a named human countersigned it, where policy
+  requires one.
+
+Requiring authorization to advance the baseline meant that a fully reviewed L3
+that nobody had got around to signing was treated as if it had never been
+reviewed at all: its files fell back into every later change's floor, so a
+docs-only commit inherited L3 from the repo root. Since v2.11 the baseline walk
+asks only the *verification* question. The human gate is untouched where it
+actually matters — `gate` and `check` still fail on it at HEAD — and an
+unverified ancestor (tests missing, reviews missing, or failing) still stops the
+baseline dead.
 
 ## Recording evidence (`attest`)
 
 Evidence lives in `.coverloop/reports/<HEAD-sha>.json` — one report per
 commit, **committed with the change** so it is visible in the PR.
 
+The **tier is derived, not declared**: `attest` classifies the same paths `gate`
+would and records `tier_source` (`derived`), the `floor` it computed and why.
+`--raise-tier <T> --reason "<why the classifier under-reads this>"` elevates
+**upward only** and records the reason; anything below the floor is refused
+(exit 2), as is downgrading an existing report without `--force`. The legacy
+`--tier` pin still works above the floor — it is recorded as an elevation with
+an explicit "no reason given" marker and prints a migration note — so every
+pre-2.11 caller, including the pinned CI workflows, keeps passing unchanged.
+
 ```bash
-coverloop attest --tier L2 --tests            # runs config's test_command, records pass/fail
+coverloop attest --tests                      # runs config's test_command, records pass/fail
 coverloop attest --codex pass                  # record the diff-review verdict (self-attested)
 coverloop attest --codex pass \                # STRONGER: run the reviewer and capture its
   --codex-run "codex exec --sandbox read-only '...'"   # output (hashed, committed as evidence)

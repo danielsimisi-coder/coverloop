@@ -2,6 +2,61 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-09-04 — one command at the boundary (PROTOCOL v2.11.0)
+
+An evidence-driven review of the fleet's own logs asked whether Coverloop had
+become too heavy to follow. It had, in four specific ways — each fixed here,
+and none by weakening a gate.
+
+- **The tier is derived, not declared.** `attest` no longer takes the tier from
+  the caller: it classifies the same paths `gate` would, with the same floor
+  semantics, and records `tier_source`, the computed `floor` and its reasons.
+  Below the floor is refused (exit 2). `--raise-tier <T> --reason "<why>"`
+  elevates **upward only** and writes the reason into the report, for risk the
+  path classifier cannot see (a milestone gate covering many migrations, a
+  config file that steers auth). The legacy `--tier` pin still works above the
+  floor — recorded as an elevation with an explicit "no reason given" marker,
+  plus a migration note on stderr — so every pre-2.11 caller, including the four
+  SHA-pinned CI workflows, keeps passing unchanged.
+
+- **Verification is not authorization.** The gate's baseline walk used to demand
+  a human signature before it would trust an ancestor's evidence. In the fleet
+  that dropped 238 fully reviewed L3 commits from the baseline: their files fell
+  back into every later change's floor, so docs-only commits inherited L3 from
+  the repo root and the gate's floors were systematically inflated. The walk now
+  asks the *verification* question — tier covers the segment, tests passed,
+  required reviews passed — via an explicit `EVIDENCE_VERIFICATION` scope. The
+  human gate is unchanged where it decides anything: `gate` and `check` still
+  fail on it at HEAD, and an ancestor with missing or failing tests or reviews
+  still stops the baseline dead (both directions are regression-locked).
+
+- **`coverloop check` — one command at the merge boundary.** Refuse a dirty tree
+  → derive the tier → run the tests → run the reviews that tier requires and
+  capture their transcripts → bind to HEAD → run the real `gate`. It prints
+  `SAFE TO MERGE` or exactly **one** `STOP: <reason>`, and it is a wrapper over
+  the existing primitives with no new authority: `classify`, `attest` and `gate`
+  are untouched and still what CI runs. The reviewer lineage is configuration,
+  not architecture — `"reviewers": {"primary": "codex", "secondary": "glm"}`
+  with `"reviewer_commands"` — so Codex is a default, not an assumption. A
+  missing reviewer command is a STOP that names the role; a transcript that does
+  not end in an unambiguous pass marker is a `fail`, persisted as one.
+
+- **The session hook is now seven lines of invariants.** The SessionStart hook
+  ran on every session and after every compaction, and at 6 KB it turned the
+  builder into a process manager: classify every task, pick a model, run two
+  reviewers, re-attest, keep a ledger, end every reply with a model line —
+  measured at **1% compliance** for the last of those. It now says: build
+  normally, run the relevant tests, run `coverloop check` before merge/deploy,
+  never lower the floor, never self-approve, never bypass red, never send
+  secrets or PII. Enforcement lives in code, where it is fail-closed; prose is
+  reserved for what no command can enforce.
+
+18 new regression tests lock the falsification table from the research pass
+(246 total). Explicitly **not** done in this release, and still open: a signed
+`approvers` allowlist, the lineage refactor that would drop the fixed
+`codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
+the L3 GLM requirement.
+
 ## 2026-08-22 — the baseline earns its trust, and the loop closes (PROTOCOL v2.10.8)
 
 A scoped review of v2.10.7's own fix commit found five defects in it. All five

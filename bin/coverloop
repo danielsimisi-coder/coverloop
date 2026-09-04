@@ -335,8 +335,10 @@ def _validated_baseline(root, sha, limit=2000):
 
     A report advances the baseline only if BOTH hold:
       * its tier covers the deterministic floor of the segment it governs, AND
-      * it would pass its own evidence evaluation (tests bound to the config
-        command, hash-bound transcripts, human approval at L3) — existence is
+      * it would pass its own VERIFICATION (tests bound to the config command,
+        hash-bound reviewer transcripts) — NOT authorization: whether a human
+        signed for it is the gate's question about the commit being shipped,
+        not a property that makes an ancestor a worse baseline — existence is
         not validity, and a bare tier claim is not evidence: a planted
         no-evidence L3 report on a migration commit advanced the baseline and
         let a later docs commit gate at L0 (probed end-to-end).
@@ -385,7 +387,13 @@ def _validated_baseline(root, sha, limit=2000):
         floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
         if tier_max(tier, floor) != tier:
             continue  # under-declares its segment — not a valid baseline
-        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd)
+        # VERIFICATION scope, deliberately: this asks "was commit c actually
+        # checked?" (tests + reviewers), not "did a human sign for it?". A
+        # reviewed-but-unsigned commit is a legitimate risk baseline. Human
+        # authorization is enforced by the GATE on the commit being shipped —
+        # it is never inherited from an ancestor, and never inferred here.
+        ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
+                               scope=EVIDENCE_VERIFICATION)
         if not ok:
             continue  # a tier claim with no evidence behind it is not a baseline
         baseline = c
@@ -1240,32 +1248,25 @@ def _cmd_attest_locked(args, root):
                 report[rname] = dict(e, output_file=new_rel)
             except OSError:
                 pass
-    if report is None:
-        if not args.tier:
-            fail_usage("no report for HEAD yet — pass --tier L0|L1|L2|L3 to create one")
-        report = new_report(sha, args.tier)
-    elif args.tier:
-        # Tier is MONOTONIC: attest may only RAISE it, never silently downgrade
-        # an existing report (which would drop its evidence requirements). To
-        # lower it, re-attest from scratch (--force) after removing the report.
-        cur = report.get("risk_tier")
-        raised = tier_max(cur, args.tier)
-        if raised != args.tier and not getattr(args, "force", False):
-            fail_usage(f"refusing to downgrade risk_tier {cur} -> {args.tier}; a lower tier "
-                       f"drops evidence requirements. Re-attest with --force to override.")
-        report["risk_tier"] = args.tier if getattr(args, "force", False) else raised
-    if report["risk_tier"] not in TIERS:
-        fail_usage(f"invalid tier {report['risk_tier']!r}")
-
-    # Enforce the deterministic floor HERE, not only at gate time. Without this,
-    # `attest --tier L0` on a migration recorded L0 unchecked, and a LATER gate
-    # call could end up trusting that L0 report as a legitimate baseline for its
-    # OWN incremental scan — silently re-exporting the unvalidated claim forever
-    # after, even though nobody ever actually checked it against the floor. Once
-    # attest itself refuses to under-declare, any report reaching disk already
-    # satisfies tier >= floor(baseline..this commit), so gate can safely trust
-    # committed evidence as a real baseline instead of re-walking full history
-    # on every call.
+    # ------------------------------------------------------------------ tier
+    # The tier is DERIVED, not declared. Across nine repos, hand-declared tiers
+    # were wrong in both directions — 35% too high on validated baselines, and,
+    # far worse, 47% of Alex Switchboard reports declared L2 on segments whose
+    # floor was L3. So: with no --tier, the deterministic floor IS the tier, and
+    # it is computed with the SAME function and the SAME baseline semantics the
+    # gate uses (_gate_floor_paths), so attest and gate can never disagree.
+    #
+    # Two things the floor cannot see are still allowed, and only upward:
+    #   --raise-tier L2|L3 --reason "..."   semantic elevation with a durable,
+    #                                       committed reason (a milestone gate
+    #                                       covering fourteen migrations; a
+    #                                       config file that steers auth). The
+    #                                       reason is recorded in the report.
+    #   --tier (legacy)                     kept for compatibility; treated as a
+    #                                       floor pin. Above the derived floor it
+    #                                       needs --reason like --raise-tier.
+    # Nothing lowers the floor. --force only bypasses the "git cannot answer"
+    # refusal and is recorded, never hidden.
     try:
         floor_paths, floor_unknown = _gate_floor_paths(root, args, report, sha)
     except Exception:
@@ -1273,24 +1274,86 @@ def _cmd_attest_locked(args, root):
     if floor_unknown and not getattr(args, "force", False):
         # Skipping the check when git could not answer was a fail-open: break
         # `git diff` and attest happily recorded L0 over a migration (probed
-        # directly). If the floor cannot be computed, nothing can vouch for the
-        # declared tier — refuse before writing. --force still works and is not
-        # hidden: gate computes its own floor and fails closed on unknown too.
+        # directly). If the floor cannot be computed, nothing can vouch for any
+        # tier — refuse before writing. --force still works and is not hidden:
+        # gate computes its own floor and fails closed on unknown too.
         fail_usage("cannot determine the changed paths for the floor check "
                    "(is git responding?). Refusing to record an unvalidated tier; "
                    "pass --force to record anyway — the gate will still compute "
                    "its own floor independently.")
+    auto_floor, auto_reasons = ("L0", [])
     if not floor_unknown and floor_paths:
         auto_floor, auto_reasons = classify_paths(floor_paths, BREADTH_L2_FILES)
-        raised = tier_max(report["risk_tier"], auto_floor)
-        if raised != report["risk_tier"] and not getattr(args, "force", False):
-            reasons_str = "; ".join(auto_reasons[:4])
+
+    raise_to = getattr(args, "raise_tier", None)
+    legacy = getattr(args, "tier", None)
+    reason = (getattr(args, "reason", None) or "").strip()
+    requested = tier_max(raise_to, legacy)  # the highest thing the caller asked for
+    if raise_to and legacy and raise_to != legacy:
+        fail_usage("--raise-tier and --tier disagree; pass one (prefer --raise-tier --reason)")
+    if reason and not requested:
+        fail_usage("--reason only accompanies --raise-tier (or the legacy --tier)")
+
+    existing = report.get("risk_tier") if report is not None else None
+    derived = tier_max(auto_floor, existing)   # never below what is already recorded
+    if requested and tier_max(requested, derived) != requested and not getattr(args, "force", False):
+        # Asked for LESS than the derived tier. Two distinct reasons, named
+        # separately because the fix differs: the recorded report already
+        # carries a higher tier (a DOWNGRADE — re-attest from scratch with
+        # --force if that is truly intended), or the changed paths themselves
+        # floor higher (the under-declaration the fleet data showed, L2 on an
+        # L3 segment — nothing lowers that).
+        flag = 'raise-tier' if raise_to else 'tier'
+        if existing and tier_max(existing, requested) != requested and tier_max(existing, auto_floor) == existing:
             fail_usage(
-                f"--tier {report['risk_tier']} is below the deterministic floor "
-                f"{auto_floor} for the changes since the last evidence ({reasons_str}). "
-                f"Re-attest at --tier {auto_floor} or higher, or pass --force to override "
-                f"(recorded, not hidden — the gate will still see the true floor).")
-        report["risk_tier"] = raised
+                f"refusing to downgrade risk_tier {existing} -> {requested}; a lower tier drops "
+                f"evidence requirements. Re-attest with --force to override.")
+        fail_usage(
+            f"--{flag} {requested} is below the deterministic floor {derived} for the changes "
+            f"since the last verified evidence ({'; '.join(auto_reasons[:4])}). The floor "
+            f"cannot be lowered. Omit the flag to record the derived tier {derived}.")
+    if requested and tier_max(requested, derived) == requested and requested != derived:
+        # Elevation above the floor: allowed, upward only, and recorded with a
+        # reason that survives in the committed report. The NEW interface
+        # (--raise-tier) insists on --reason: an elevation nobody can explain is
+        # indistinguishable from a habit, and habits are what made one repo
+        # declare L3 on 100% of its changes. The LEGACY flag (--tier) is kept
+        # working for every existing script and CI job: above the floor it is
+        # accepted, but the report says plainly that no reason was given, and
+        # stderr points at the better flag. Compatibility never means silence.
+        if raise_to and not reason:
+            fail_usage(
+                f"elevating {derived} -> {requested} above the deterministic floor requires "
+                f"--reason \"<why the classifier cannot see this risk>\" (recorded in the "
+                f"report). Omit the flag to record the derived tier {derived}.")
+        if not reason:
+            reason = "legacy --tier pin — no reason given"
+            print(f"note: --tier {requested} elevates above the derived floor {derived} without a "
+                  f"reason; recorded as such. Prefer `--raise-tier {requested} --reason \"...\"`.",
+                  file=sys.stderr)
+        final_tier = requested
+        elevation = {"from": derived, "to": requested, "reason": reason, "at": now_utc()}
+        tier_source = "elevated"
+    else:
+        final_tier = derived if not getattr(args, "force", False) or not requested else requested
+        elevation = None
+        tier_source = "derived" if not (requested and getattr(args, "force", False)) else "forced"
+
+    if report is None:
+        report = new_report(sha, final_tier)
+    else:
+        if tier_max(existing, final_tier) != final_tier and not getattr(args, "force", False):
+            fail_usage(f"refusing to downgrade risk_tier {existing} -> {final_tier}; a lower tier "
+                       f"drops evidence requirements. Re-attest with --force to override.")
+        report["risk_tier"] = final_tier
+    report["tier_source"] = tier_source
+    report["floor"] = {"tier": auto_floor, "reasons": auto_reasons[:8]}
+    if elevation:
+        report["elevation"] = elevation
+    elif "elevation" in report and tier_source == "derived":
+        report.pop("elevation", None)
+    if report["risk_tier"] not in TIERS:
+        fail_usage(f"invalid tier {report['risk_tier']!r}")
 
     did = []
 
@@ -1360,13 +1423,17 @@ def _cmd_attest_locked(args, root):
         }
         did.append(f"human_gate=approved({args.approver.strip()})")
 
-    if not did and not args.tier:
-        fail_usage("nothing to attest — pass --tests, --codex, --glm, --approve, or --tier")
+    if not did and not args.tier and not getattr(args, "raise_tier", None):
+        did.append(f"tier={report['risk_tier']}[{report.get('tier_source', 'derived')}]")
 
     path = save_report(root, report)
     rel = os.path.relpath(path, root)
-    print(f"recorded [{', '.join(did) or 'tier=' + report['risk_tier']}] -> {rel}")
-    print("commit this report with your change — it is the PR-visible evidence.")
+    # `check` drives attest with a provisional "fail" verdict per reviewer and
+    # resolves the real one from the transcript afterwards; printing the
+    # provisional line there would read as a failure that then "became" a pass.
+    if not getattr(args, "quiet", False):
+        print(f"recorded [{', '.join(did) or 'tier=' + report['risk_tier']}] -> {rel}")
+        print("commit this report with your change — it is the PR-visible evidence.")
     # Evidence git IGNORES can never reach the PR — in the field a repo-root
     # `*.log` rule silently swallowed a captured transcript and CI failed on
     # missing evidence (2026-07-10). check-ignore exits 0 (-> non-None) when
@@ -1544,9 +1611,35 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                  f"{entry.get('findings_open')} [{source_tag(entry)}]")
 
 
+# Two DIFFERENT questions the gate answers, kept apart on purpose:
+#
+#   VERIFICATION  — "was this change actually checked?" tests bound to the config
+#                   command, an independent diff review, a red-team at L3, every
+#                   transcript hash-bound to the SHA. Machine-checkable evidence.
+#   AUTHORIZATION — "did a human take responsibility for it?" the named approval
+#                   the gate policy demands at L3.
+#
+# They are not interchangeable. The baseline walk asks only the FIRST question:
+# a commit whose evidence VERIFIES is a sound place to start counting risk from,
+# whether or not anyone signed for it — 238 fully-reviewed L3 commits across the
+# fleet were never signed, and treating them as unreviewed collapsed every
+# baseline to the root and inflated every floor to L3. The gate asks BOTH, and
+# authorization is never inferred from verification: reviewers passing does not
+# mean a human said yes.
+EVIDENCE_VERIFICATION = "verification"      # tests + reviewers only
+EVIDENCE_AUTHORIZATION = "authorization"    # + the human gate, where policy requires it
+
+
 def evaluate(report, tier, files, require_captured=False, root=None, test_command=None,
-             require_executed=False, human_gate_required=True):
-    """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout."""
+             require_executed=False, human_gate_required=True,
+             scope=EVIDENCE_AUTHORIZATION):
+    """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout.
+
+    `scope` selects which question is being asked (see EVIDENCE_* above).
+    EVIDENCE_VERIFICATION deliberately omits the human gate; it is for deciding
+    whether a past commit counts as a reviewed baseline, never for clearing a
+    merge. EVIDENCE_AUTHORIZATION is the full gate.
+    """
     checks = []
 
     if tier == "L0":
@@ -1605,6 +1698,15 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         # It is OPT-IN. Silently relaxing an existing user's gate on upgrade
         # would be exactly the kind of unannounced weakening this project exists
         # to make impossible.
+        if scope == EVIDENCE_VERIFICATION:
+            # Asked only whether the change was VERIFIED. Say so explicitly in
+            # the checks rather than silently passing: the record must show this
+            # evaluation never claimed anyone authorized anything.
+            checks.append(check("human_gate", True,
+                                "human gate: not evaluated (verification-only scope — "
+                                "reviewed evidence, not authorization)"))
+            verdict = all(c["status"] == "pass" for c in checks)
+            return verdict, checks
         needs_human = human_gate_required
         why_exempt = ("" if needs_human else
                       " — scope=irreversible and no migration/money/authz path in "
@@ -2099,6 +2201,228 @@ def cmd_gate(args):
     sys.exit(0 if verdict else 1)
 
 
+# The words real reviewers actually end on. Sampled from the fleet's captured
+# transcripts: Codex ends "VERDICT: PASS", GLM's red-team scale is
+# "Verdict: PASS / PASS WITH RISKS / REQUEST CHANGES / BLOCK", and some runs
+# emit lowercase "verdict: fail" or a GitHub-style "APPROVE". A parser that
+# only knew uppercase "VERDICT: PASS" scored every one of those a fail —
+# fail-closed, but useless: it would have made `check` unusable with the very
+# reviewers this repo ships. Unknown wording still fails.
+_VERDICT_LINE = re.compile(r"\bverdicts?\s*[:\-]\s*([A-Za-z][A-Za-z \t/_-]{0,40})", re.I)
+_VERDICT_FAIL = ("fail", "block", "reject", "request change", "changes request",
+                 "issues", "needs work", "no-go", "no go")
+_VERDICT_PASS = ("pass", "ship", "approve", "approved", "lgtm")
+
+
+def _verdict_class(phrase):
+    hits = [w for w in _VERDICT_FAIL + _VERDICT_PASS if phrase.startswith(w)]
+    if not hits:
+        return None
+    return "fail" if max(hits, key=len) in _VERDICT_FAIL else "pass"
+
+
+def transcript_verdict(text, window=4000):
+    """Read a reviewer's own verdict out of the tail of its transcript.
+
+    Fail-closed in both directions: any recognised failing verdict in the
+    window loses, an unrecognised or absent verdict loses, and only an
+    unambiguous passing verdict wins. "PASS WITH RISKS" is a pass — it is the
+    reviewer's own scale for "no blocker" — while "REQUEST CHANGES" is not. A
+    line that lists the whole scale ("Verdict: PASS / REQUEST CHANGES / BLOCK")
+    is a rubric echoed from the prompt, not a verdict, and is skipped rather
+    than read as whichever outcome it happens to name first.
+    """
+    tail = (text or "")[-window:]
+    seen_pass = False
+    for m in _VERDICT_LINE.finditer(tail):
+        phrase = " ".join(m.group(1).lower().replace("/", " ").split())
+        if (any(w in phrase for w in _VERDICT_FAIL)
+                and any(w in phrase for w in _VERDICT_PASS)):
+            continue                      # a rubric names both outcomes
+        cls = _verdict_class(phrase)
+        if cls == "fail":
+            return "fail"
+        if cls == "pass":
+            seen_pass = True
+    return "pass" if seen_pass else "fail"
+
+
+def _stop(reason):
+    """The single STOP line. stdout is flushed first so the reason is the last
+    thing on the terminal even though it goes to stderr."""
+    sys.stdout.flush()
+    print(f"STOP: {reason}", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_check(args):
+    """The one-command boundary: derive the floor, run the tests, run the
+    reviewers the tier requires, record it all bound to HEAD, then gate.
+
+    Prints ONE line on success ("SAFE TO MERGE") and ONE concrete reason on
+    failure ("STOP: ..."). Everything underneath is the existing primitives —
+    classify, attest, gate — unchanged and still available for debugging; this
+    only removes the eight-step ceremony the builder used to orchestrate by hand.
+
+    Fail-closed at every step: the first thing that cannot be verified stops the
+    run and is named. Reviewer roles come from .coverloop/config.json
+    ("reviewers": {"primary": <name>, "secondary": <name>}, default
+    codex/glm) so the builder lineage can change without a code change; the
+    report keys stay "codex"/"glm" for compatibility with every existing report.
+    """
+    root = repo_root()
+    sha = head_sha(root)
+    cfg, cfg_err = load_json(os.path.join(root, CONFIG_FILE))
+    if cfg_err:
+        print(f"STOP: {cfg_err} — run `coverloop init` and commit {CONFIG_FILE}", file=sys.stderr)
+        sys.exit(1)
+    cfg = cfg or {}
+    reviewers = cfg.get("reviewers") or {}
+    primary = reviewers.get("primary", "codex")
+    secondary = reviewers.get("secondary", "glm")
+    if primary not in ("codex", "glm") or secondary not in ("codex", "glm") or primary == secondary:
+        print("STOP: .coverloop/config.json reviewers must name two distinct roles from "
+              "{codex, glm} (report keys are fixed for compatibility)", file=sys.stderr)
+        sys.exit(1)
+
+    # A dirty tree means evidence bound to HEAD would not describe the code that
+    # ships. Refuse up front — the single most common process failure in the
+    # fleet's gate logs was exactly this, discovered only after the reviewers ran.
+    tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
+    untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
+    if tracked is None or untracked is None:
+        print("STOP: git could not report the working tree state", file=sys.stderr)
+        sys.exit(1)
+    dirty = [p for p in list(tracked) + list(untracked) if not is_report_artifact(p)]
+    if dirty:
+        print(f"STOP: uncommitted changes not covered by evidence "
+              f"({', '.join(dirty[:4])}{'…' if len(dirty) > 4 else ''}) — commit first",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # 1. derive the tier with the gate's own semantics (attest does this too; we
+    #    compute it here so the STOP reasons can name it before anything runs).
+    report, why, malformed = find_report(root, sha)
+    if malformed:
+        print(f"STOP: existing evidence is malformed — {why}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        paths, unknown = _gate_floor_paths(root, args, report, sha)
+    except Exception as exc:
+        print(f"STOP: could not classify the change ({exc})", file=sys.stderr)
+        sys.exit(1)
+    if unknown:
+        print("STOP: could not determine the changed paths (shallow clone or git failure) — "
+              "fetch full history or pass --base", file=sys.stderr)
+        sys.exit(1)
+    floor, reasons = classify_paths(paths, BREADTH_L2_FILES) if paths else ("L0", [])
+    tier = tier_max(floor, (report or {}).get("risk_tier"))
+    raise_to = getattr(args, "raise_tier", None)
+    reason = (getattr(args, "reason", None) or "").strip()
+    if raise_to:
+        if tier_max(raise_to, tier) != raise_to:
+            print(f"STOP: --raise-tier {raise_to} is below the derived floor {tier}; the floor "
+                  f"cannot be lowered", file=sys.stderr)
+            sys.exit(1)
+        if raise_to != tier and not reason:
+            print(f"STOP: elevating {tier} -> {raise_to} requires --reason", file=sys.stderr)
+            sys.exit(1)
+        tier = raise_to
+
+    # 2. attest: tests + whichever reviewers this tier needs. Reviewer commands
+    #    come from config ("reviewer_commands": {"codex": "...", "glm": "..."});
+    #    with none configured, check STOPs and names the missing role rather
+    #    than silently downgrading to a self-attested verdict.
+    a = argparse.Namespace(
+        tier=None, raise_tier=raise_to if raise_to and raise_to != floor else None,
+        reason=reason or None, force=False, tests=True,
+        codex=None, codex_findings=None, codex_run=None, codex_log=None,
+        glm=None, glm_findings=None, glm_run=None, glm_log=None,
+        approve=False, approver=None, base=getattr(args, "base", None), quiet=True)
+    cmds = cfg.get("reviewer_commands") or {}
+    need = []
+    if tier in ("L2", "L3"):
+        need.append(primary)
+    if tier == "L3":
+        need.append(secondary)
+    for role in need:
+        cmd = cmds.get(role)
+        if not cmd:
+            print(f"STOP: tier {tier} requires an independent {role} review but "
+                  f".coverloop/config.json has no reviewer_commands.{role}", file=sys.stderr)
+            sys.exit(1)
+        setattr(a, f"{role}_run", cmd)
+        # The verdict is read back from the transcript AFTER the run (below);
+        # attest requires a stated verdict, so we provisionally state "fail" and
+        # only upgrade it when the transcript ends in a pass marker. Fail-closed.
+        setattr(a, role, "fail")
+    print(f"coverloop check — {sha[:12]} — derived tier {tier}"
+          + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
+    for r in reasons[:4]:
+        print(f"  - {r}")
+    with _attest_lock(root):
+        rc = _cmd_attest_locked(a, root)
+    report, why, malformed = find_report(root, sha)
+    if report is None:
+        print(f"STOP: attest did not produce a report — {why}", file=sys.stderr)
+        sys.exit(1)
+    if (report.get("tests") or {}).get("status") != "pass" and tier != "L0":
+        _stop(f"tests failed ({(report.get('tests') or {}).get('command')})")
+    # 3. read each reviewer's verdict from its captured transcript. Only an
+    #    unambiguous pass marker counts; anything else stays "fail".
+    for role in need:
+        e = report.get(role) or {}
+        log_rel = e.get("output_file")
+        verdict = "fail"
+        if log_rel and e.get("exit_code") == 0:
+            try:
+                txt = open(os.path.join(root, log_rel), encoding="utf-8", errors="replace").read()
+                verdict = transcript_verdict(txt)
+            except OSError:
+                verdict = "fail"
+        if verdict != "pass":
+            report[role]["status"] = "fail"
+            save_report(root, report)
+            _stop(f"{role} review did not pass — see {log_rel or 'no transcript'}")
+        report[role]["status"] = "pass"
+        report[role]["findings_open"] = 0
+    save_report(root, report)
+
+    # 4. gate — the real one, unchanged. Its checks are the final word.
+    g = argparse.Namespace(
+        min_tier=[tier], tier=[], base=getattr(args, "base", None),
+        require_transcript=True, require_captured=False, require_executed=False,
+        require_clean_tree=True, require_signed_commit=False, signers=None,
+        signers_ref=None, ci=getattr(args, "ci", False), json=False,
+        human_gate_scope=getattr(args, "human_gate_scope", "all"))
+    files = changed_files(root, g.base, sha) if g.base else None
+    human_required = True
+    if tier == "L3" and g.human_gate_scope == "irreversible":
+        human_required = (not paths) or any(IRREVERSIBLE_RE.search(p) for p in paths)
+    verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
+                               require_captured=True, root=root,
+                               test_command=cfg.get("test_command"))
+    failing = [c for c in checks if c["status"] != "pass"]
+    if getattr(args, "json", False):
+        print(json.dumps({"schema": "coverloop-check/v1", "commit": sha, "tier": tier,
+                          "verdict": "pass" if verdict else "fail", "checks": checks}, indent=2))
+    elif verdict:
+        for c in checks:
+            print(f"  ✓ {c['check']:<11} {c['detail']}")
+        print(f"  ✓ evidence bound to {sha[:12]}")
+        print("SAFE TO MERGE")
+    else:
+        for c in checks:
+            print(f"  {'✓' if c['status'] == 'pass' else '✘'} {c['check']:<11} {c['detail']}")
+        first = failing[0]
+        if first["check"] == "human_gate":
+            _stop(f"{tier} requires a named human approval — "
+                  f"`coverloop attest --approve --approver <name>` then re-run check")
+        _stop(first["detail"])
+    print("commit the evidence in .coverloop/reports/ with this change.")
+    sys.exit(0)
+
+
 def _emit(args, sha, tier, verdict, checks):
     # CI annotations go to STDERR so they also work alongside --json
     # (stdout stays pure JSON for tooling; GitHub reads both streams).
@@ -2158,7 +2482,15 @@ def main(argv=None):
     pc.set_defaults(fn=cmd_classify)
 
     pa = sub.add_parser("attest", help="record evidence for the HEAD commit")
-    pa.add_argument("--tier", choices=TIERS, help="risk tier of this change (monotonic — attest can only raise it)")
+    pa.add_argument("--tier", choices=TIERS,
+                    help="LEGACY floor pin. The tier is now DERIVED from the changed paths with the "
+                         "gate's own floor semantics; omit this. Kept for compatibility: below the "
+                         "floor it is refused, above it it needs --reason (see --raise-tier)")
+    pa.add_argument("--raise-tier", choices=TIERS, dest="raise_tier",
+                    help="elevate ABOVE the derived floor for a risk the path classifier cannot see "
+                         "(a milestone gate covering many migrations; a config file that steers "
+                         "auth). Upward only; requires --reason; both are recorded in the report")
+    pa.add_argument("--reason", help="why the classifier under-reads this change (recorded with --raise-tier)")
     pa.add_argument("--force", action="store_true", help="allow lowering an existing report's risk tier (dangerous)")
     pa.add_argument("--tests", action="store_true", help="run the configured test command and record the result")
     pa.add_argument("--codex", choices=["pass", "fail"], help="record the Codex diff-review verdict")
@@ -2225,6 +2557,19 @@ def main(argv=None):
                          "L3 change. irreversible = only migrations/SQL, money paths and "
                          "authz/RLS; the full automated L3 review still runs on everything else")
     pg.set_defaults(fn=cmd_gate)
+
+    pk = sub.add_parser("check", help="the one-command boundary: derive tier, run tests + required "
+                                       "reviewers, record evidence bound to HEAD, gate. Prints "
+                                       "SAFE TO MERGE or one STOP reason")
+    pk.add_argument("--raise-tier", choices=TIERS, dest="raise_tier",
+                    help="elevate above the derived floor (upward only; requires --reason)")
+    pk.add_argument("--reason", help="why the classifier under-reads this change")
+    pk.add_argument("--base", help="diff base (CI: origin/<base_ref>)")
+    pk.add_argument("--human-gate-scope", choices=["all", "irreversible"], default="all",
+                    help="same meaning as for gate; default all")
+    pk.add_argument("--ci", action="store_true", help="emit GitHub error annotations")
+    pk.add_argument("--json", action="store_true", help="machine-readable result")
+    pk.set_defaults(fn=cmd_check)
 
     args = p.parse_args(argv)
     return args.fn(args)

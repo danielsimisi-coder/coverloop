@@ -138,10 +138,33 @@ npm i -g @openai/codex && codex login
 Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any *committed* code change after attestation invalidates the evidence by construction** — for *uncommitted* edits you need `gate --require-clean-tree`, which is opt-in.
 
 ```bash
-coverloop init                                  # once per repo
+coverloop init      # once per repo
+# …build normally, run your tests as you go…
+coverloop check     # before you merge: SAFE TO MERGE, or one STOP: <reason>
+```
+
+`check` is the whole loop in one command: it refuses a dirty tree, derives the risk tier from the changed paths, runs your test command, runs the independent reviews that tier requires and captures their transcripts, binds the evidence to HEAD, and then runs the real gate. Exit 0 prints `SAFE TO MERGE`; exit 1 prints exactly **one** concrete reason:
+
+```console
+$ coverloop check
+coverloop check — 6a82bb674cd1 — derived tier L3
+  - L3: database migration (supabase/migrations/20260904_add_col.sql)
+running tests: npm test
+capturing codex reviewer: codex exec --full-auto "review this diff"
+capturing glm reviewer: glm-review --diff
+  ✓ tests       tests: pass (npm test)
+  ✓ codex       codex: pass, open findings: 0 [captured 7c7fb91a]
+  ✓ glm         glm: pass, open findings: 0 [captured 7c7fb91a]
+  ✘ human_gate  human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`
+STOP: L3 requires a named human approval — `coverloop attest --approve --approver <name>` then re-run check
+```
+
+Which reviewers `check` runs is **configuration, not architecture** — `.coverloop/config.json` carries `"reviewers": {"primary": "codex", "secondary": "glm"}` and the commands to run them; swap in whatever two lineages you trust. The low-level commands are unchanged and still there for CI, for debugging a STOP, and for attaching a review you already ran interactively:
+
+```bash
 coverloop classify                              # what risk is this change, really?
-coverloop attest --tier L2 --tests              # run + record tests
-coverloop attest --codex pass                   # record the independent review
+coverloop attest --tests                        # run + record tests (the tier is derived, not declared)
+coverloop attest --codex pass --codex-log r.txt # attach the review you already ran
 coverloop gate --min-tier "$(coverloop classify --quiet)"   # exit 0 only if the evidence is complete
 ```
 
@@ -164,7 +187,7 @@ Migrations · SQL · schema · auth/RLS · billing · secrets/`.env` · CI-deplo
 
 Three things make this trustworthy rather than decorative:
 
-- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier; `attest --tier` already refuses to downgrade. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
+- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier. `attest` doesn't ask you for a tier any more — it derives this same floor and refuses anything below it; `--raise-tier L3 --reason "milestone gate covers 14 migrations"` elevates for risk the classifier can't see, upward only, with the reason recorded in the report. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
 - **It's path-based on purpose.** Paths are cheap, stable, and reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in the diff*. Content sniffing was rejected: easy to defeat with formatting, and its false negatives read like safety.
 - **Over-classification is treated as a real cost.** A floor that cries L3 at a stylesheet trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions. (That bug was ours: `hooks/` once matched this repo's own shell hooks. It's pinned by a regression test now.)
 
