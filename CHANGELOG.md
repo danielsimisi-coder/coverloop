@@ -2,6 +2,58 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-09-04 — the session contract stops being a process manual
+
+`classify`, `attest` and `gate` are **byte-identical** to the previous release:
+`git diff <prev> -- bin/coverloop` is empty. This release changes what the
+builder reads at session start, and two defects in the test harness itself.
+
+- **The SessionStart hook is seven lines of invariants.** It fires at every
+  session start and after every compaction, so its text is read on every single
+  session — which is exactly why the 6 KB version was the problem. It mentioned
+  "gate" nineteen times and told the builder to classify every task, pick a
+  model, run two reviewers, re-attest, keep a ledger, run a self-test, and end
+  every reply with a model line. Measured against real sessions, **that last
+  rule was followed 1% of the time** and the rest turned the builder into a
+  process manager. It now says: build normally, run the relevant tests, make
+  `coverloop gate` pass before merge or deploy, never lower the deterministic
+  floor, never record an approval on a human's behalf, never bypass a red test
+  or review, never send secrets or PII to a model. Enforcement lives in code,
+  where it is fail-closed; prose is reserved for what no command can enforce.
+  The set of projects the hook applies to is unchanged.
+
+- **The test suite no longer spends production review budget.** It drives the
+  real reviewer CLIs with a stubbed transport — nothing is ever sent — but
+  `log_egress` still wrote `attempt` markers to the operator's **production**
+  egress log, and the daily spend cap counts exactly those. A full run burned
+  ~30 real review slots, so after a few runs every genuine review that day was
+  refused. The suite runs against a temporary log now, and `tearDownModule`
+  **fails** if the production one is touched at all.
+
+- **A comment pins the test entry point in place.** CI runs
+  `tests/test_properties.py` directly, and `unittest.main()` collects only what
+  is defined *above* it — so a class appended below is silently skipped. That
+  happened during this release's development (102 of 264 tests were running
+  before review caught it). Nothing was skipped in the file as it ships, and
+  this change is preventive: the entry point is explicitly the last thing in the
+  file, with a comment saying why.
+
+- **`protocol-selftest` no longer reports a current hook as stale.** It parsed
+  the `[vX PROTOCOL` banner the shortened hook deliberately does not print. It
+  compares the installed file with the repo's instead — which is what "this
+  machine needs a pull" actually means.
+
+**Two larger changes were built, reviewed, and deliberately not shipped.**
+`coverloop check` (a one-command merge boundary) and the derived risk tier each
+reached a pre-agreed stopping condition: twelve review rounds and 52 findings
+for the first, five rounds for the second, with three consecutive rounds finding
+a real P1 in the same conceptual boundary. Both are preserved with their full
+audit history — `followup/coverloop-check-audit` and
+`followup/derived-tier-audit` — and both have design notes carrying the evidence
+forward so the next attempt starts from it rather than rediscovering it:
+[`docs/DESIGN-NOTE-check.md`](docs/DESIGN-NOTE-check.md) and
+[`docs/DESIGN-NOTE-derived-tier.md`](docs/DESIGN-NOTE-derived-tier.md).
+
 ## 2026-08-22 — the baseline earns its trust, and the loop closes (PROTOCOL v2.10.8)
 
 A scoped review of v2.10.7's own fix commit found five defects in it. All five

@@ -41,10 +41,19 @@ for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure
 done
 [ -z "$MISSING" ] && ok "all 4 hook scripts present" || fail "hook scripts missing:$MISSING"
 if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
-  BANNER_V=$(grep -om1 '\[v[0-9.]* PROTOCOL' "$HOOKS_DIR/session-contract.sh" | grep -o 'v[0-9.]*')
-  if [ -n "$REPO_V" ] && [ "$BANNER_V" != "$REPO_V" ]; then
-    warn "hook banner $BANNER_V != repo $REPO_V — machine needs: cd protocol repo && git pull && ./install.sh"
-  else ok "hook banner version: ${BANNER_V:-unknown}"; fi
+  # The v2.11 hook deliberately prints no version banner — it is seven lines of
+  # invariants, and a version string is exactly the kind of per-session noise
+  # the shrink removed. Compare the installed FILE with the repo's instead:
+  # that is what "this machine needs a pull" actually means.
+  if [ -n "$SRC" ] && [ -f "$SRC/hooks/session-contract.sh" ]; then
+    if cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then
+      ok "session-contract.sh matches the repo"
+    else
+      warn "installed session-contract.sh differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
+    fi
+  else
+    ok "session-contract.sh installed (no repo clone to compare against)"
+  fi
 fi
 WIRED=$(python3 - <<'PY' 2>/dev/null
 import json,os

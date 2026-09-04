@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# SessionStart hook — RE-INJECT the protocol's standing rules into context.
-# Fires at every session start AND after every compaction (Claude Code re-runs
-# SessionStart with source "compact"). Anything printed to stdout is added to
-# Claude's context, so this re-states the binding rules as FRESH, high-attention
-# context — fighting the drift where a long/compacted session "forgets" the protocol.
+# SessionStart hook — the invariant rules, and nothing else.
 #
-# Scoped: only fires in a protocol project (so it never injects noise into unrelated
-# repos). Kept short on purpose (token economy) — the full contract lives in
-# CLAUDE.md / docs/OPERATING_CONTRACT.md, which survive compaction on their own.
+# Fires at every session start and after every compaction. Anything printed to
+# stdout lands in the builder's context, so this text is read on every single
+# session — which is exactly why it used to be the problem. The previous version
+# was 6 KB and mentioned "gate" nineteen times: it told the builder to classify
+# every task, pick a model, run two reviewers, re-attest, keep a ledger, run a
+# self-test, and end every reply with a model line. Measured against real
+# sessions, the model line was followed 1% of the time and the rest turned the
+# builder into a process manager. Coverloop's enforcement lives in `coverloop
+# gate` (fail-closed, in code), not in prose. Prose here is only for the rules
+# that no command can enforce.
+#
+# The marker set is unchanged from the version this replaces — narrowing or
+# widening WHICH projects get the contract is a separate decision from what the
+# contract says.
 set -u
 
-# Only speak up inside a project that uses this protocol.
 in_protocol_project() {
   { [ -f CLAUDE.md ] && grep -q "PROTOCOL_VERSION\|Operating Contract" CLAUDE.md 2>/dev/null; } \
     || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ]
@@ -18,35 +24,8 @@ in_protocol_project() {
 in_protocol_project || exit 0
 
 cat <<'EOF'
-[v2.10.9 PROTOCOL — STANDING RULES reloaded into context; obey, do not drift]
-- NEXT-TASK MODEL LINE (§9b, every response): if the reply ends with a next task, close with ONE line — "▸ Next: <task> → <model> · <effort> effort — <why>". L0 mechanical -> Haiku 4.5/low · L1 -> Sonnet 5/medium · L2 -> Sonnet 5/high · L3 (money/auth/migration/schema/concurrency, architecture, hard debugging) -> Opus 5/high-xhigh · deadlock -> Opus 5/max (one shot). Classify risk FIRST (tie -> heavier), then read the model off the tier; never downgrade a real L3 to save tokens. No next task -> no line. Recommend only — the operator runs /model.
-- Code-review roster: Claude builds · Codex (GPT-5.6 Sol) gates diffs · GLM-5.2 (full-ZDR) red-teams+audits · M3 (data_collection:deny, L3 only) optional 2nd auditor · the human operator gates risk. Browser/UX-QA agents (e.g. Antigravity) are complementary, not substitutes.
-- Execution/tests are the PRIMARY gate. No model is an authority — verify every finding against code/tests/runtime.
-- TIER IS NOT SELF-DECLARED (§2a): run 'coverloop classify' and take the MAX of its floor and your own judgement. migrations/SQL/schema, auth/RLS, billing, secrets/.env, CI-deploy config, workers/cron -> L3. Unrecognised file -> L1, never L0. You may RAISE a tier; you may never lower a deterministic floor. Wire it: coverloop gate --min-tier "$(coverloop classify --quiet)".
-- Risk gates: L2 -> Codex MANDATORY. L3 (money/auth·RLS/migration/deploy/secrets/worker) -> Codex + GLM MANDATORY + the operator gate before merge/apply/deploy (M3 optional). Lightest safe row; tie -> heavier.
-- ENFORCE, don't just claim (v2.7.2): if this repo has .coverloop/, record evidence with 'coverloop attest' and verify with 'coverloop gate' (fail-closed; exit 1 on missing tests/reviews/approval). Attach the review transcript you ALREADY produced with --codex-log/--glm-log (no re-run; a bare self-attested verdict is the WEAK path). RE-ATTEST AT HEAD after post-review fix commits — stale evidence fails the gate. Wire it as a required CI check. See docs/GATE.md.
-- OFF-POLICY REVIEW (the verified anti-bias rule): the reviewer sees the change as a COLD ARTIFACT — a diff/files packet in a FRESH reviewer session (codex exec / a new subagent) — NEVER "review what you just wrote" inside the builder's own conversation. Fresh-context removes most self-review bias; cross-lineage (builder and gate from different model families) adds a second, smaller layer — prudent default for L2/L3, not proven law.
-- Sol gate routing: codex exec -m gpt-5.6-sol --sandbox read-only with effort EXPLICIT every time (Sol defaults to LOW — a lazy judge): L2 gate -c model_reasoning_effort=\"high\" · L3 gate \"xhigh\" · design red-team / 2-round deadlock-break \"max\" · NEVER \"ultra\" for a gate (it auto-delegates to subagents; a judge must not outsource judgment, and it burns quota). Demand file:line-substantiated findings — a bare verdict is noise.
-- L3 human-gate discipline: record 'attest --approve' ONLY when the operator named THIS specific action; a generic "go ahead"/"do what's best" is NOT an L3 approval — ask for the named gate.
-- Privacy: NEVER send .env/secrets/keys/PII (T3) to any model. Reading your own DB is PII-bound — select only non-PII columns; if a read is blocked for PII, reshape the query, don't bounce it to the human.
-- End each meaningful task with reflect-and-save -> append a durable lesson to git-tracked docs/MEMORY.md and commit it.
-- Two-strikes: if you tell the human to repeat the same manual workaround twice, STOP and fix the root cause.
-- Sandbox/env failure (e.g. Codex bwrap) -> fix the environment at root; never disable a tool's safety; never self-grant a sandbox/approval bypass.
-- Background-task hygiene: don't leave background processes running once you've read their output. Keep AT MOST ONE dev/preview server and reuse it (kill the old one before starting a new one). Reap one-shot background jobs (Codex/GLM/M3/tests) when done, and clean up before you pause or declare done — don't let them pile up.
-- Verify wiring once per session: run \$HOME/bin/protocol-selftest from the project root and report GREEN/FAILs.
-- After each multi-model review, append one line to docs/REVIEW_LEDGER.md "## Review log" (date · tier · reviewers · findings · verdicts) — the quarterly right-size read depends on it.
-- Re-read CLAUDE.md now. If it does not carry the Operating Contract (roster incl. GLM/M3 + this gate table), that's a WIRING BUG — flag it to the human operator.
+[coverloop] Build normally. Run the relevant tests as you go.
+Before merge/deploy: `coverloop gate` must pass at HEAD. It fails closed on missing evidence — record that evidence with `coverloop attest` (tests, the independent reviews the tier requires, and a named human approval where one is required). Resolve what the gate names; do not work around it.
+Never lower the deterministic risk floor. Never record an approval on a human's behalf. Never bypass a red test or a red review. Never send secrets, .env contents, keys, or PII to any model. Irreversible production actions (migrations, money, auth/RLS, deploys) are Daniel's call.
 EOF
-
-# Dynamic wiring warnings — cheap local checks only (no git/network), surfacing
-# the gaps that silently disarm the loop at the moment work starts.
-if [ -d .coverloop ] && [ ! -f .claude/loop.conf ]; then
-  echo "[WIRING GAP] .coverloop/ exists but .claude/loop.conf is missing — the Stop-hook test gate is OFF in this repo. Run the protocol repo's init-project.sh to finish wiring (new-repo bootstrap)."
-fi
-if [ -f docs/MEMORY.md ]; then
-  N=$(grep -c '^- ' docs/MEMORY.md 2>/dev/null || echo 0)
-  if [ "${N:-0}" -gt 30 ] 2>/dev/null; then
-    echo "[WIRING GAP] docs/MEMORY.md has $N entries (cap ~30) — consolidate (merge/retire stale) before starting new work."
-  fi
-fi
 exit 0

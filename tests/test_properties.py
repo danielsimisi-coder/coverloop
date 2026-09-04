@@ -27,6 +27,62 @@ import glm_secret_filter as F
 
 SEED = 20260711  # fixed -> deterministic, reproducible failures
 
+# ---------------------------------------------------------------------------
+# The suite drives the REAL reviewer CLIs (that is the point of the egress
+# tests: they assert on the exact bytes that would leave the machine). Their
+# do_request is stubbed, so nothing is ever sent — but log_egress still wrote
+# `attempt` markers to the PRODUCTION egress log, and the daily spend cap counts
+# exactly those markers. A full suite run therefore burned ~30 slots of the
+# operator's real review budget, and after a few runs every real GLM review that
+# day was refused. That is how a test suite silently consumed production quota.
+#
+# The whole module runs against a temporary log, and tearDownModule FAILS if the
+# production log was touched at all — an accidental production reviewer
+# invocation is a test failure, not a surprise on the invoice.
+# ---------------------------------------------------------------------------
+PROD_EGRESS_LOG = os.path.join(os.path.expanduser("~"), ".config", "openrouter", "egress.log")
+_SUITE_LOG_DIR = None
+_PROD_LOG_BEFORE = None
+
+
+def _prod_log_fingerprint():
+    try:
+        st = os.stat(PROD_EGRESS_LOG)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def setUpModule():
+    global _SUITE_LOG_DIR, _PROD_LOG_BEFORE
+    _PROD_LOG_BEFORE = _prod_log_fingerprint()
+    _SUITE_LOG_DIR = tempfile.mkdtemp(prefix="coverloop-suite-egress-")
+    os.environ["COVERLOOP_EGRESS_LOG"] = os.path.join(_SUITE_LOG_DIR, "egress.log")
+
+
+def tearDownModule():
+    import shutil as _sh
+    os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+    if _SUITE_LOG_DIR:
+        _sh.rmtree(_SUITE_LOG_DIR, ignore_errors=True)
+    if _prod_log_fingerprint() != _PROD_LOG_BEFORE:
+        raise AssertionError(
+            f"the test suite wrote to the PRODUCTION egress log ({PROD_EGRESS_LOG}). "
+            f"Those entries are what the daily spend cap counts, so the suite would be "
+            f"consuming the operator's real review budget. Point COVERLOOP_EGRESS_LOG at "
+            f"a temporary file in the test's own setUp.")
+
+
+def suite_egress_log():
+    """The temporary log this module runs against — never the production one.
+
+    Deliberately does NOT read COVERLOOP_EGRESS_LOG: a teardown calling this to
+    restore the module-wide log while a per-test override was still installed
+    just restored that override to itself, leaving every later test coupled to
+    the last test's private log.
+    """
+    return os.path.join(_SUITE_LOG_DIR or tempfile.gettempdir(), "egress.log")
+
 
 # ---- generators for real secret SHAPES (one valid instance per VALUE pattern) ----
 def _rand(rng, alphabet, n):
@@ -623,7 +679,9 @@ class DailyReviewCap(unittest.TestCase):
         os.environ["COVERLOOP_EGRESS_LOG"] = self.log
 
     def tearDown(self):
-        os.environ.pop("COVERLOOP_EGRESS_LOG", None)
+        # Restore the SUITE's temporary log — popping it would let every later
+        # test fall back to the operator's production log.
+        os.environ["COVERLOOP_EGRESS_LOG"] = suite_egress_log()
         os.environ.pop("COVERLOOP_DAILY_REVIEW_CAP", None)
 
     def _write(self, n_today=0, n_old=0, n_result=0, corrupt=False):
@@ -1796,5 +1854,10 @@ class NinthRoundRegressions(unittest.TestCase):
                          "a second artifact predicate came back")
         self.assertIn("is_report_artifact(path)", src)
 
+
+# The entry point stays at the very END of this file. `unittest.main()` collects
+# what is defined ABOVE it, so a class appended later is silently invisible to
+# `python3 tests/test_properties.py` — which is exactly how CI runs it. That had
+# happened: 102 of 264 tests were running in CI.
 if __name__ == "__main__":
     unittest.main(verbosity=2)
