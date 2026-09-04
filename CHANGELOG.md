@@ -58,6 +58,14 @@ builder reads at session start, and two defects in the test harness itself.
   compares the installed file with the repo's instead — which is what "this
   machine needs a pull" actually means.
 
+**Known limitation, unchanged by this release:** the distributable
+`docs/OPERATING_CONTRACT.md` is still v2.6 — it predates the
+deterministic-classification floor — while this repo's `CLAUDE.md` header
+declares `CONTRACT_VERSION: v2.8`. `init-project.sh` copies that template into
+new projects, so a project bootstrapped today inlines the older contract.
+Resyncing it is a contract change with a per-project cost (§13) and is not part
+of this release.
+
 **Known limitation, unchanged by this release:** `protocol-selftest` does not
 support a marketplace plugin install. It looks for reviewer CLIs under `~/bin`
 and hooks under `~/.claude/hooks` (registered in `~/.claude/settings.json`),
@@ -65,7 +73,8 @@ while a plugin install puts `bin/` on `PATH` and merges hooks from the plugin
 manifest — so it reports both as missing. The hook comparison does prefer
 `$CLAUDE_PLUGIN_ROOT` when that variable is set, but Claude Code exports it to
 plugin subprocesses, **not** to a shell you run the self-test from, so in normal
-use it is unset. All of this predates the release and is left alone.
+use it is unset. The plugin-root preference and the file comparison are new
+here; the marketplace limitation itself predates the release and is left alone.
 
 **Two larger changes were built, reviewed, and deliberately not shipped.**
 `coverloop check` (a one-command merge boundary) and the derived risk tier each

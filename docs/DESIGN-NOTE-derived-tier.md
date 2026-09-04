@@ -45,8 +45,10 @@ the named human approval on a path the classifier reads as reversible.
   written before provenance existed, a forced tier — is not derived. Model it
   as one predicate computed in one place, and prove it by enumeration rather
   than by adding a case per review round.
-- **The consumer is the real specification.** Only one thing reads
-  `tier_source`: the `--human-gate-scope irreversible` exemption. Write that
+- **The consumer is the real specification.** Only one AUTHORIZATION decision
+  reads `tier_source`: the `--human-gate-scope irreversible` exemption. (The
+  preserved branch also reads it for provenance reconstruction and status
+  output; those report, they do not decide.) Write that
   exemption's precondition first — "the tier is exactly what the paths justify,
   and no human has been asked to think about it" — and derive the producer from
   it.
