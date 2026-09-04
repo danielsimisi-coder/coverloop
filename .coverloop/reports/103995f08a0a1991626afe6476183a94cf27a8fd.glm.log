@@ -1,0 +1,92 @@
+## Adversarial Cold Review — Coverloop v2.11.0
+
+### 1. Verdict: PASS WITH RISKS
+
+The diff is well-reasoned, extensively tested, and addresses a genuine class of fail-open regressions (reviewer self-nomination, verdict-as-prose, dirty-tree-after-run, elevation-claiming-exemption, test-command-swap, outbound-secret-before-redaction). The baseline is deliberately kept conservative. However, two residual forge paths remain that are not fully closed by the shipped guards, and one guard has an env-var expansion gap.
+
+---
+
+### 2. P0 blockers
+
+None identified with direct evidence. The gate remains fail-closed at every observable decision point, and the deterministic floor cannot be lowered by any flag combination (`--raise-tier` below floor → exit 2; `--force` is recorded and the gate recomputes its own floor).
+
+---
+
+### 3. P1 serious issues
+
+**P1-1: Test command can forge reviewer transcripts (report artifacts are excluded from the dirty-tree re-check).**
+
+Order of operations in `cmd_check`:
+1. Reviewers run → `capture_run` writes transcript to `.coverloop/reports/<sha>.<role>.log` and stores `sha256` in the report JSON.
+2. Test command runs (arbitrary code, operator privileges).
+3. `check` re-reads the transcript file and calls `transcript_verdict(txt)` to resolve the verdict.
+4. Dirty-tree re-check excludes `is_report_artifact(p)` paths.
+
+The transcript file and the report JSON are both report artifacts, so step 4 does not catch modifications to them. A malicious test command (which is repository-controlled via `test_command` in `.coverloop/config.json`) can, between step 1 and step 3:
+- Overwrite the transcript with `VERDICT: PASS\n`.
+- Update `report[role]["sha256"]` and `report[role]["exit_code"]` in the JSON to match the forged file.
+
+`check` then reads the forged transcript, resolves `pass`, and persists `report[role]["status"] = "pass"`. The subsequent `gate` call with `require_captured=True` would only catch this if `reviewer_check` independently verifies the transcript hash against a value the test command could **not** modify — but the hash lives in the same report JSON the test can overwrite. The `_reviewer_binary_fingerprints` tripwire only hashes the reviewer **executable**, not the transcript, so it does not detect this.
+
+The CHANGELOG acknowledges "a gate is not a sandbox" and "an arbitrary test command can do anything to local state," but this specific path — forging a **reviewer verdict** (not just local state) via transcript modification after the reviewer already ran — is not explicitly called out and is not covered by any test. The reviewers-before-tests ordering prevents swapping the reviewer **binary** but does not prevent forging the reviewer **output**.
+
+**Suggested fix:** After the test command runs, re-verify each transcript's `sha256` against the value captured at step 1 (before the test ran), and fail closed on mismatch. Or: read the verdict from the transcript immediately after the reviewer runs (before the test command), not after.
+
+**P1-2: `$COVERLOOP_REPO` env-var expansion bypasses the in-repo reviewer guard.**
+
+Both the policy-validation token check (`reviewer_policy`) and the execution-time resolution check (`cmd_check`) resolve tokens via `os.path.realpath` / `shutil.which`, which do **not** expand shell environment variables. A reviewer command like:
+
+```
+sh $COVERLOOP_REPO/scripts/reviewer
+```
+
+passes both guards:
+- Policy validation: token `$COVERLOOP_REPO/scripts/reviewer` → `isabs` is False → `realpath(join(root, "$COVERLOOP_REPO/..."))` → nonexistent path → not flagged.
+- Execution-time check: first token `sh` → resolves to `/usr/bin/sh` → not in repo → not flagged. The `break` after the first token means `$COVERLOOP_REPO/scripts/reviewer` is never examined at execution time.
+
+When `subprocess.run(cmd, shell=True)` runs, the shell expands `$COVERLOOP_REPO` (set in `review_env`) to the actual repo path, executing repository-controlled code as the reviewer. This bypasses the "a change may not nominate its own reviewer" invariant if the operator's policy references `$COVERLOOP_REPO` in a command token.
+
+This requires operator misconfiguration (the policy must reference `$COVERLOOP_REPO` in a path-like token), so it is narrower than P1-1, but the guard's stated purpose is to catch exactly this class.
+
+---
+
+### 4. P2 improvements
+
+- **P2-1:** `if True:` block around the secret scan is a leftover debug artifact. Should be unconditional or removed.
+- **P2-2:** `review_env` drops `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP` but not `NODE_PATH`, `RUBYLIB`, `PERL5LIB`, `CMAKE_PREFIX_PATH`. A reviewer command using `node -e` or `perl -e` could still resolve repo-controlled code via those paths. The PATH filtering and scratch cwd mitigate the common cases, but the coverage is language-specific.
+- **P2-3:** `reviewer_policy` checks the policy file's own permissions (`S_IWGRP | S_IWOTH`) but not the permissions of parent directories. A world-writable parent directory (`/tmp`-style) could allow replacing the policy file via rename. Consider checking ancestor directory writability.
+- **P2-4:** `_reviewer_binary_fingerprints` only resolves the **first** command word. A command like `python3 -c 'import reviewer'` would fingerprint `python3` (not in repo) while the `-c` payload could be anything. This is acknowledged in comments but the residual is real for multi-word commands where the controlled code is in an argument, not the first token.
+- **P2-5:** In `--json` mode, early `_stop()` calls (before `evaluate`) produce no JSON document on stdout — only a stderr `STOP:` line. Later failures (from `evaluate`) produce a JSON document. This inconsistency could confuse automation that expects JSON on stdout whenever `--json` is passed. Consider writing a `{"verdict": "fail", "reason": "..."}` document even for early stops in JSON mode.
+- **P2-6:** The `evaluate` function's docstring was opened with `"""` but the body is empty (just a blank line before closing `"""`). Minor, but the verification/authorization distinction explained in the comment above the function deserves to be in the docstring.
+
+---
+
+### 5. Missing tests / verification
+
+- **No test for transcript forgery via test command.** There is no test where the test command modifies a `.log` transcript or the report JSON between the reviewer run and the verdict read. This is the P1-1 gap.
+- **No test for `$COVERLOOP_REPO` env-var bypass.** There is no test where the reviewer command references `$COVERLOOP_REPO/scripts/...` to run planted repo code.
+- **No test verifying that `reviewer_check` (called by `evaluate` with `require_captured=True`) validates the transcript `sha256` against the file. If it does, P1-1 is mitigated for the case where the test does not also forge the hash in the JSON. If it does not, P1-1 is a confirmed fail-open. This needs explicit verification against the existing `reviewer_check` implementation (not shown in this diff).
+- **No test for `--force --tier L0` on an L3 segment followed by `gate`.** The code path exists (`final_tier = requested` when `force and requested`), and the gate recomputes its floor, but there is no end-to-end test confirming the gate refuses despite the report saying L0.
+- **No test for the `check --json` early-stop case** (e.g., dirty tree with `--json`) confirming whether stdout is empty or contains JSON.
+
+---
+
+### 6. Likely false positives / what to ignore
+
+- **`--force` allowing tier below floor in `attest`:** This is by design and documented. The gate independently recomputes the floor via `_gate_floor_paths` and takes the MAX. The report records `tier_source = "forced"`. Not a bypass.
+- **`derived = tier_max(auto_floor, existing)` folding in the existing report tier:** This is the intended monotonic behavior — re-attesting preserves a prior elevation. The `prior_elevation` preservation logic correctly keeps the `elevation` record and `tier_source = "elevated"`. Not a bypass.
+- **`evaluate` skipping `human_gate` check for non-L3 tiers:** This is correct — only L3 requires human gate. The `human_gate_required` parameter at non-L3 tiers is vestigial from the caller but harmless.
+- **`attest --approve` clearing on elevation:** The `report.pop("human_gate")` when tier changes is the intended fix for "an approval cannot outlive the claim it was given for." Tested and correct.
+- **Session hook reduction to 7 lines:** This is a deliberate move of enforcement from prose to code. The `coverloop check` command is the enforcement. Not a weakening.
+
+---
+
+### 7. Suggested next action
+
+1. **Verify `reviewer_check`'s hash behavior.** Read the existing `reviewer_check` function (not in this diff) and confirm whether it validates `entry["sha256"]` against the transcript file. If it does, P1-1 is partially mitigated (test must forge both transcript and hash in JSON). If it does not, P1-1 is a confirmed fail-open and should be P0.
+2. **Add a test** where the test command overwrites a reviewer transcript with `VERDICT: PASS` and asserts that `check` stops.
+3. **Add a test** for the `$COVERLOOP_REPO/scripts/reviewer` env-var bypass.
+4. **Consider reading the verdict from the transcript immediately after the reviewer runs** (before the test command), rather than after, which would close P1-1 entirely without needing hash verification.
+5. If P1-1 is confirmed as unmitigated by `reviewer_check`, escalate to P0 and block until the verdict-read ordering or hash re-verification is added.
+
+VERDICT: PASS WITH RISKS

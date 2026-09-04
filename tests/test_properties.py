@@ -2048,6 +2048,8 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
     def test_check_refuses_a_nonsense_reviewer_lineage(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d, reviewers={"primary": "codex", "secondary": "codex"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1)
             self.assertIn("two distinct roles", r.stderr)
@@ -2131,6 +2133,8 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             open(inside, "w").write(json.dumps(
                 {"reviewer_commands": {"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"}}))
             run("git", "add", "-A"); run("git", "commit", "-qm", "planted policy")
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             r = self._cl(d, "check", policy=inside)
             self.assertEqual(r.returncode, 1)
             self.assertIn("inside the repository under review", r.stderr)
@@ -2141,6 +2145,8 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             planted = os.path.join(d, "reviewers.json")
             open(planted, "w").write("{}")
             run("git", "add", "-A"); run("git", "commit", "-qm", "planted")
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             link = os.path.join(self.policy_dir, "link.json")
             os.symlink(planted, link)
             r = self._cl(d, "check", policy=link)
@@ -2151,14 +2157,18 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d, cmds={"codex": "./bin/pass.sh", "glm": "./bin/pass.sh"})
             os.chmod(self.policy, 0o666)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1)
             self.assertIn("writable", r.stderr)
 
     def test_a_missing_policy_stops_and_says_where_to_put_one(self):
         with tempfile.TemporaryDirectory() as d:
-            self._repo(d)
+            run = self._repo(d)
             os.remove(self.policy)
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1)
             self.assertIn("no reviewer policy at", r.stderr)
@@ -2640,6 +2650,39 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
                 env, COVERLOOP_REVIEWERS=self.policy), capture_output=True, text=True)
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("inside the repository under review", r.stderr)
+
+    def test_a_low_risk_change_needs_no_reviewer_policy_at_all(self):
+        # Demanding the policy up front made `check` unusable on exactly the
+        # L0/L1 changes the quick start begins with: a first command that
+        # refuses to run until you configure a reviewer you do not yet need.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            os.remove(self.policy)
+            self._write(d, "docs/note.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "docs")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("SAFE TO MERGE", r.stdout)
+
+    def test_replacing_the_harness_behind_an_unchanged_command_earns_a_review(self):
+        # The STRING is only half of it: `./test.sh` keeps its name while its
+        # contents become `exit 0`.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            harness = os.path.join(d, "test.sh")
+            open(harness, "w").write("#!/bin/sh\npython3 -m unittest discover\n")
+            os.chmod(harness, 0o755)
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path)); cfg["test_command"] = "./test.sh"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "harness")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            open(harness, "w").write("#!/bin/sh\nexit 0\n")      # same name, no tests
+            run("git", "add", "-A"); run("git", "commit", "-qm", "quietly gut it")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("requires an independent codex review", r.stderr)
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:

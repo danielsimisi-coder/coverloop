@@ -55,8 +55,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Ten cold review rounds ran against this change; the gate stopped its own merge
-every time. 46 findings, all verified against the code, and the pattern in them
+Eleven cold review rounds ran against this change; the gate stopped its own
+merge every time. 49 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -165,6 +165,19 @@ What the rounds did close, in what did ship:
   resolved it through `PATH`, so `reviewer -> <repo>/scripts/reviewer` on an
   external PATH entry ran repository-controlled code; `check` now resolves what
   will actually run, follows the symlink, and refuses if it lands in the tree.
+- **Concurrent checks cannot consume each other's verdicts.** Two runs on the
+  same commit write the same `<sha>.<role>.log`, and the lock was taken per
+  attest phase and released before the transcripts were re-read — so a run whose
+  reviewer said FAIL could read the other's PASS and print `SAFE TO MERGE`.
+  Capture, verdict parsing and evaluation are one critical section now.
+- **The harness behind the command counts too.** Weakening was detected only
+  when the `test_command` STRING changed, so `./test.sh` could keep its name
+  while its contents became `exit 0`. Any file the command names that this span
+  also changed raises the tier.
+- **A low-risk change needs no reviewer policy.** `check` demanded one before it
+  derived the tier, refusing exactly the L0/L1 changes the quick start begins
+  with — a first command that will not run until you configure a reviewer you do
+  not yet need. It is loaded lazily and required the moment a reviewer is.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

@@ -2375,6 +2375,7 @@ def reviewer_policy(root):
 
 
 _SCRATCH_DIRS = []
+_HELD_LOCKS = []
 
 
 def _cleanup_scratch():
@@ -2388,10 +2389,40 @@ def _cleanup_scratch():
 def _stop(reason):
     """The single STOP line. stdout is flushed first so the reason is the last
     thing on the terminal even though it goes to stderr."""
+    for release in list(_HELD_LOCKS):
+        try:
+            release.__exit__(None, None, None)
+        except Exception:
+            pass
+        _HELD_LOCKS.remove(release)
     _cleanup_scratch()
     sys.stdout.flush()
     print(f"STOP: {reason}", file=sys.stderr)
     sys.exit(1)
+
+
+def _command_paths(root, cmd):
+    """Repository files a shell command names — the harness behind the string.
+
+    Word-split, not a shell parser: it is a tripwire, and it errs toward
+    noticing. `./test.sh` keeping its name while its contents become `exit 0`
+    is the case it exists for.
+    """
+    found = set()
+    for tok in (cmd or "").replace("|", " ").replace(";", " ").replace("&", " ").split():
+        tok = tok.strip("\"'")
+        if not tok or tok.startswith("-"):
+            continue
+        rel = os.path.normpath(tok)
+        if os.path.isabs(rel):
+            try:
+                rel = os.path.relpath(rel, root)
+            except ValueError:
+                continue
+        if rel.startswith("..") or not os.path.isfile(os.path.join(root, rel)):
+            continue
+        found.add(rel)
+    return found
 
 
 def _reviewed_test_command(root, prior, base=None):
@@ -2497,11 +2528,13 @@ def cmd_check(args):
               f"review may not nominate its own reviewer. Move them to {_reviewer_policy_path()} "
               f"(outside the repo) and delete them from {CONFIG_FILE}.", file=sys.stderr)
         sys.exit(1)
+    # The policy is REQUIRED only once the derived tier schedules a reviewer.
+    # Demanding it up front made `coverloop check` unusable on the L0/L1 changes
+    # the quick start begins with — a first command that refuses to run until
+    # you have configured a reviewer you do not yet need.
     policy, perr = reviewer_policy(root)
-    if perr:
-        print(f"STOP: {perr}", file=sys.stderr)
-        sys.exit(1)
-    primary, secondary = policy["primary"], policy["secondary"]
+    primary = (policy or {}).get("primary", "codex")
+    secondary = (policy or {}).get("secondary", "glm")
 
     # A dirty tree means evidence bound to HEAD would not describe the code that
     # ships. Refuse up front — the single most common process failure in the
@@ -2570,9 +2603,14 @@ def cmd_check(args):
     prev_cmd, history_readable = _reviewed_test_command(
         root, prior, base=getattr(args, "base", None))
     cur_cmd = cfg.get("test_command")
-    if (prev_cmd and prev_cmd != cur_cmd) or not history_readable:
+    # The STRING is only half of it: `./test.sh` can keep its name while its
+    # contents become `exit 0`. Any file the command names, that this span also
+    # changed, is part of what "tests: pass" now means.
+    harness = sorted({t for t in _command_paths(root, cur_cmd) if t in set(paths)})
+    if (prev_cmd and prev_cmd != cur_cmd) or not history_readable or harness:
         why = (f"the test command changed ({prev_cmd!r} -> {cur_cmd!r})"
                if prev_cmd and prev_cmd != cur_cmd else
+               f"the test harness it runs changed ({', '.join(harness[:3])})" if harness else
                "the previous test command could not be read from git")
         if tier_max(tier, "L2") != tier:
             tier = "L2"
@@ -2673,7 +2711,6 @@ def cmd_check(args):
     # review. Classifying the config FILE was too blunt — it sits in the first
     # span of every repo after `init`, and a floor that fires on adoption is a
     # floor people route around. What needs the review is the CHANGE to it.
-    cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):
         if tier == "L2" and primary != "codex":
@@ -2689,6 +2726,10 @@ def cmd_check(args):
         need.append(primary)
     if tier == "L3":
         need.append(secondary)
+    if need and perr:
+        # ...but the moment one IS needed, an unreadable policy is a STOP.
+        _stop(perr)
+    cmds = (policy or {}).get("commands", {})
     for role in need:
         cmd = cmds.get(role)
         if not cmd:
@@ -2726,9 +2767,15 @@ def cmd_check(args):
     # happened earlier. The residual limit is real and documented: an arbitrary
     # test command can do anything to local state, and a gate is not a sandbox.
     def _attest(ns, what):
+        # NOTE: called with the check-wide lock already held (see below), so it
+        # goes straight to the locked worker. Taking the lock per phase let a
+        # concurrent run's transcript be read back between phases: two checks on
+        # the same commit write the same <sha>.<role>.log, and a run whose
+        # reviewer said FAIL could consume the other's PASS and print SAFE TO
+        # MERGE. The whole capture -> verdict -> evaluate cycle is one critical
+        # section now.
         try:
-            with _attest_lock(root):
-                return _cmd_attest_locked(ns, root)
+            return _cmd_attest_locked(ns, root)
         except SystemExit as exc:
             # attest reports usage errors (no test_command configured, a
             # reviewer command that timed out) with fail_usage -> exit 2 and no
@@ -2765,6 +2812,9 @@ def cmd_check(args):
     for role in need:
         setattr(test_ns, role, None)
         setattr(test_ns, f"{role}_run", None)
+    check_lock = _attest_lock(root)
+    check_lock.__enter__()
+    _HELD_LOCKS.append(check_lock)
     rc = _attest(reviewer_ns, "reviews") if need else 0
     rc = _attest(test_ns, "tests") or rc
     report, why, malformed = find_report(root, sha)
@@ -2848,6 +2898,9 @@ def cmd_check(args):
     verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
                                require_captured=True, root=root,
                                test_command=cfg.get("test_command"))
+    if check_lock in _HELD_LOCKS:
+        _HELD_LOCKS.remove(check_lock)
+        check_lock.__exit__(None, None, None)
     failing = [c for c in checks if c["status"] != "pass"]
     if getattr(args, "json", False):
         # Automation reads the EXIT CODE. Printing {"verdict": "fail"} and then
