@@ -107,8 +107,35 @@ both reviewers were being handed a 941 KB diff because previously committed
 reviewer transcripts were in it — the reviewed diff now excludes
 `.coverloop/reports/`.
 
-35 new regression tests lock the falsification table from the research pass and
-every finding above (263 in the suite). Explicitly **not** done in this release, and still open: a signed
+A third cold review returned **VERDICT: FAIL** with seven more findings, five of
+them fail-opens in the previous rounds' own fixes:
+
+- **L0 shed the inherited obligation entirely** — `evaluate` returned success
+  for L0 before it ever looked at it, so a docs-only commit carried an
+  unapproved L3 into main.
+- **`check --json` printed `"verdict": "fail"` and exited 0**, so every caller
+  that reads the status the way CI does saw a missing human approval as success.
+  Its stdout is now the JSON document and nothing else.
+- **An elevation could claim the classifier's own exemption.** Under
+  `--human-gate-scope irreversible` the exemption asks the path classifier — and
+  `--raise-tier` exists precisely because the classifier under-reads the change.
+  An elevated tier now always requires the human.
+- **The marker did not have to be the reviewer's last word**: `VERDICT: PASS`
+  followed by "critical defect remains" passed, and a lowercase `verdict: fail`
+  after it was not even seen. Marker matching is case-insensitive (so a
+  non-canonical verdict is caught and rejected), and only a CLI footer may
+  follow the closing marker.
+- **The in-repo reviewer guard was bypassable** with `sh scripts/reviewer` — an
+  extensionless, non-executable file. Any regular file in the tree is refused
+  now; directories still pass, which is what keeps a pathspec working.
+- **`scope=irreversible` was retroactively sticky**: re-judging a historical L3
+  with the default policy turned a legitimately exempt change into a permanent
+  obligation on every later commit. Ancestors are judged by the same policy.
+- **A later `attest` erased the elevation reason** on the ordinary
+  `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
+
+43 new regression tests lock the falsification table from the research pass and
+every finding above (271 in the suite). Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
 `codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
 the L3 GLM requirement.

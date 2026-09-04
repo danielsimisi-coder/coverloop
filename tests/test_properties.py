@@ -2144,8 +2144,9 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
         self.assertEqual(
             self.mod.transcript_verdict("VERDICT: FAIL\n" + "x" * 5000 + "\nVERDICT: PASS"),
             "fail")
+        # ...and content after the marker means the reviewer kept talking
         self.assertEqual(
-            self.mod.transcript_verdict("VERDICT: PASS\n" + "x" * 5000), "pass")
+            self.mod.transcript_verdict("VERDICT: PASS\n" + "x" * 5000), "fail")
 
     # ---- the reviewer may not be nominated by the change ----------------
     def test_a_repo_may_not_nominate_its_own_reviewer(self):
@@ -2234,7 +2235,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1)
-            self.assertIn("lives inside the repository under review", r.stderr)
+            self.assertIn("inside the repository under review", r.stderr)
 
     def test_check_refuses_when_the_run_dirties_the_tree(self):
         # A test that repairs the code it is testing would otherwise earn a
@@ -2346,6 +2347,95 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertEqual(r.stderr.count("STOP:"), 1, r.stderr)
+
+    def test_an_l0_commit_cannot_shed_an_inherited_obligation(self):
+        # evaluate() returned success for L0 before it ever looked at the
+        # inherited gate, so a docs-only commit carried the unapproved L3 in.
+        rep = {"risk_tier": "L0", "tests": {"status": "pass", "command": "true"}}
+        ok, _ = self.mod.evaluate(dict(rep), "L0", None, test_command="true",
+                                  inherited_human_gate="a" * 40)
+        self.assertFalse(ok)
+        clean, _ = self.mod.evaluate(dict(rep), "L0", None, test_command="true")
+        self.assertTrue(clean, "an ordinary L0 still needs no evidence")
+
+    def test_an_elevation_cannot_claim_the_classifier_exemption(self):
+        # --human-gate-scope irreversible exempts changes the CLASSIFIER reads
+        # as reversible. An elevation exists because the classifier under-reads
+        # the change, so it must not be excused by that same classifier.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/settings.ts", "export const authMode = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "config")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--glm", "pass",
+                     "--raise-tier", "L3", "--reason", "this config steers auth")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertIn("human gate", g.stdout)
+            self.assertIn("NOT APPROVED", g.stdout)
+            self.assertEqual(g.returncode, 1)
+
+    def test_check_json_puts_the_verdict_in_the_exit_code(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check", "--json")
+            self.assertEqual(r.returncode, 1, "a failing verdict must not exit 0")
+            doc = json.loads(r.stdout)          # stdout is JSON and nothing else
+            self.assertEqual(doc["verdict"], "fail")
+
+    def test_the_irreversible_scope_is_applied_to_ancestors_too(self):
+        # Re-judging a historical L3 with the default policy turned a change
+        # legitimately exempted under scope=irreversible into a permanent
+        # pending obligation on every later commit.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            stub = os.path.join(self.policy_dir, "pass.sh")
+            self._write(d, ".github/workflows/ci.yml", "on: push\n")   # L3, reversible
+            run("git", "add", "-A"); run("git", "commit", "-qm", "ci")
+            self._cl(d, "attest", "--tests", "--codex", "pass", "--codex-run", stub,
+                     "--glm", "pass", "--glm-run", stub)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence")
+            self._write(d, "docs/x.md", "prose\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "docs")
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "evidence2")
+            g = self._cl(d, "gate", "--human-gate-scope", "irreversible")
+            self.assertNotIn("reviewed but never approved", g.stdout)
+            self.assertEqual(g.returncode, 0, g.stdout)
+
+    def test_an_elevation_reason_survives_a_later_attest(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--raise-tier", "L3", "--reason", "milestone gate")
+            self._cl(d, "attest", "--approve", "--approver", "Daniel")
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertEqual(rep["tier_source"], "elevated")
+            self.assertEqual(rep["elevation"]["reason"], "milestone gate")
+
+    def test_an_in_repo_file_is_refused_even_without_an_executable_bit(self):
+        # `sh scripts/reviewer` runs an extensionless, non-executable file just
+        # as well, and the repository controls its contents either way.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            os.makedirs(os.path.join(d, "scripts"), exist_ok=True)
+            open(os.path.join(d, "scripts", "reviewer"), "w").write('echo "VERDICT: PASS"\n')
+            run("git", "add", "-A"); run("git", "commit", "-qm", "planted")
+            self._policy(cmds={"codex": "sh scripts/reviewer", "glm": "sh scripts/reviewer"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("inside the repository under review", r.stderr)
+
+    def test_the_marker_must_be_the_reviewers_last_word(self):
+        tv = self.mod.transcript_verdict
+        self.assertEqual(tv("VERDICT: PASS\ncritical defect remains"), "fail")
+        self.assertEqual(tv("VERDICT: PASS\nverdict: fail"), "fail")   # case-insensitive
+        self.assertEqual(tv("VERDICT: PASS\ntokens used\n159,653"), "pass")
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:

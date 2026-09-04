@@ -321,7 +321,7 @@ def _changed_paths_for_gate(root, args):
     return list(tracked) + list(untracked)
 
 
-def _validated_baseline(root, sha, limit=2000):
+def _validated_baseline(root, sha, limit=2000, human_gate_scope="all"):
     """The newest ancestor of SHA whose evidence chain actually VALIDATES.
 
     Returns (baseline, validated): `validated` is False when the baseline is the
@@ -404,8 +404,16 @@ def _validated_baseline(root, sha, limit=2000):
         # a branch containing an unapproved migration cannot be merged by
         # putting a docs commit on top of it. Sticky — a later approval signs
         # for its own segment, never retroactively for this one.
+        # Judge the ancestor by the SAME policy this run uses. Re-evaluating a
+        # historical L3 with the default "all" made an L3 that was legitimately
+        # exempt under --human-gate-scope irreversible into a permanent pending
+        # obligation on every later commit.
+        anc_human = True
+        if human_gate_scope == "irreversible" and tier == "L3":
+            anc_human = (not seg) or any(IRREVERSIBLE_RE.search(pth) for pth in seg)
         authorized, _ac = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
-                                   require_captured=True, scope=EVIDENCE_AUTHORIZATION)
+                                   require_captured=True, human_gate_required=anc_human,
+                                   scope=EVIDENCE_AUTHORIZATION)
         if not authorized:
             pending_human = pending_human or c
         baseline = c
@@ -478,7 +486,8 @@ def _gate_floor_paths(root, args, report, sha):
     # word for where its coverage began, which is exactly the trust the
     # planted-report attack abused. The walk finds the same origin commit when
     # its report is honest, and walks past it when it is not.
-    prior, prior_validated, pending_human = _validated_baseline(root, sha)
+    prior, prior_validated, pending_human = _validated_baseline(
+        root, sha, human_gate_scope=getattr(args, "human_gate_scope", "all"))
     if prior is None:
         return sorted(set(paths)), True, None
     if prior == sha:
@@ -1360,6 +1369,14 @@ def _cmd_attest_locked(args, root):
             fail_usage(f"refusing to downgrade risk_tier {existing} -> {final_tier}; a lower tier "
                        f"drops evidence requirements. Re-attest with --force to override.")
         report["risk_tier"] = final_tier
+    prior_elevation = report.get("elevation") if report else None
+    if (not elevation and prior_elevation and tier_source == "derived"
+            and prior_elevation.get("to") == report["risk_tier"]):
+        # The tier is still the elevated one — it only looks "derived" now
+        # because `derived` folds in the existing report's tier. Dropping the
+        # provenance here erased the recorded reason on the ordinary
+        # `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
+        elevation, tier_source = prior_elevation, "elevated"
     report["tier_source"] = tier_source
     report["floor"] = {"tier": auto_floor, "reasons": auto_reasons[:8]}
     if elevation:
@@ -1656,9 +1673,14 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
     """
     checks = []
 
-    if tier == "L0":
+    if tier == "L0" and not inherited_human_gate:
         checks.append(check("tier", True, "L0: trivial — no evidence required"))
         return True, checks
+    if tier == "L0":
+        # L0 needs no evidence of its OWN, but it cannot be the commit that
+        # carries an unapproved L3 into main: returning early here let a
+        # docs-only commit shed the obligation entirely.
+        checks.append(check("tier", True, "L0: trivial — no evidence required"))
 
     tests = report.get("tests") if report else None
     recorded_cmd = str((tests or {}).get("command", "")).strip()
@@ -2180,9 +2202,15 @@ def cmd_gate(args):
         # that matches nothing irreversible, and a committed authz change was
         # waved through without the exemption ever looking at it.
         _changed = auto_paths if not unknown else []
+        # An ELEVATED tier is a statement that the classifier under-reads this
+        # change. Letting that same classifier then grant the exemption made
+        # `--raise-tier L3 --reason "this config steers auth"` merge with no
+        # human at all.
+        _elevated = (report or {}).get("tier_source") == "elevated"
         # No visible change set (a bare HEAD check) is NOT evidence of safety:
         # fall back to demanding the human.
-        human_required = (not _changed) or any(IRREVERSIBLE_RE.search(p) for p in _changed)
+        human_required = (_elevated or (not _changed)
+                          or any(IRREVERSIBLE_RE.search(p) for p in _changed))
 
     verdict, checks = evaluate(report, tier, files,
                                human_gate_required=human_required,
@@ -2256,7 +2284,14 @@ def cmd_gate(args):
 # "LGTM", "SHIP" and every other human phrasing are NOT a pass — inferring one
 # would let a hedged review land as `pass` with zero open findings. Missing,
 # malformed, truncated, ambiguous or non-canonical: FAIL CLOSED.
-_VERDICT_MARKER = re.compile(r"^[ \t]*VERDICT:.*$", re.M)
+# Case-INSENSITIVE on purpose: a lowercase "verdict: fail" is still a verdict,
+# and it must be seen so it can be rejected as non-canonical rather than skipped.
+_VERDICT_MARKER = re.compile(r"^[ \t]*VERDICT:.*$", re.M | re.I)
+# The only thing allowed to follow the closing marker: a CLI's own footer.
+# Codex prints "tokens used" and a number. Anything sentence-like after the
+# verdict means the reviewer kept talking, and the marker was not its last word.
+_VERDICT_FOOTER = re.compile(
+    r"^(tokens?[ _]used\s*:?\s*[\d,.]*\s*[kmb]?|[\d,.]+|[-=_*]{3,})$", re.I)
 _VERDICT_CANONICAL_PASS = "VERDICT: PASS"
 _VERDICT_CANONICAL_FAIL = "VERDICT: FAIL"
 
@@ -2286,8 +2321,9 @@ def transcript_verdict(text, tail_lines=10):
         return "fail"
     if any(body != _VERDICT_CANONICAL_PASS for _n, body in markers):
         return "fail"
-    if len(live) - markers[-1][0] > tail_lines:
-        return "fail"          # a marker buried above the review is not a verdict
+    trailing = [body for _i, body in live[markers[-1][0] + 1:]]
+    if len(trailing) > tail_lines or any(not _VERDICT_FOOTER.match(t) for t in trailing):
+        return "fail"          # the reviewer kept talking; the marker was not its last word
     return "pass"
 
 
@@ -2361,16 +2397,14 @@ def reviewer_policy(root):
                 else os.path.realpath(tok)
             if not (cand.startswith(root_real + os.sep) and os.path.isfile(cand)):
                 continue
-            # A file inside the repo is only a hazard if it can RUN: an
-            # executable, or a script some interpreter will be handed. A
-            # pathspec ("git diff -- .") or a data file argument is not, and
-            # refusing those made the tool refuse its own reviewer command.
-            runnable = os.access(cand, os.X_OK) or os.path.splitext(cand)[1] in (
-                ".sh", ".bash", ".py", ".rb", ".pl", ".js", ".mjs", ".ts")
-            if runnable:
-                return None, (f"reviewer policy {path}: the {role} command runs {tok!r}, which "
-                              f"lives inside the repository under review — the change could "
-                              f"rewrite its own reviewer. Point it at a command outside the repo.")
+            # ANY regular file in the tree, not just an executable one:
+            # `sh scripts/reviewer` runs an extensionless, non-executable file
+            # just as well, and the repository controls its contents either way.
+            # Directories still pass, which is what keeps a pathspec
+            # ("git diff -- .") from tripping this.
+            return None, (f"reviewer policy {path}: the {role} command names {tok!r}, a file "
+                          f"inside the repository under review — the change could rewrite its "
+                          f"own reviewer. Point it at a command outside the repo.")
     return {"path": path, "primary": primary, "secondary": secondary, "commands": cmds}, None
 
 
@@ -2496,13 +2530,19 @@ def cmd_check(args):
         # attest requires a stated verdict, so we provisionally state "fail" and
         # only upgrade it when the transcript ends in a pass marker. Fail-closed.
         setattr(a, role, "fail")
-    print(f"coverloop check — {sha[:12]} — derived tier {tier}"
-          + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
+    # In --json mode stdout must be nothing but the JSON document.
+    say = (lambda *a: print(*a, file=sys.stderr)) if getattr(args, "json", False) else print
+    say(f"coverloop check — {sha[:12]} — derived tier {tier}"
+        + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:
-        print(f"  - {r}")
+        say(f"  - {r}")
     try:
         with _attest_lock(root):
-            rc = _cmd_attest_locked(a, root)
+            if getattr(args, "json", False):
+                with contextlib.redirect_stdout(sys.stderr):
+                    rc = _cmd_attest_locked(a, root)
+            else:
+                rc = _cmd_attest_locked(a, root)
     except SystemExit as exc:
         # attest reports usage errors (no test_command configured, a reviewer
         # command that timed out) with fail_usage -> exit 2 and no STOP line.
@@ -2576,16 +2616,24 @@ def cmd_check(args):
     files = changed_files(root, g.base, sha) if g.base else None
     human_required = True
     if tier == "L3" and g.human_gate_scope == "irreversible":
-        human_required = (not paths) or any(IRREVERSIBLE_RE.search(p) for p in paths)
+        # The exemption reads the CLASSIFIED paths. An elevation exists exactly
+        # because the classifier cannot see this risk, so it must not then be
+        # excused by that same classifier finding nothing irreversible.
+        elevated = bool(raise_to) or (report or {}).get("tier_source") == "elevated"
+        human_required = elevated or (not paths) or any(IRREVERSIBLE_RE.search(p) for p in paths)
     verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
                                inherited_human_gate=pending_human,
                                require_captured=True, root=root,
                                test_command=cfg.get("test_command"))
     failing = [c for c in checks if c["status"] != "pass"]
     if getattr(args, "json", False):
+        # Automation reads the EXIT CODE. Printing {"verdict": "fail"} and then
+        # exiting 0 made a missing human approval look like success to every
+        # caller that checks the status the way CI does.
         print(json.dumps({"schema": "coverloop-check/v1", "commit": sha, "tier": tier,
                           "verdict": "pass" if verdict else "fail", "checks": checks}, indent=2))
-    elif verdict:
+        sys.exit(0 if verdict else 1)
+    if verdict:
         for c in checks:
             print(f"  ✓ {c['check']:<11} {c['detail']}")
         print(f"  ✓ evidence bound to {sha[:12]}")
@@ -2598,7 +2646,7 @@ def cmd_check(args):
             _stop(f"{tier} requires a named human approval — "
                   f"`coverloop attest --approve --approver <name>` then re-run check")
         _stop(first["detail"])
-    print("commit the evidence in .coverloop/reports/ with this change.")
+    say("commit the evidence in .coverloop/reports/ with this change.")
     sys.exit(0)
 
 
