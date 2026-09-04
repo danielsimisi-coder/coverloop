@@ -1,0 +1,74 @@
+## 1. Verdict: PASS WITH RISKS
+
+## 2. P0 blockers
+None found. No direct evidence of a fail-open regression, floor bypass, or forgeable evidence path with concrete exploitability in the provided diff.
+
+## 3. P1 serious issues
+
+**P1-1: Secret scanning silently skipped when `_secret` module is unavailable.**
+In `cmd_check`:
+```python
+if _secret is not None:
+    try:
+        found = _secret.scan(diff_text)
+    ...
+    if found:
+        _stop(...)
+```
+If `_secret` is `None` (module not installed), the entire scan block is skipped with no warning and no STOP. The diff is still redacted via `redact_secrets()`, but any secret format the redactor doesn't recognize reaches the reviewer process (which may forward to an external model). The changelog explicitly states "a secret that survives redaction stops the run outright" — but that contract is only enforced when the scanner is present. This is a fail-open gap in the privacy gate. Suggested fix: if `_secret is None`, either STOP with "secret scanner unavailable — refusing to send diff to reviewer" or emit a loud warning.
+
+**P1-2: `$COVERLOOP_REPO`-prefixed paths in reviewer commands evade the in-repo token check.**
+`reviewer_policy()` tokenizes the command and rejects tokens resolving to files inside the repo:
+```python
+cand = os.path.realpath(os.path.join(root_real, tok)) if not os.path.isabs(tok) \
+    else os.path.realpath(tok)
+if not (cand.startswith(root_real + os.sep) and os.path.isfile(cand)):
+    continue
+```
+A command like `sh $COVERLOOP_REPO/scripts/reviewer` passes this check because the literal token `$COVERLOOP_REPO/scripts/reviewer` does not resolve to a real file (the `$` is literal at parse time). At runtime, the shell expands `$COVERLOOP_REPO` to the repo path, and `sh` executes a repo-controlled file. The scratch-dir + PATH filtering mitigates `python3 -m reviewer` and relative-path redirects, but does NOT mitigate explicit `$COVERLOOP_REPO` references since the env var is deliberately set. This requires the operator to write such a command in their trusted policy, so it's not a change-side bypass — but the token check is supposed to be defense-in-depth and it has a gap here. Suggested fix: expand `$COVERLOOP_REPO` (and `$HOME`) in tokens before resolving, or refuse any token containing `$COVERLOOP_REPO` that isn't `$COVERLOOP_DIFF`/`$COVERLOOP_BASE`.
+
+## 4. P2 improvements
+
+**P2-1: `check` calls `evaluate()` directly instead of `cmd_gate()`, bypassing gate's independent floor computation.**
+`cmd_check` computes the floor via `_gate_floor_paths` and passes the derived `tier` to `evaluate()`. `cmd_gate` independently recomputes its own floor and takes the MAX. If there were ever a discrepancy between `check`'s floor and `gate`'s (e.g., a future bug in one path), `check` could print `SAFE TO MERGE` while CI's `gate` would fail. Not fail-open (CI catches it), but the comment "run the real gate" overstates what happens — it runs `evaluate` with `check`-derived parameters, not `cmd_gate`. Consider calling `cmd_gate` internally, or add a test asserting `check` and `gate` agree on tier for the same tree.
+
+**P2-2: `require_transcript` not passed in `check`'s final `evaluate()` call.**
+```python
+verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
+                           require_captured=True, root=root,
+                           test_command=cfg.get("test_command"))
+```
+`require_transcript` defaults to `False`. If `require_transcript` enforces transcript hash-to-commit binding (distinct from `require_captured` which checks source), `check` may skip that verification. The reviewers did run via `capture_run` (which hashes output), so the evidence is captured — but if `require_transcript` adds an independent hash check, it's missing here. Verify whether `require_captured=True` subsumes `require_transcript`; if not, add it.
+
+**P2-3: Elevation reason misleadingly preserved when the floor rises to match.**
+```python
+if (not elevation and prior_elevation and tier_source == "derived"
+        and prior_elevation.get("to") == report["risk_tier"]):
+    elevation, tier_source = prior_elevation, "elevated"
+```
+If a report was elevated to L3 for a docs file (floor L1), and a later commit adds a migration (floor L3), `derived = L3`, `tier_source = "derived"`, and the old elevation reason is preserved. The report now says "elevated: milestone gate" when the real reason is "migration." Not fail-open (tier is still L3), but the recorded reason is misleading for audit. Consider clearing the elevation when `auto_floor >= prior_elevation["to"]`.
+
+**P2-4: `_VERDICT_FOOTER` allows up to 3 lines of bare numbers/separators after PASS.**
+A reviewer could output `VERDICT: PASS\n1\n2\n3` and pass. Not exploitable (numbers aren't verdicts), but the allowance is generous. The test `test_a_marker_buried_above_the_review_is_not_a_verdict` covers prompt-echo cases well. Low risk.
+
+## 5. Missing tests / verification
+
+- No test for `_secret is None` (scanner module unavailable) — the skip path is untested.
+- No test for `$COVERLOOP_REPO` in a reviewer command token — the evasion path is untested.
+- No test asserting `check` and `gate` derive the same tier for the same tree (P2-1).
+- No test for `require_transcript` behavior in `check`'s final evaluate call (P2-2).
+- No test for the elevation-reason-preservation edge case when floor rises (P2-3).
+
+## 6. Likely false positives / what to ignore
+
+- **`--force` allowing tier below floor in `attest`**: Not a bypass — `gate` and `check` both independently compute the floor and take MAX. A forced L0 report on a migration still gates at L3. The `tier_source="forced"` marker makes it visible. This is by design.
+- **`check` running reviewers before tests**: The ordering is intentional and documented. The fingerprint tripwire before/after is acknowledged as incomplete ("a gate is not a sandbox"). Not a regression.
+- **Legacy `--tier` pin kept working**: Deliberately backward-compatible. Below floor it's refused; above floor it's recorded as elevation with "no reason given." Not fail-open.
+- **`if tier == "L3":` guard added to human gate block**: Correct — human gate is an L3 requirement. L0/L1/L2 with `human_gate_required=True` (default) no longer spuriously require human approval. This is a correctness fix, not a loosening.
+- **Session hook reduced to 7 lines**: Enforcement moved to code (`coverloop check`). Prose is for unenforceable rules. Not a bypass — the gate still runs.
+
+## 7. Suggested next action
+
+Address P1-1 (secret scanner unavailable → should STOP or warn) and P1-2 (`$COVERLOOP_REPO` token expansion) before merge. Both have straightforward fixes. P2 items can follow as hardening. The test suite is extensive and well-targeted; add the missing tests listed above. The diff is otherwise solid — the fail-closed design is consistent, the baseline semantics are deliberately conservative, and the deferred "verification is not authorization" item is the right call given the five-round failure history.
+
+VERDICT: PASS

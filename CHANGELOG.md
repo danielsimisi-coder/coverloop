@@ -55,8 +55,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Nine cold review rounds ran against this change; the gate stopped its own merge
-every time. 43 findings, all verified against the code, and the pattern in them
+Ten cold review rounds ran against this change; the gate stopped its own merge
+every time. 46 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -154,6 +154,17 @@ What the rounds did close, in what did ship:
   when capturing output — by which point a committed credential had already
   left the machine. The diff is redacted and scanned before any reviewer process
   starts, and a secret that survives redaction stops the run outright.
+- **Three guards checked one thing while the runtime did another** — the same
+  shape each time. `--base` compared the test command against the config's
+  first-ever version rather than the base's, so a branch could RESTORE a
+  historical `true` over a base that runs the real suite. The outbound secret
+  scan was skipped entirely when the canonical filter could not be imported,
+  leaving a fallback that knows neither database URLs nor service-role keys —
+  a missing filter now stops the run before any reviewer sees the packet.
+  And policy validation checked the literal command token while execution
+  resolved it through `PATH`, so `reviewer -> <repo>/scripts/reviewer` on an
+  external PATH entry ran repository-controlled code; `check` now resolves what
+  will actually run, follows the symlink, and refuses if it lands in the tree.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

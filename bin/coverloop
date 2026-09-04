@@ -2394,7 +2394,7 @@ def _stop(reason):
     sys.exit(1)
 
 
-def _reviewed_test_command(root, prior):
+def _reviewed_test_command(root, prior, base=None):
     """(command, readable) — the test command as it stood at the last point the
     evidence chain actually covered.
 
@@ -2426,10 +2426,18 @@ def _reviewed_test_command(root, prior):
         except ValueError:
             return None, False
 
-    if prior:
-        cmd, ok = _at(prior)
-        if ok and cmd:
-            return cmd, True
+    for point in (base, prior):
+        # With --base the reviewed state is the base branch, full stop: reading
+        # the config's first-ever version there let a branch RESTORE a historical
+        # `true` over a base that runs the real suite, with no promotion at all.
+        if point:
+            cmd, ok = _at(point)
+            if not ok:
+                return None, False
+            if cmd:
+                return cmd, True
+    if base:
+        return None, False          # the base has no config to compare against
     return _at(versions[0])
 
 
@@ -2559,7 +2567,8 @@ def cmd_check(args):
         if prior is None:
             _stop("cannot determine the span to review (shallow clone or git failure) — "
                   "fetch full history or pass --base")
-    prev_cmd, history_readable = _reviewed_test_command(root, prior)
+    prev_cmd, history_readable = _reviewed_test_command(
+        root, prior, base=getattr(args, "base", None))
     cur_cmd = cfg.get("test_command")
     if (prev_cmd and prev_cmd != cur_cmd) or not history_readable:
         why = (f"the test command changed ({prev_cmd!r} -> {cur_cmd!r})"
@@ -2621,8 +2630,16 @@ def cmd_check(args):
     # redact before any reviewer process starts, and refuse outright if the
     # scan still finds a secret in the redacted text: a privacy gate that
     # forwards the packet anyway is not a privacy gate.
+    if _secret is None:
+        # The fallback regex covers a handful of key shapes; it does not know
+        # database URLs, service-role keys or Google keys. Handing a packet to
+        # something that may forward it to a model, with the canonical filter
+        # missing, is the one case where continuing is worse than stopping.
+        _stop("the secret filter (glm_secret_filter) could not be imported, so the diff "
+              "cannot be scanned before reviewers see it — install it beside bin/coverloop "
+              "or run the reviewers yourself and attach the transcript with --codex-log")
     diff_text = redact_secrets(diff_text)
-    if _secret is not None:
+    if True:
         try:
             found = _secret.scan(diff_text)
         except Exception:
@@ -2721,6 +2738,24 @@ def cmd_check(args):
                 _stop(f"attest could not run the {what} (see the error above)")
             raise
 
+    # Policy validation checks the literal tokens; execution resolves them
+    # through PATH. An external PATH entry holding `reviewer -> <repo>/scripts/
+    # reviewer` therefore ran repository-controlled code past a guard that only
+    # ever looked at the string. Resolve what will ACTUALLY run, follow the
+    # symlink, and refuse if it lands in the tree under review.
+    root_real = os.path.realpath(root)
+    for role in need:
+        for tok in (cmds.get(role) or "").split():
+            tok = tok.strip("\"'")
+            if not tok or tok.startswith("-") or "=" in tok:
+                continue
+            exe = (tok if os.path.sep in tok
+                   else shutil.which(tok, path=review_env.get("PATH")))
+            real = os.path.realpath(exe) if exe else None
+            if real and real.startswith(root_real + os.sep):
+                _stop(f"the {role} reviewer resolves to {real}, inside the repository under "
+                      f"review — the change could rewrite its own reviewer")
+            break
     before = _reviewer_binary_fingerprints({r: cmds[r] for r in need if cmds.get(r)},
                                            review_env)
     reviewer_ns = copy.copy(a)

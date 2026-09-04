@@ -2578,6 +2578,69 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             self.assertNotIn(secret, packet, "the raw key reached the reviewer")
             self.assertIn("migrations/1.sql", packet, "the rest of the diff is intact")
 
+    def test_a_branch_cannot_restore_a_historical_test_command_under_base(self):
+        # With --base the reviewed state is the base branch. Reading the
+        # config's first-ever version instead let a branch RESTORE a historical
+        # `true` over a base that runs the real suite, with no promotion.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})          # _repo writes test_command "true"
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path)); cfg["test_command"] = "python3 -m unittest"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "real tests on the base")
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                                  capture_output=True, text=True).stdout.strip()
+            cfg["test_command"] = "true"          # restore the historical value
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "quietly weaken")
+            r = self._cl(d, "check", "--base", base)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("requires an independent codex review", r.stderr)
+
+    def test_no_secret_filter_means_no_reviewers(self):
+        # The fallback regex knows a handful of key shapes; it does not know
+        # database URLs, service-role keys or Google keys. Handing a packet to
+        # something that may forward it with the canonical filter missing is
+        # the one case where continuing is worse than stopping.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={"codex": "pass.sh", "glm": "pass.sh"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            # coverloop imports the filter from its OWN directory, so a copy
+            # standing alone is exactly the "filter missing" deployment.
+            import shutil as _sh
+            alone = os.path.join(self.policy_dir, "alone")
+            os.makedirs(alone, exist_ok=True)
+            solo = os.path.join(alone, "coverloop")
+            _sh.copy2(CLI, solo)
+            env = dict(os.environ, COVERLOOP_REVIEWERS=self.policy, PYTHONPATH="")
+            r = subprocess.run([sys.executable, solo, "check"], cwd=d,
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("secret filter", r.stderr)
+
+    def test_a_path_symlink_into_the_repo_is_refused(self):
+        # Policy validation checks literal tokens; execution resolves through
+        # PATH. `reviewer -> <repo>/scripts/reviewer` on an external PATH entry
+        # ran repository-controlled code past a guard that only saw the string.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            os.makedirs(os.path.join(d, "scripts"), exist_ok=True)
+            planted = os.path.join(d, "scripts", "reviewer")
+            open(planted, "w").write('#!/bin/sh\necho "VERDICT: PASS"\n')
+            os.chmod(planted, 0o755)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "planted")
+            bindir = os.path.join(self.policy_dir, "bin"); os.makedirs(bindir, exist_ok=True)
+            os.symlink(planted, os.path.join(bindir, "sneaky-reviewer"))
+            self._policy(cmds={"codex": "sneaky-reviewer", "glm": "sneaky-reviewer"})
+            self._write(d, "supabase/migrations/1.sql", "alter table u;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "migrate")
+            env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"])
+            r = subprocess.run([sys.executable, CLI, "check"], cwd=d, env=dict(
+                env, COVERLOOP_REVIEWERS=self.policy), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("inside the repository under review", r.stderr)
+
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
             run = self._repo(d)
