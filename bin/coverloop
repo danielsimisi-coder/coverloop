@@ -350,10 +350,10 @@ def _validated_baseline(root, sha, limit=2000):
     """
     shallow = git(["rev-parse", "--is-shallow-repository"], cwd=root)
     if shallow is None or shallow.strip() == "true":
-        return None, False
+        return None, False, None
     out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
     if not out:
-        return None, False
+        return None, False, None
     commits = out.split()
     attested = []
     for c in commits[1:]:
@@ -365,9 +365,10 @@ def _validated_baseline(root, sha, limit=2000):
             break
     root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
     if not root_out:
-        return None, False
+        return None, False, None
     baseline = root_out.split()[-1]
     validated = False
+    pending_human = None
     cfg, _cfg_err = load_json(os.path.join(root, CONFIG_FILE))
     cfg_cmd = (cfg or {}).get("test_command")
     for c, rep in reversed(attested):
@@ -375,14 +376,14 @@ def _validated_baseline(root, sha, limit=2000):
             continue
         seg = _git_paths(["diff", "--name-only", f"{baseline}..{c}"], root)
         if seg is None:
-            return None, False
+            return None, False, None
         if not validated:
             # The segment reaching back to the bare root must include the
             # root's own files — a two-dot diff excludes what the root itself
             # introduced, and nothing else ever accounts for those.
             own = _git_paths(["show", "--name-only", "--pretty=format:", baseline], root)
             if own is None:
-                return None, False
+                return None, False, None
             seg = list(seg) + own
         tier = rep["risk_tier"]
         floor, _reasons = classify_paths(seg, BREADTH_L2_FILES)
@@ -394,12 +395,22 @@ def _validated_baseline(root, sha, limit=2000):
         # authorization is enforced by the GATE on the commit being shipped —
         # it is never inherited from an ancestor, and never inferred here.
         ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
-                               scope=EVIDENCE_VERIFICATION)
+                               require_captured=True, scope=EVIDENCE_VERIFICATION)
         if not ok:
             continue  # a tier claim with no evidence behind it is not a baseline
+        # Advancing past this commit removes its files from every later floor.
+        # If its tier required a human signature and never got one, that
+        # OBLIGATION does not vanish with the files: it is carried to HEAD, so
+        # a branch containing an unapproved migration cannot be merged by
+        # putting a docs commit on top of it. Sticky — a later approval signs
+        # for its own segment, never retroactively for this one.
+        authorized, _ac = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
+                                   require_captured=True, scope=EVIDENCE_AUTHORIZATION)
+        if not authorized:
+            pending_human = pending_human or c
         baseline = c
         validated = True
-    return baseline, validated
+    return baseline, validated, pending_human
 
 
 _BASELINE_WALK_CAP = 100
@@ -425,20 +436,22 @@ def _gate_floor_paths(root, args, report, sha):
         # before it can reach git as a flag.
         base = _resolve_commit(base, root)
         if base is None:
-            return [], True
+            return [], True, None
         out = _git_paths(["diff", "--name-only", f"{base}...HEAD"], root)
         if out is None:
             out = _git_paths(["diff", "--name-only", base, "HEAD"], root)
         if out is None:
             # An unresolvable --base is a caller error, not an all-clear. Reading
             # it as "no files changed" turned a typo into a passing gate.
-            return [], True
-        return out, False
+            return [], True, None
+        # With an explicit base the whole span is classified, so an unapproved
+        # commit inside it raises the tier directly — nothing to inherit.
+        return out, False, None
 
     tracked = _git_paths(["diff", "--name-only", "HEAD"], root)
     untracked = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
     if tracked is None or untracked is None:
-        return [], True
+        return [], True, None
     paths = list(tracked) + list(untracked)
 
     # ...plus whatever the evidence does not already cover.
@@ -465,9 +478,9 @@ def _gate_floor_paths(root, args, report, sha):
     # word for where its coverage began, which is exactly the trust the
     # planted-report attack abused. The walk finds the same origin commit when
     # its report is honest, and walks past it when it is not.
-    prior, prior_validated = _validated_baseline(root, sha)
+    prior, prior_validated, pending_human = _validated_baseline(root, sha)
     if prior is None:
-        return sorted(set(paths)), True
+        return sorted(set(paths)), True, None
     if prior == sha:
         # Only reachable for a single-commit repo (sha IS its own root): there
         # is nothing to diff against, so list its own files.
@@ -494,9 +507,9 @@ def _gate_floor_paths(root, args, report, sha):
         # `or []` here once turned a git timeout, a shallow clone, a corrupt
         # object or a bad origin_commit into an EMPTY path set with
         # unknown=False — an all-clear built out of a failure.
-        return sorted(set(paths)), True
+        return sorted(set(paths)), True, pending_human
     paths += out
-    return sorted(set(paths)), False
+    return sorted(set(paths)), False, pending_human
 
 
 def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
@@ -1269,7 +1282,7 @@ def _cmd_attest_locked(args, root):
     # Nothing lowers the floor. --force only bypasses the "git cannot answer"
     # refusal and is recorded, never hidden.
     try:
-        floor_paths, floor_unknown = _gate_floor_paths(root, args, report, sha)
+        floor_paths, floor_unknown, _pending = _gate_floor_paths(root, args, report, sha)
     except Exception:
         floor_paths, floor_unknown = [], True
     if floor_unknown and not getattr(args, "force", False):
@@ -1633,7 +1646,7 @@ EVIDENCE_AUTHORIZATION = "authorization"    # + the human gate, where policy req
 
 def evaluate(report, tier, files, require_captured=False, root=None, test_command=None,
              require_executed=False, human_gate_required=True,
-             scope=EVIDENCE_AUTHORIZATION):
+             scope=EVIDENCE_AUTHORIZATION, inherited_human_gate=None):
     """Pure gate logic -> (verdict_pass, [checks]). Fail closed throughout.
 
     `scope` selects which question is being asked (see EVIDENCE_* above).
@@ -1723,6 +1736,20 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
                 else "human gate: NOT APPROVED — L3 requires `coverloop attest --approve --approver <name>`"
             )
             checks.append(check("human_gate", hg_ok, detail))
+
+    # An obligation inherited from the branch. Advancing the baseline past a
+    # reviewed-but-unapproved commit removes its FILES from this floor — it
+    # must not remove the signature that commit still owes, or a docs commit
+    # on top of an unapproved migration would merge the migration with it.
+    if (scope == EVIDENCE_AUTHORIZATION and inherited_human_gate
+            and tier != "L3"):
+        hg = report.get("human_gate") if report else None
+        hg_ok = bool(hg) and hg.get("approved") is True and bool(str(hg.get("approver", "")).strip())
+        checks.append(check(
+            "human_gate", hg_ok,
+            f"human gate: approved by {hg.get('approver')!r}" if hg_ok else
+            f"human gate: NOT APPROVED — {inherited_human_gate[:12]} in this branch was "
+            f"reviewed but never approved, and this change ships on top of it"))
 
     verdict = all(c["status"] == "pass" for c in checks)
     return verdict, checks
@@ -2032,8 +2059,9 @@ def cmd_gate(args):
     # there is no flag to switch it off, because a switch is the hole.
     auto_floor, auto_reasons = None, []
     auto_paths, unknown = [], True
+    pending_human = None
     try:
-        auto_paths, unknown = _gate_floor_paths(root, args, report, sha)
+        auto_paths, unknown, pending_human = _gate_floor_paths(root, args, report, sha)
         if unknown and getattr(args, "base", None):
             # Substituting an L1 floor let a valid L1 report gate successfully
             # over an unresolvable base — the caller believes they reviewed a
@@ -2150,6 +2178,7 @@ def cmd_gate(args):
 
     verdict, checks = evaluate(report, tier, files,
                                human_gate_required=human_required,
+                               inherited_human_gate=pending_human,
                                require_captured=require_transcript, root=root,
                                test_command=(cfg or {}).get("test_command"),
                                require_executed=args.require_executed)
@@ -2224,18 +2253,18 @@ _VERDICT_CANONICAL_PASS = "VERDICT: PASS"
 _VERDICT_CANONICAL_FAIL = "VERDICT: FAIL"
 
 
-def transcript_verdict(text, window=4000):
+def transcript_verdict(text):
     """Return "pass" only for an unambiguous canonical PASS marker.
 
-    The LAST marker line in the tail window decides (reviewers restate; a
-    reviewer's own last word is the one that counts), and any earlier canonical
-    FAIL still loses — a transcript that says FAIL anywhere and PASS later is
-    exactly the ambiguity this refuses to resolve in the change's favour.
-    Anything that is not byte-for-byte one of the two canonical lines, after
-    trimming surrounding whitespace, is a fail.
+    EVERY `VERDICT:` line in the transcript must be exactly "VERDICT: PASS".
+    This deliberately reads the whole file rather than a tail window: a cold
+    review that says FAIL and then emits 5 KB of appendix would otherwise have
+    its failure scroll out of view and be read as a pass (found by the Codex
+    review of this very change, reproduced end-to-end). Anything that is not
+    byte-for-byte canonical, after trimming surrounding whitespace — no marker
+    at all, lowercase, "PASS WITH RISKS", "APPROVE" — is a fail.
     """
-    tail = (text or "")[-window:]
-    markers = [m.group(0).strip() for m in _VERDICT_MARKER.finditer(tail)]
+    markers = [m.group(0).strip() for m in _VERDICT_MARKER.finditer(text or "")]
     if not markers:
         return "fail"
     if any(m != _VERDICT_CANONICAL_PASS for m in markers):
@@ -2298,6 +2327,23 @@ def reviewer_policy(root):
     cmds = data.get("reviewer_commands") or {}
     if not isinstance(cmds, dict) or any(not isinstance(v, str) for v in cmds.values()):
         return None, f"reviewer policy {path}: reviewer_commands must map a role to a command string"
+    # Naming the reviewer outside the repo is not enough if the command it
+    # names lives INSIDE it: the change could then edit its own reviewer to
+    # print the pass marker. Refuse any token of the command that resolves to
+    # a path under the repo root. Heuristic on purpose — it is a word-split,
+    # not a shell parser — but it fails CLOSED and catches the whole class
+    # ("./bin/review.sh", "scripts/review.sh", an absolute path into the tree).
+    for role, cmd in cmds.items():
+        for tok in cmd.replace("|", " ").replace(";", " ").split():
+            tok = tok.strip("\"'")
+            if not tok or tok.startswith("-"):
+                continue
+            cand = os.path.realpath(os.path.join(root_real, tok)) if not os.path.isabs(tok) \
+                else os.path.realpath(tok)
+            if (cand == root_real or cand.startswith(root_real + os.sep)) and os.path.exists(cand):
+                return None, (f"reviewer policy {path}: the {role} command runs {tok!r}, which "
+                              f"lives inside the repository under review — the change could "
+                              f"rewrite its own reviewer. Point it at a command outside the repo.")
     return {"path": path, "primary": primary, "secondary": secondary, "commands": cmds}, None
 
 
@@ -2364,7 +2410,7 @@ def cmd_check(args):
         print(f"STOP: existing evidence is malformed — {why}", file=sys.stderr)
         sys.exit(1)
     try:
-        paths, unknown = _gate_floor_paths(root, args, report, sha)
+        paths, unknown, pending_human = _gate_floor_paths(root, args, report, sha)
     except Exception as exc:
         print(f"STOP: could not classify the change ({exc})", file=sys.stderr)
         sys.exit(1)
@@ -2399,6 +2445,16 @@ def cmd_check(args):
     cmds = policy["commands"]
     need = []
     if tier in ("L2", "L3"):
+        if tier == "L2" and primary != "codex":
+            # evaluate() reads the fixed "codex" field at L2 (report keys are
+            # frozen for compatibility with every existing report), so running
+            # a different primary here would produce evidence the gate does not
+            # read. Fail closed and say so rather than review into a void.
+            print(f"STOP: reviewer policy names {primary!r} as primary, but at L2 the gate "
+                  f"reads the fixed 'codex' evidence field — swapping the L2 primary needs "
+                  f"the report-key change this release did not make. Use codex as primary, "
+                  f"or elevate to L3 where both reviewers run.", file=sys.stderr)
+            sys.exit(1)
         need.append(primary)
     if tier == "L3":
         need.append(secondary)
@@ -2445,6 +2501,29 @@ def cmd_check(args):
         report[role]["findings_open"] = 0
     save_report(root, report)
 
+    if rc:
+        # Everything attest fails on that has its own message above has already
+        # stopped this run. What is left is the case with no other symptom: the
+        # evidence was written but git IGNORES it, so it never reaches the PR
+        # while every local check keeps passing.
+        _stop("attest could not record usable evidence (see the error above) — "
+              "the report or transcript would not reach the PR")
+
+    # The tests and the reviewers just ran arbitrary commands in this tree. If
+    # one of them changed a tracked file, the evidence now describes something
+    # other than HEAD — a test that repairs the code it is testing would earn a
+    # SAFE TO MERGE for the broken commit. Re-check, excluding the evidence the
+    # run is supposed to produce.
+    after = _git_paths(["diff", "--name-only", "HEAD"], root)
+    after_new = _git_paths(["ls-files", "--others", "--exclude-standard"], root)
+    if after is None or after_new is None:
+        _stop("git could not report the working tree state after the run")
+    touched = [pth for pth in list(after) + list(after_new) if not is_report_artifact(pth)]
+    if touched:
+        _stop(f"the tests or reviewers modified the working tree "
+              f"({', '.join(touched[:4])}{'…' if len(touched) > 4 else ''}) — the evidence "
+              f"would not describe HEAD")
+
     # 4. gate — the real one, unchanged. Its checks are the final word.
     g = argparse.Namespace(
         min_tier=[tier], tier=[], base=getattr(args, "base", None),
@@ -2457,6 +2536,7 @@ def cmd_check(args):
     if tier == "L3" and g.human_gate_scope == "irreversible":
         human_required = (not paths) or any(IRREVERSIBLE_RE.search(p) for p in paths)
     verdict, checks = evaluate(report, tier, files, human_gate_required=human_required,
+                               inherited_human_gate=pending_human,
                                require_captured=True, root=root,
                                test_command=cfg.get("test_command"))
     failing = [c for c in checks if c["status"] != "pass"]

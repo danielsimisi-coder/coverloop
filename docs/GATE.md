@@ -79,6 +79,12 @@ bug:
 - **Authorized** — verified *and* a named human countersigned it, where policy
   requires one.
 
+**The obligation is inherited, the files are not.** Advancing past a
+reviewed-but-unapproved commit removes its *files* from later floors — that is
+the point — but the *signature it still owes* is carried to HEAD and named
+there. Otherwise a docs commit stacked on an unapproved migration would gate at
+L1 and merge the migration with it.
+
 Requiring authorization to advance the baseline meant that a fully reviewed L3
 that nobody had got around to signing was treated as if it had never been
 reviewed at all: its files fell back into every later change's floor, so a

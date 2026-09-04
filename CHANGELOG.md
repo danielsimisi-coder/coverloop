@@ -56,8 +56,34 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-25 new regression tests lock the falsification table from the research pass.
-Explicitly **not** done in this release, and still open: a signed
+A cold Codex review at xhigh then returned **VERDICT: FAIL** on this very
+change, and the gate stopped its own merge. All seven findings were verified and
+closed:
+
+- **The human gate could be shed by stacking a commit on top of it.** Advancing
+  the baseline past a reviewed-but-unapproved L3 removed its files from every
+  later floor — so a docs commit on top of an unapproved migration gated at L1
+  and merged the migration with it. The obligation is now **inherited**: it is
+  carried to HEAD and named there, while the tier still drops (the reviewer
+  chain is not re-run over a docs commit, which was the whole point).
+- **A self-attested report could become a baseline.** The walk now demands
+  `require_captured` — a bare `--codex pass` with no transcript no longer buys
+  a baseline, after which `check` would have skipped the real reviewers.
+- **The reviewer command could still live in the repo.** Naming the reviewer
+  outside the tree is worthless if the command it names is a script the change
+  can rewrite; a command token that resolves inside the repo is refused.
+- **The tree is re-checked after the run.** A test that repairs the code it
+  tests would otherwise earn `SAFE TO MERGE` for the broken commit being shipped.
+- **A failing verdict can no longer be scrolled out of view.** The verdict
+  parser reads the whole transcript, not a 4 KB tail: `VERDICT: FAIL`, 5 KB of
+  appendix, `VERDICT: PASS` was read as a pass (reproduced by the reviewer).
+- **`check` honours attest's exit status**, so evidence git would ignore stops
+  the run instead of passing locally and reaching CI as nothing.
+- **A non-`codex` primary at L2 is refused** with the reason, rather than
+  running a reviewer whose evidence the fixed L2 report field never reads.
+
+31 new regression tests lock the falsification table from the research pass and
+every finding above. Explicitly **not** done in this release, and still open: a signed
 `approvers` allowlist, the lineage refactor that would drop the fixed
 `codex`/`glm` report keys, and any change to `human_gate_scope`, `STALE`, or
 the L3 GLM requirement.
