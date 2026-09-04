@@ -395,6 +395,12 @@ def _validated_baseline(root, sha, limit=2000):
         # so the mandatory independent review disappeared for the whole span.
         # Strictly more conservative than not requiring it: fewer reports
         # advance the baseline, so more paths stay in the floor.
+        # FULL evaluation, human approval included. Accepting merely-verified
+        # evidence here (so a reviewed-but-uncountersigned L3 stops inflating
+        # every later floor) is deferred: it needs the owed signature carried
+        # forward to HEAD, and five review rounds each found a way to shed that.
+        # See docs/GATE.md. require_captured: a bare `--codex pass` is a claim
+        # that nothing ran, and a claim is not a baseline.
         ok, _checks = evaluate(rep, tier, None, root=root, test_command=cfg_cmd,
                                require_captured=True)
         if not ok:
@@ -1364,6 +1370,15 @@ def _cmd_attest_locked(args, root):
         # provenance here erased the recorded reason on the ordinary
         # `check` -> `attest --approve` flow, leaving an unexplained L3 behind.
         elevation, tier_source = prior_elevation, "elevated"
+    if (existing and report.get("human_gate") and tier_max(existing, final_tier) == final_tier
+            and existing != final_tier):
+        # The approval on record was given for a LESSER claim. Carrying it into
+        # a raised tier let an L1 sign-off authorize an L3 elevation whose
+        # reason did not exist when it was given.
+        report.pop("human_gate", None)
+        print(f"note: risk_tier {existing} -> {final_tier} clears the recorded human "
+              f"approval; it was given for the lower tier. Re-approve if still intended.",
+              file=sys.stderr)
     report["tier_source"] = tier_source
     report["floor"] = {"tier": auto_floor, "reasons": auto_reasons[:8]}
     if elevation:
@@ -2264,7 +2279,10 @@ def transcript_verdict(text, tail_lines=10):
     markers = [(n, body) for n, (i, body) in enumerate(live) if _VERDICT_MARKER.match(lines[i])]
     if not markers:
         return "fail"
-    if any(body != _VERDICT_CANONICAL_PASS for _n, body in markers):
+    if len(markers) != 1 or markers[0][1] != _VERDICT_CANONICAL_PASS:
+        # Exactly one, as documented. Several markers mean either a reviewer
+        # that restated itself or prompt text that survived into the log, and
+        # neither is a verdict this should resolve in the change's favour.
         return "fail"
     trailing = [body for _i, body in live[markers[-1][0] + 1:]]
     if len(trailing) > tail_lines or any(not _VERDICT_FOOTER.match(t) for t in trailing):
@@ -2373,34 +2391,72 @@ def _stop(reason):
     sys.exit(1)
 
 
-def _previous_test_command(root):
-    """(command, readable) for the version of test_command BEFORE the most
-    recent commit that touched the gate config.
+def _reviewed_test_command(root, prior):
+    """(command, readable) — the test command as it stood at the last point the
+    evidence chain actually covered.
 
-    Read from the config file's own git history rather than from reports or
-    from the evidence baseline, because both of those vanish in exactly the
-    case this exists to catch: rewriting test_command invalidates the ancestor
-    evidence (the recorded command must match the current one), which drops the
-    baseline to the root, and a deleted report is otherwise indistinguishable
-    from first-time setup.
+    Comparing only the previous version (`rev-list -2`) could be laundered: set
+    `test_command` to `true` in one commit, touch any other config field in the
+    next, and both observed versions read `true`. So the comparison point is the
+    validated baseline `prior` — and when nothing has ever validated (the
+    baseline is the bare root, which is also what a tampered command produces,
+    since rewriting it invalidates the ancestor evidence), the config's FIRST
+    version, because the whole history is then the span being judged.
 
-    A config with only ONE commit touching it was created, not changed — that is
+    A config with only one commit touching it was created, not changed: that is
     adoption, and a floor that fires on adoption is a floor people route around.
     `readable` is False only when git could not answer, which fails closed.
     """
-    out = git(["rev-list", "-2", "HEAD", "--", CONFIG_FILE], cwd=root)
-    if out is None:
+    history = git(["rev-list", "--reverse", "HEAD", "--", CONFIG_FILE], cwd=root)
+    if history is None:
         return None, False
-    commits = out.split()
-    if len(commits) < 2:
-        return None, True          # created, never changed
-    prev = git(["show", f"{commits[1]}:{CONFIG_FILE}"], cwd=root)
-    if prev is None:
-        return None, False
-    try:
-        return ((json.loads(prev) or {}).get("test_command"), True)
-    except ValueError:
-        return None, False
+    versions = history.split()
+    if len(versions) < 2:
+        return None, True                      # created, never changed
+
+    def _at(commit):
+        blob = git(["show", f"{commit}:{CONFIG_FILE}"], cwd=root)
+        if blob is None:
+            return None, False
+        try:
+            return (json.loads(blob) or {}).get("test_command"), True
+        except ValueError:
+            return None, False
+
+    if prior:
+        cmd, ok = _at(prior)
+        if ok and cmd:
+            return cmd, True
+    return _at(versions[0])
+
+
+def _reviewer_binary_fingerprints(cmds, env):
+    """sha256 of each reviewer command's resolved executable, before anything
+    else runs.
+
+    The configured test command is arbitrary code running with the operator's
+    privileges, and it runs BEFORE the reviewers. Nothing stops it overwriting
+    a user-owned reviewer wrapper with one that prints the pass marker — no
+    repository file changes, so the dirty-tree check sees nothing. This does not
+    make the test command safe (it cannot: `coverloop` is a gate, not a
+    sandbox), but it does catch the specific swap.
+    """
+    prints = {}
+    for role, cmd in (cmds or {}).items():
+        for tok in cmd.replace("|", " ").replace(";", " ").split():
+            tok = tok.strip("\"'")
+            if not tok or tok.startswith("-") or "=" in tok:
+                continue
+            exe = shutil.which(tok, path=env.get("PATH")) if not os.path.sep in tok else (
+                tok if os.path.exists(tok) else None)
+            if exe:
+                try:
+                    with open(exe, "rb") as fh:
+                        prints[role] = (exe, hashlib.sha256(fh.read()).hexdigest())
+                except OSError:
+                    prints[role] = (exe, None)
+            break                       # the command word only
+    return prints
 
 
 def cmd_check(args):
@@ -2494,7 +2550,13 @@ def cmd_check(args):
     # This runs BEFORE the attest namespace is built: raising only the local
     # `tier` let check evaluate L2 while RECORDING L1, and CI's gate then read
     # L1 and never asked for the transcript.
-    prev_cmd, history_readable = _previous_test_command(root)
+    prior, prior_validated = (None, False)
+    if not getattr(args, "base", None):
+        prior, prior_validated = _validated_baseline(root, sha)
+        if prior is None:
+            _stop("cannot determine the span to review (shallow clone or git failure) — "
+                  "fetch full history or pass --base")
+    prev_cmd, history_readable = _reviewed_test_command(root, prior)
     cur_cmd = cfg.get("test_command")
     if (prev_cmd and prev_cmd != cur_cmd) or not history_readable:
         why = (f"the test command changed ({prev_cmd!r} -> {cur_cmd!r})"
@@ -2514,7 +2576,6 @@ def cmd_check(args):
     #   $COVERLOOP_DIFF  the diff this run is judging — the SAME span the floor
     #                    was computed over, not just HEAD
     #   $COVERLOOP_BASE  the base ref, when one was given
-    prior = None
     review_dir = tempfile.mkdtemp(prefix="coverloop-review-")
     _SCRATCH_DIRS.append(review_dir)
     atexit.register(_cleanup_scratch)
@@ -2522,10 +2583,6 @@ def cmd_check(args):
     if getattr(args, "base", None):
         span = [f"{args.base}...HEAD"]
     else:
-        prior, prior_validated = _validated_baseline(root, sha)
-        if prior is None:
-            _stop("cannot determine the span to review (shallow clone or git failure) — "
-                  "fetch full history or pass --base")
         span = [sha] if prior == sha else [f"{prior}..{sha}"]
     # The floor classifies the bare root's OWN files when no evidence ever
     # covered them (a two-dot diff excludes what the root introduced). The
@@ -2623,6 +2680,8 @@ def cmd_check(args):
         + (f" (elevated from {floor}: {reason})" if raise_to and raise_to != floor else ""))
     for r in reasons[:4]:
         say(f"  - {r}")
+    before = _reviewer_binary_fingerprints({r: cmds[r] for r in need if cmds.get(r)},
+                                           review_env)
     try:
         with _attest_lock(root):
             rc = _cmd_attest_locked(a, root)
@@ -2659,6 +2718,14 @@ def cmd_check(args):
         report[role]["status"] = "pass"
         report[role]["findings_open"] = 0
     save_report(root, report)
+
+    after = _reviewer_binary_fingerprints({r: cmds[r] for r in need if cmds.get(r)},
+                                          review_env)
+    for role, (exe, digest) in before.items():
+        if after.get(role) != (exe, digest):
+            _stop(f"the {role} reviewer executable changed while this run was in progress "
+                  f"({exe}) — the test command runs with your privileges and before the "
+                  f"reviewers, so a swapped reviewer is not evidence")
 
     if rc:
         # Everything attest fails on that has its own message above has already

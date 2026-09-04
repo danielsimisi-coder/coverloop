@@ -56,8 +56,8 @@ but the diff changes the attestation authority itself — baseline validation,
 reviewer execution, verdict parsing, and what `SAFE TO MERGE` means — which is
 exactly the intent-level risk `--raise-tier --reason` exists for.
 
-Seven cold review rounds ran against this change; the gate stopped its own merge
-every time. 35 findings, all verified against the code, and the pattern in them
+Eight cold review rounds ran against this change; the gate stopped its own merge
+every time. 39 findings, all verified against the code, and the pattern in them
 decided the shape of the release:
 
 **Item 2 — "verification is not authorization" — is DEFERRED, not shipped.**
@@ -131,6 +131,16 @@ What the rounds did close, in what did ship:
   `.coverloop/reports/` hid `.coverloop/reports/evil.sql` — which classifies L3
   like any other path, since only the exact SHA-shaped artifacts are evidence.
   The floor said L3 while both reviewers read a packet without the cause.
+- **The test command cannot swap the reviewer out from under the run.** It
+  executes first, with the operator's privileges, and can overwrite a user-owned
+  reviewer wrapper without touching a single repository file — so the dirty-tree
+  check sees nothing. `check` fingerprints each reviewer's resolved executable
+  before and after the tests run and stops on a change. This does not make an
+  arbitrary test command safe (a gate is not a sandbox); it closes that swap.
+- **An approval cannot outlive the claim it was given for.** `attest --approve`
+  is allowed at every tier, and raising an existing report's tier kept the
+  recorded approval — so an L1 sign-off authorized a later L3 elevation whose
+  reason did not exist when it was given. Raising the tier now clears it.
 - **The test suite no longer spends production review budget.** It drives the
   real reviewer CLIs with a stubbed transport — nothing is sent — but
   `log_egress` still wrote `attempt` markers to the operator's production egress

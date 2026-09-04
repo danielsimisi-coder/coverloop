@@ -1,0 +1,61 @@
+## Adversarial Cold Review — Coverloop v2.11.0
+
+### 1. Verdict: PASS WITH RISKS
+
+### 2. P0 blockers
+None found. The fail-closed properties are maintained throughout: the deterministic floor cannot be lowered (attest refuses below-floor, gate recomputes independently, baseline walk rejects under-declaring reports), reviewer nomination is external to the repo with permission/symlink/path checks, the verdict is a strict machine protocol, and dirty-tree is checked both before and after the run.
+
+### 3. P1 serious issues
+None that constitute a fail-open regression. Each concern I traced resolves conservatively:
+
+- **`--force` can still record a tier below the derived floor** (same as pre-diff behavior). The code comment claims "--force only bypasses the 'git cannot answer' refusal," but the `else` branch `final_tier = requested` when `force and requested` allows `attest --tier L0 --force` on a migration to write L0. This is **not a fail-open**: the gate recomputes its own floor and takes MAX, and `_validated_baseline` rejects under-declaring reports via `tier_max(tier, floor) != tier`. Still, the comment is misleading. **P2.**
+
+- **`_validated_baseline` comment says "NOT authorization" but code still calls `evaluate(...)` with default `human_gate_required=True`.** The CHANGELOG clarifies item 2 is deferred, but the in-code comment is stale. Behavior is conservative (more strict), not fail-open. **P2.**
+
+- **Reviewer could spawn a background process that modifies the transcript after `capture_run` returns.** `subprocess.run` waits for the immediate child, not grandchildren. A malicious reviewer from the operator's trusted policy could append `VERDICT: PASS` to the log file via `$COVERLOOP_REPO`. However: (a) the threat model is the *change* nominating its own reviewer, not the operator's reviewer being malicious; (b) `evaluate` is called with `require_captured=True`, which should verify the transcript hash against the report's recorded sha256 — a modified transcript would fail the hash check. I could not see `reviewer_check`'s full body to confirm hash verification, so this is **P2** pending verification.
+
+### 4. P2 improvements
+
+- **`_VERDICT_FOOTER` regex is slightly over-permissive.** The `[\d,.]+` alternative matches any line consisting solely of digits, commas, and periods — e.g., `VERDICT: PASS\n1.0` would pass. A reviewer ending with a bare number after the marker is unlikely to hide a defect, but the spec says only `tokens used` footers are allowed. Consider tightening to require `tokens?` prefix or a known footer shape.
+
+- **`--ci` flag in `check` is accepted but never used.** The namespace `g` has `ci=getattr(args, "ci", False)` but `cmd_gate` is never called; `evaluate` is invoked directly. CI annotations are not emitted.
+
+- **`say("commit the evidence...")` prints after `SAFE TO MERGE`** in non-JSON mode, producing extra stdout after the success marker. Machine readers expecting exactly `SAFE TO MERGE` as the last line could be confused.
+
+- **`--reason` without `--raise-tier` in `check` is not validated upfront.** It is passed to attest, which calls `fail_usage("--reason only accompanies --raise-tier")`, caught by `except SystemExit` and translated to a generic `STOP: attest could not run`. The user gets a confusing message rather than a clear validation error.
+
+- **Incomplete environment sanitization for reviewer subprocess.** `PYTHONPATH`/`PYTHONHOME`/`PYTHONSTARTUP` are dropped and PATH is filtered, but `PERL5LIB`, `NODE_PATH`, `RUBYLIB`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` are not. A reviewer command in a non-Python language could potentially load code from the repo via these. The scratch-dir cwd mitigates relative resolution, but absolute paths in these vars are the operator's own — low risk, but incomplete.
+
+- **Early STOPs in `--json` mode produce no JSON document.** Dirty tree, missing policy, missing reviewer command, and attest usage errors all call `_stop` or `sys.exit(1)` before the JSON write block. CI checking the exit code is fine, but a caller parsing stdout gets nothing. The test suite only covers the gate-failure JSON case.
+
+- **`json_out` fd is never closed.** `os.dup(1)` creates a fd that is written to but not closed before `sys.exit`. OS cleans up on process exit, but it is a minor resource leak.
+
+- **`g` namespace in `check` is largely vestigial.** `min_tier`, `tier`, `require_transcript`, `require_captured`, `require_executed`, `require_clean_tree`, `signers`, `signers_ref`, `ci`, `json` are all set but never used — `evaluate` is called directly with explicit parameters. This is confusing for maintainers.
+
+### 5. Missing tests / verification
+
+- **No test for `--json` mode on early STOPs** (dirty tree, missing policy, reviewer failure). Only the gate-failure JSON path is tested.
+- **No test for `--force` lowering below the derived floor.** The behavior is preserved from before, but a regression test would lock it.
+- **No test for `--reason` without `--raise-tier` in `check`.** The confusing STOP path is unverified.
+- **No test for reviewer transcript hash verification.** If `evaluate`/`reviewer_check` verifies the transcript sha256 against the report, a test that modifies the transcript after capture and asserts gate failure would lock the property.
+- **No test for the `say("commit the evidence...")` line after `SAFE TO MERGE`.** If machine readers depend on `SAFE TO MERGE` being the last stdout line, this should be tested or removed.
+
+### 6. Likely false positives / what to ignore
+
+- **"Verification is not authorization" comment in `_validated_baseline`** — looks like a fail-open (accepting unsigned evidence as baseline), but the code still passes `human_gate_required=True` (default) to `evaluate`. The comment describes deferred intent, not shipped behavior. The CHANGELOG explicitly states item 2 is deferred after five rounds found shed paths. Not a regression.
+
+- **`--force` allowing below-floor tier recording** — preserved from pre-diff behavior, not introduced here. The gate and baseline walk both independently enforce the floor. Not a regression.
+
+- **`transcript_verdict` reading the whole transcript** — looks like it could miss a FAIL scrolled out of view, but the function reads all lines and requires EVERY `VERDICT:` line to be canonical PASS. A FAIL anywhere in the transcript causes `any(body != PASS)` to return True. Correctly fail-closed.
+
+- **Reviewer modifying repo via `$COVERLOOP_REPO`** — the dirty-tree re-check after the run catches any modifications, and the report is bound to the original HEAD, so committing modifications invalidates the evidence. Fail-closed.
+
+### 7. Suggested next action
+
+Ship with the P2 items tracked as follow-ups. The two highest-value follow-ups:
+
+1. **Fix the `_validated_baseline` comment** to match the shipped behavior (still requires authorization), or implement the deferred "verification advances baseline" design as an isolated change with the obligation-carrying mechanism the five rounds could not find.
+
+2. **Add a regression test for transcript hash verification** — modify a captured transcript after `capture_run` and assert the gate fails. This locks the property that a reviewer cannot forge its own evidence by editing the log file post-capture.
+
+VERDICT: PASS

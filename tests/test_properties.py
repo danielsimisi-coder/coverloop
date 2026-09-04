@@ -2417,7 +2417,7 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             for rep in glob_reports(d):          # the evidence is gone
                 os.remove(rep)
             run("git", "add", "-A"); run("git", "commit", "-qm", "tweak and forget")
-            cmd, readable = self.mod._previous_test_command(d)
+            cmd, readable = self.mod._reviewed_test_command(d, None)
             self.assertEqual(cmd, "true", "read from git, not from the deleted reports")
             r = self._cl(d, "check")
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -2496,6 +2496,46 @@ class TenthRoundDerivedTierAndCheck(unittest.TestCase):
             check = subprocess.run(["git", "apply", "--stat", out_file], cwd=d,
                                    capture_output=True, text=True)
             self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_a_second_config_commit_cannot_launder_a_weakened_test_command(self):
+        # Comparing only the previous version was launderable: set the command
+        # to `true` in one commit, touch any other config field in the next,
+        # and both observed versions read `true`.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d, cmds={})
+            self._cl(d, "attest", "--tests")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "baseline")
+            cfg_path = os.path.join(d, ".coverloop", "config.json")
+            cfg = json.load(open(cfg_path)); cfg["test_command"] = "true  # nothing"
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "weaken")
+            cfg["default_base"] = "origin/trunk"          # an innocent second touch
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+            run("git", "add", "-A"); run("git", "commit", "-qm", "launder")
+            r = self._cl(d, "check")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("requires an independent codex review", r.stderr)
+
+    def test_a_lower_tier_approval_does_not_survive_an_elevation(self):
+        # attest --approve is allowed at every tier. Carrying an L1 sign-off
+        # into a later L3 elevation let it authorize a reason that did not
+        # exist when it was given.
+        with tempfile.TemporaryDirectory() as d:
+            run = self._repo(d)
+            self._write(d, "src/a.ts", "export const a = 1;\n")
+            run("git", "add", "-A"); run("git", "commit", "-qm", "src")
+            self._cl(d, "attest", "--tests", "--approve", "--approver", "Daniel")
+            self.assertTrue(self._report(d)["human_gate"]["approved"])
+            self._cl(d, "attest", "--raise-tier", "L3", "--reason", "steers auth")
+            rep = self._report(d)
+            self.assertEqual(rep["risk_tier"], "L3")
+            self.assertNotIn("human_gate", rep,
+                             "an approval given at L1 cannot authorize an L3 elevation")
+
+    def test_exactly_one_verdict_marker_is_required(self):
+        tv = self.mod.transcript_verdict
+        self.assertEqual(tv("VERDICT: PASS"), "pass")
+        self.assertEqual(tv("VERDICT: PASS\nVERDICT: PASS"), "fail")
 
     def test_check_cannot_lower_the_floor_with_raise_tier(self):
         with tempfile.TemporaryDirectory() as d:
