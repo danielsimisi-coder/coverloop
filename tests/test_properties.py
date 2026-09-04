@@ -1888,9 +1888,11 @@ class SuiteCollectsItself(unittest.TestCase):
                          "defined below unittest.main(); it will be silently skipped when "
                          "CI runs this file directly — move it above the entry point")
 
-    def test_the_production_log_tripwire_actually_trips(self):
-        # The guard that keeps the suite off the operator's quota log is itself
-        # worth a test: it compares size and mtime, and must notice a change.
+    def test_the_production_log_fingerprint_notices_a_write(self):
+        # Covers the FINGERPRINT the guard is built on — that a written-to log
+        # does not look untouched, and a removed one reads as absent. It does
+        # not exercise tearDownModule's comparison itself, which cannot run
+        # inside the module it tears down.
         probe = os.path.join(_SUITE_LOG_DIR or tempfile.gettempdir(), "tripwire-probe.log")
         saved = globals()["PROD_EGRESS_LOG"]
         try:

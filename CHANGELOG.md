@@ -60,8 +60,11 @@ builder reads at session start, and two defects in the test harness itself.
   widening the hook's scope or changing what it says has to be deliberate —
   plus all four self-test outcomes: PASS on a match, WARN on a difference, on an
   unlocatable clone, and on a clone missing the reference hook. The test entry
-  point is pinned structurally too: a test reads this file and fails if anything
-  is defined below `unittest.main()`, which is the historical silent skip. Before this, CI would not have caught
+  point is pinned from a different runner: `test_hooks.sh` reads
+  `test_properties.py` and fails if anything is defined below `unittest.main()`
+  — the historical silent skip. It lives outside that file deliberately, since a
+  guard written inside it would itself vanish if the entry point were moved
+  above it. Before this, CI would not have caught
   a broken marker set, a lost line, or a comparison that stopped comparing.
 
 - **`protocol-selftest` no longer reports a current hook as stale.** It parsed

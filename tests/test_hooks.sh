@@ -109,6 +109,9 @@ out="$( cd "$d" && bash "$SC" 2>/dev/null )"
 norm() { tr '\n' ' ' | sed 's/\\ / /g; s/  */ /g; s/^ //; s/ $//'; }
 pred="$(sed -n '/^in_protocol_project() {/,/^}/p' "$SC" | norm)"
 expected_pred='in_protocol_project() { { [ -f CLAUDE.md ] && grep -q "PROTOCOL_VERSION\|Operating Contract" CLAUDE.md 2>/dev/null; } || [ -f docs/OPERATING_CONTRACT.md ] || [ -f docs/MULTI_MODEL_PROTOCOL.md ] }'
+call="$(grep -n 'in_protocol_project' "$SC" | grep -v '^.*in_protocol_project() {' | sed 's/^[0-9]*://' | norm)"
+[ "$call" = 'in_protocol_project || exit 0' ] && ok "predicate call site locked" \
+  || bad "predicate call site changed: '$call'"
 [ "$pred" = "$expected_pred" ] && ok "project predicate locked" \
   || { bad "project predicate changed — widening the set must be deliberate"
        printf '    expected: %s\n    actual:   %s\n' "$expected_pred" "$pred"; }
@@ -177,6 +180,23 @@ out="$( cd / && HOME="$h" bash "$h/bin/protocol-selftest" 2>&1 )"
 case "$out" in *"WARN"*"has no hooks/session-contract.sh"*)
     ok "clone without the reference hook: WARN" ;;
   *) bad "clone without the reference hook: not reported" ;; esac
+
+echo "== python suite entry point =="
+TP="$HERE/tests/test_properties.py"
+# Checked from a DIFFERENT runner on purpose: a guard written inside
+# test_properties.py disappears if unittest.main() is moved above it, because
+# Python exits before the guard is ever defined. This shell test cannot be
+# skipped that way.
+entry_line="$(grep -n '^if __name__ == "__main__"' "$TP" | cut -d: -f1)"
+total="$(wc -l < "$TP" | tr -d ' ')"
+if [ -z "$entry_line" ]; then
+  bad "test_properties.py has no entry point"
+else
+  after="$(tail -n +"$entry_line" "$TP" | grep -c '^\(class\|def\) ' || true)"
+  [ "$after" = 0 ] \
+    && ok "nothing defined below unittest.main() (line $entry_line of $total)" \
+    || bad "$after definition(s) below unittest.main() — CI would silently skip them"
+fi
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" = 0 ]
