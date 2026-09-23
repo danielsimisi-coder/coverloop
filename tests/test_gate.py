@@ -182,7 +182,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--mutation", "pass"], self.repo)
+        run(["attest", "--mutation", "pass", "--mutation-guards", "3"], self.repo)
         code, out = self.gate_json()
         self.assertEqual(code, 1)  # human gate still missing
         failing = [c["check"] for c in out["checks"] if c["status"] != "pass"]
@@ -204,7 +204,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--mutation", "pass"], self.repo)
+        run(["attest", "--mutation", "pass", "--mutation-guards", "3"], self.repo)
         run(["attest", "--approve", "--approver", "daniel"], self.repo)
         code, _ = self.gate_json()
         self.assertEqual(code, 0)
@@ -259,7 +259,7 @@ class GateTestCase(unittest.TestCase):
         sh(["git", "add", "-A"], self.repo)
         sh(["git", "commit", "-qm", "evidence: tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--mutation", "pass"], self.repo)
+        run(["attest", "--mutation", "pass", "--mutation-guards", "3"], self.repo)
         run(["attest", "--approve", "--approver", "daniel"], self.repo)
         code, out = self.gate_json()
         self.assertEqual(code, 0, out)
@@ -563,7 +563,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--mutation", "pass"], self.repo)
+        run(["attest", "--mutation", "pass", "--mutation-guards", "3"], self.repo)
         run(["attest", "--approve", "--approver", "d"], self.repo)
         self.assertEqual(self.gate_json()[0], 0)  # full L3 passes
         r = run(["attest", "--tier", "L0"], self.repo)
@@ -793,7 +793,7 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(run(["gate", "--tier", "L2"], self.repo).returncode, 1)
 
     # guard-break evidence replaces post-code GLM at L3 (v2.12) --------
-    def _l3_base(self, mutation=("--mutation", "pass"), approve=True):
+    def _l3_base(self, mutation=("--mutation", "pass", "--mutation-guards", "3"), approve=True):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests", "--codex", "pass"], self.repo)
         if mutation:
@@ -822,7 +822,7 @@ class GateTestCase(unittest.TestCase):
 
     def test_v212_C3_mutation_fail_or_survivor_fails(self):
         for flags in (("--mutation", "fail"),
-                      ("--mutation", "pass", "--mutation-findings", "1")):
+                      ("--mutation", "pass", "--mutation-guards", "2", "--mutation-findings", "1")):
             with self.subTest(flags=flags):
                 self.tearDown(); self.setUp()
                 self._l3_base(mutation=flags)
@@ -835,7 +835,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         self.write("breaks.txt", "broke guard A -> test_a FAILED; broke guard B -> test_b FAILED\n")
         r = run(["attest", "--tier", "L3", "--tests", "--codex", "pass",
-                 "--mutation", "pass", "--mutation-log", os.path.join(self.repo, "breaks.txt"),
+                 "--mutation", "pass", "--mutation-guards", "2", "--mutation-log", os.path.join(self.repo, "breaks.txt"),
                  "--approve", "--approver", "daniel"], self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         sha = self.git_out(["rev-parse", "HEAD"])
@@ -904,7 +904,7 @@ class GateTestCase(unittest.TestCase):
     def test_v212_empty_captured_mutation_run_is_not_evidence(self):
         """Sol r1 P1: a successful zero-byte capture (`--mutation-run true`)
         must not satisfy the gate — not even with --require-executed."""
-        self._l3_base(mutation=("--mutation", "pass", "--mutation-run", "true"))
+        self._l3_base(mutation=("--mutation", "pass", "--mutation-guards", "1", "--mutation-run", "true"))
         code, out = self.gate_json()
         self.assertEqual(code, 1, out)
         self.assertIn("transcript is invalid", self._checks(out)["mutation"]["detail"])
@@ -931,6 +931,73 @@ class GateTestCase(unittest.TestCase):
         self.assertIn("open findings: 3", d)
         self.assertIn("transcript invalid", d)
 
+    # v2.12.1: a guard-break pass must state how many guards it broke ------
+    def test_v2121_G1_pass_without_guard_count_is_refused(self):
+        self.init_project()
+        run(["attest", "--tier", "L3", "--tests"], self.repo)
+        r = run(["attest", "--mutation", "pass"], self.repo)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--mutation-guards", r.stderr)
+        for bad in ("0", "-1"):
+            r = run(["attest", "--mutation", "pass", "--mutation-guards", bad], self.repo)
+            self.assertEqual(r.returncode, 2, bad)
+
+    def test_v2121_G2_legacy_pass_without_count_fails_the_gate(self):
+        self._l3_base()
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p)); rep["mutation"].pop("guards_broken", None)
+        json.dump(rep, open(p, "w"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        d = self._checks(out)["mutation"]["detail"]
+        self.assertIn("NO guard count", d)
+        self.assertIn("--mutation-guards", d)
+
+    def test_v2121_G2_bool_or_zero_guard_count_is_malformed(self):
+        self._l3_base()
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        for bad in (True, 0, -2, "3"):
+            with self.subTest(bad=bad):
+                rep = json.load(open(p)); rep["mutation"]["guards_broken"] = bad
+                json.dump(rep, open(p, "w"))
+                code, out = self.gate_json()
+                self.assertEqual(code, 1)
+                self.assertIn("guards_broken must be an integer >= 1", json.dumps(out))
+
+    def test_v2121_G3_more_survivors_than_guards_is_rejected(self):
+        self.init_project()
+        run(["attest", "--tier", "L3", "--tests"], self.repo)
+        r = run(["attest", "--mutation", "fail", "--mutation-guards", "2",
+                 "--mutation-findings", "3"], self.repo)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("cannot exceed", r.stderr)
+        self._l3_base()
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p)); rep["mutation"].update(status="fail", guards_broken=2, findings_open=3)
+        json.dump(rep, open(p, "w"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        self.assertIn("findings_open exceeds guards_broken", json.dumps(out))
+
+    def test_v2121_G4_fail_needs_no_guard_count(self):
+        self._l3_base(mutation=("--mutation", "fail"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        self.assertNotIn("NO guard count", self._checks(out)["mutation"]["detail"])
+
+    def test_v2121_G5_gate_prints_the_count(self):
+        self._l3_base(mutation=("--mutation", "pass", "--mutation-guards", "5"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        self.assertIn("5 guards broken, surviving (uncaught) breaks: 0",
+                      self._checks(out)["mutation"]["detail"])
+        sha = self.git_out(["rev-parse", "HEAD"])
+        rep = json.load(open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")))
+        self.assertEqual(rep["mutation"]["guards_broken"], 5)
+
     def test_v212_init_repairs_an_existing_evidence_gitignore(self):
         self.init_project()
         gi = os.path.join(self.repo, ".coverloop", ".gitignore")
@@ -951,7 +1018,7 @@ class GateTestCase(unittest.TestCase):
         self.write(".gitignore", "*.log\n")
         self.write("breaks.txt", "broke guard A -> test_a FAILED\n")
         r = run(["attest", "--tier", "L3", "--tests", "--codex", "pass",
-                 "--mutation", "pass", "--mutation-log", os.path.join(self.repo, "breaks.txt")],
+                 "--mutation", "pass", "--mutation-guards", "1", "--mutation-log", os.path.join(self.repo, "breaks.txt")],
                 self.repo)
         self.assertEqual(r.returncode, 0, r.stderr)
 

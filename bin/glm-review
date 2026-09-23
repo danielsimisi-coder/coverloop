@@ -12,10 +12,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 import egress_cap  # daily reviewer-call spend cap (R6)
 
-CLI_VERSION = "2.0.2"
+CLI_VERSION = "2.1.0"
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = os.getenv("GLM_MODEL", "z-ai/glm-5.2")
+# Default reviewer since 2.1.0 (2026-09-23): Kimi K3 — a known-answer pilot on three historical
+# design packets found more of the later-confirmed bugs, faster, than GLM 5.2/5.3 and Gemini 3.1 Pro,
+# on the same ZDR route (see CHANGELOG). GLM_MODEL still overrides; the helpers keep their glm-* names.
+MODEL = os.getenv("GLM_MODEL", "moonshotai/kimi-k3")
 MAX_CHARS = int(os.getenv("GLM_MAX_CHARS", "120000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("GLM_MAX_COMPLETION_TOKENS", "4096"))
 REASONING_EFFORT = os.getenv("GLM_REASONING_EFFORT", "high")
@@ -25,7 +28,7 @@ USE_ZDR = True  # ZDR mandatory, NOT env-disableable (Codex P1; protocol Hard Bo
 # so a sibling reviewer on a DIFFERENT lineage reuses it by overriding the model
 # and this name. Nothing else about the prompts changes: the ROLE is the point,
 # the lineage is what makes a second opinion worth having.
-REVIEWER_NAME = os.getenv("REVIEWER_NAME", "GLM-5.2")
+REVIEWER_NAME = os.getenv("REVIEWER_NAME", "Kimi K3")
 # Resolved through the SAME helper the cap reads, so the two can never point
 # at different files. They used to diverge: the cap honoured
 # COVERLOOP_EGRESS_LOG while the reviewers hardcoded the default, so relocating

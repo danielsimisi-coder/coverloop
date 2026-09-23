@@ -30,7 +30,8 @@ coverloop attest --codex pass \                # STRONGER: run the reviewer and 
 coverloop attest --codex pass \                # SAME STRENGTH CLASS, ZERO RE-RUN: attach the
   --codex-log /tmp/codex-review.txt            # transcript of a review you ALREADY ran
 coverloop attest --mutation pass \             # L3: guard-break evidence — each safety guard
-  --mutation-log /tmp/guard-breaks.txt         # broken on purpose, a test shown to fail
+  --mutation-guards 4 \                        # broken on purpose (count, >= 1), a test shown
+  --mutation-log /tmp/guard-breaks.txt         # to fail for each
 coverloop attest --glm pass --glm-log /tmp/glm-plan-review.txt   # optional, advisory (not a gate)
 coverloop attest --approve --approver daniel   # record the human gate (L3)
 ```
@@ -86,7 +87,7 @@ merges; only a committed, hash-bound reviewer transcript does.
 | **L2** | ✔ | ✔ | – | – |
 | **L3** | ✔ | ✔ | ✔ | ✔ (named approver) |
 
-**Guard-break evidence (v2.12)** replaced GLM as the second L3 signal. Break each safety guard on purpose, show a test fails, restore it; attach the transcript with `attest --mutation pass --mutation-log <file>` (or run a harness with `--mutation-run "<cmd>"`). `--mutation-findings N` records breaks that **no** test caught — any N > 0 fails the gate. The record has the same transcript rules as a reviewer's (hash-bound, commit-bound, redacted). A well-formed GLM record, if present, is printed as **advisory** at L2/L3 with its status and open-finding count (and `transcript invalid` when its transcript does not verify) — it never changes the verdict. A malformed report is still rejected as a whole, GLM field included (fail closed). An empty transcript is never evidence, for any record. Why: `docs/DESIGN-NOTE-v2.12.md`.
+**Guard-break evidence (v2.12)** replaced GLM as the second L3 signal. Break each safety guard on purpose, show a test fails, restore it; attach the transcript with `attest --mutation pass --mutation-guards N --mutation-log <file>`; `N` (≥ 1) is how many guards you broke — a pass without it fails the gate (v2.12.1), because `0 surviving` alone is satisfiable by breaking nothing (or run a harness with `--mutation-run "<cmd>"`). `--mutation-findings N` records breaks that **no** test caught — any N > 0 fails the gate. The record has the same transcript rules as a reviewer's (hash-bound, commit-bound, redacted). A well-formed GLM record, if present, is printed as **advisory** at L2/L3 with its status and open-finding count (and `transcript invalid` when its transcript does not verify) — it never changes the verdict. A malformed report is still rejected as a whole, GLM field included (fail closed). An empty transcript is never evidence, for any record. Why: `docs/DESIGN-NOTE-v2.12.md`.
 
 **Committing the evidence (how the CI flow works).** Attesting writes the
 report, and committing the report necessarily creates a new HEAD — so the

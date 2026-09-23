@@ -2,6 +2,26 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
+
+- **`attest --mutation pass` requires `--mutation-guards N` (N ≥ 1)**, recorded as
+  `guards_broken`. The gate fails a pass without it — including every record
+  written by v2.12.0 — and rejects `findings_open > guards_broken`. Found by the
+  plan-review pilot (all four models): `pass, 0 surviving` alone was satisfiable
+  by breaking nothing. `--mutation fail` needs no count.
+- **Reviewer helpers default to Kimi K3** (`glm-review` 2.1.0; `GLM_MODEL` still
+  overrides; the `glm-*` names stay). A known-answer pilot — three historical
+  design packets with bugs confirmed later, same ZDR route and prompt for every
+  model — ranked Kimi K3 first on confirmed bugs found and fastest (~1 min), with
+  no false P0/P1; Gemini 3.1 Pro named one root cause the others missed but ran
+  2–3.5 min, past the helper's 120 s limit; GLM 5.2 / 5.3 found fewer. Three
+  cases, single runs: directional evidence, not proof.
+- Tests changed: every test that attested `--mutation pass` now passes
+  `--mutation-guards`; six new tests cover G1–G5.
+
+**Upgrading:** L3 reports whose guard-break record came from v2.12.0 fail until
+re-attested with `--mutation-guards`.
+
 ## 2026-09-23 — guard-break evidence replaces post-code GLM at L3 (PROTOCOL v2.12.0)
 
 Measured across the fleet (2026-06 → 2026-09): GLM failed operationally on

@@ -751,6 +751,14 @@ def load_report(root, sha):
             fo = e["findings_open"]
             if isinstance(fo, bool) or not isinstance(fo, int) or fo < 0:
                 return None, f"{path}: {rk}.findings_open must be a non-negative integer"
+    m = data.get("mutation")
+    if m is not None and "guards_broken" in m:
+        gb = m["guards_broken"]
+        if isinstance(gb, bool) or not isinstance(gb, int) or gb < 1:
+            return None, f"{path}: mutation.guards_broken must be an integer >= 1"
+        fo = m.get("findings_open")
+        if isinstance(fo, int) and not isinstance(fo, bool) and fo > gb:
+            return None, f"{path}: mutation.findings_open exceeds guards_broken"
     hg = data.get("human_gate")
     if hg is not None:
         if "approved" in hg and not isinstance(hg["approved"], bool):
@@ -1338,6 +1346,17 @@ def _cmd_attest_locked(args, root):
         ("glm", args.glm, args.glm_findings, args.glm_run, args.glm_log),
         ("mutation", args.mutation, args.mutation_findings, args.mutation_run, args.mutation_log),
     ):
+        if name == "mutation" and verdict:
+            g = args.mutation_guards
+            if verdict == "pass" and g is None:
+                fail_usage("--mutation pass requires --mutation-guards N (N >= 1): how many "
+                           "safety guards you broke on purpose — a pass that broke nothing "
+                           "proves nothing (v2.12.1)")
+            if g is not None and g < 1:
+                fail_usage("--mutation-guards must be >= 1")
+            if g is not None and findings is not None and findings > g:
+                fail_usage("--mutation-findings cannot exceed --mutation-guards "
+                           "(more surviving breaks than guards broken)")
         if run_cmd and log_src:
             fail_usage(f"--{name}-run and --{name}-log are mutually exclusive — "
                        f"either run the reviewer fresh or attach its existing transcript")
@@ -1365,6 +1384,8 @@ def _cmd_attest_locked(args, root):
                 entry.update(attach_log(root, sha, name, log_src))
                 entry["status"] = verdict
                 entry["findings_open"] = findings if findings is not None else 0
+            if name == "mutation" and args.mutation_guards is not None:
+                entry["guards_broken"] = args.mutation_guards
             report[name] = entry
             did.append(f"{name}={verdict}[{entry['source']}]")
 
@@ -1539,7 +1560,8 @@ def verify_capture(root, entry, commit, name):
 
 
 def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
-                   require_executed=False, count_label="open findings"):
+                   require_executed=False, count_label="open findings",
+                   require_guards=False):
     """Gate check for a reviewer (codex/glm): pass requires status==pass AND
     zero open findings. A verdict claiming `captured`/`attached` whose
     transcript is missing/tampered/replayed is rejected outright (the label
@@ -1556,6 +1578,18 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                      f"(missing / tampered / wrong commit / failed or inconsistent run) — "
                      f"evidence rejected (re-run attest --{name}-run or --{name}-log)")
     ok = entry.get("status") == "pass" and entry.get("findings_open") == 0
+    guards = ""
+    if require_guards:
+        gb = entry.get("guards_broken")
+        if isinstance(gb, int) and not isinstance(gb, bool) and gb >= 1:
+            guards = f"{gb} guards broken, "
+        elif entry.get("status") == "pass":
+            # v2.12.1: a pass must say how many guards it broke — `pass, 0
+            # surviving` with no count is satisfiable by breaking nothing.
+            return check(name, False,
+                         f"{name}: pass with NO guard count — a pass that states no broken "
+                         f"guards proves nothing; re-attest with `--mutation pass "
+                         f"--mutation-guards N` [{source_tag(entry)}]")
     if ok and require_captured and not transcript_valid:
         return check(name, False,
                      f"{name}: pass but SELF-ATTESTED — --require-transcript needs a "
@@ -1566,7 +1600,7 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                      f"(attest --{name}-run \"<cmd>\"); source "
                      f"{entry.get('source', 'self-attested')!r} does not qualify")
     return check(name, ok,
-                 f"{name}: {entry.get('status')}, {count_label}: "
+                 f"{name}: {entry.get('status')}, {guards}{count_label}: "
                  f"{entry.get('findings_open')} [{source_tag(entry)}]")
 
 
@@ -1627,8 +1661,9 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
             "mutation", report.get("mutation") if report else None,
             "guard-break evidence is mandatory at L3 — break each safety guard on "
             "purpose, show a test catches it, then `coverloop attest --mutation pass "
-            "--mutation-log <transcript>`", require_captured, root, report_commit,
-            require_executed, count_label="surviving (uncaught) breaks"))
+            "--mutation-guards N --mutation-log <transcript>`", require_captured, root, report_commit,
+            require_executed, count_label="surviving (uncaught) breaks",
+            require_guards=True))
 
         # WHO gets stopped, and why it is a choice.
         #
@@ -2218,6 +2253,8 @@ def main(argv=None):
     pa.add_argument("--mutation", choices=["pass", "fail"],
                     help="record guard-break evidence (mandatory at L3): each safety guard "
                          "broken on purpose and a test shown to catch it")
+    pa.add_argument("--mutation-guards", type=int,
+                    help="how many safety guards you broke on purpose (required with --mutation pass)")
     pa.add_argument("--mutation-findings", type=int,
                     help="guards whose deliberate breakage NO test caught (default 0)")
     pa.add_argument("--mutation-run", metavar="CMD",
