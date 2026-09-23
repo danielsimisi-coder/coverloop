@@ -1,0 +1,20 @@
+M1 drop the L3 mutation requirement: CAUGHT — 1 failed, 200 deselected in 1.84s
+M2 accept a surviving mutant (ignore findings_open): CAUGHT — 1 failed, 16 passed, 200 deselected, 5 subtests passed in 31.89s
+M3 let a failing GLM fail the verdict again: CAUGHT — 1 failed, 17 passed, 200 deselected, 6 subtests passed in 35.25s
+M4 hide GLM from the output when it is advisory: CAUGHT — 1 failed, 17 passed, 200 deselected, 6 subtests passed in 34.32s
+M5 drop mutation from report-shape validation: CAUGHT — 1 failed, 21 passed, 200 deselected, 9 subtests passed in 39.26s
+M6 drop .mutation.log from the evidence-artifact shape: CAUGHT — 1 failed, 33 passed, 200 deselected, 13 subtests passed in 51.03s
+M7 skip transcript verification for mutation (trust the label): CAUGHT — 1 failed, 16 passed, 200 deselected, 6 subtests passed in 31.16s
+M8 init no longer repairs an existing gitignore: CAUGHT — 1 failed, 23 passed, 200 deselected, 10 subtests passed in 44.25s
+M9 drop the *.mutation.log negation: CAUGHT — 1 failed, 23 passed, 200 deselected, 10 subtests passed in 44.21s
+M10 accept an empty transcript again: CAUGHT — 1 failed, 21 passed, 200 deselected, 10 subtests passed in 41.64s
+M11 hide an empty GLM record again: CAUGHT — 1 failed, 22 passed, 200 deselected, 10 subtests passed in 44.06s
+M12 attest accepts a pass with no guard count: CAUGHT — 1 failed, 7 passed, 200 deselected in 13.56s
+M13 gate accepts a pass with no guard count: CAUGHT — 1 failed, 9 passed, 200 deselected, 4 subtests passed in 18.21s
+M14 report validation accepts a zero/bool/str guard count: CAUGHT — 4 failed, 9 passed, 200 deselected in 16.54s
+M15 report validation accepts more survivors than guards: CAUGHT — 1 failed, 10 passed, 200 deselected, 4 subtests passed in 20.47s
+M16 attest accepts more survivors than guards: CAUGHT — 1 failed, 10 passed, 200 deselected, 4 subtests passed in 19.38s
+M17 attest forgets to record guards_broken: CAUGHT — 1 failed, 200 deselected in 1.88s
+M18 attest accepts a guard count below 1: CAUGHT — 1 failed, 7 passed, 200 deselected in 14.96s
+
+mutants=18 survived_or_unapplied=0
