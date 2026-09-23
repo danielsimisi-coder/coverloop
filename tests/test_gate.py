@@ -182,7 +182,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--glm", "pass"], self.repo)
+        run(["attest", "--mutation", "pass"], self.repo)
         code, out = self.gate_json()
         self.assertEqual(code, 1)  # human gate still missing
         failing = [c["check"] for c in out["checks"] if c["status"] != "pass"]
@@ -204,7 +204,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--glm", "pass"], self.repo)
+        run(["attest", "--mutation", "pass"], self.repo)
         run(["attest", "--approve", "--approver", "daniel"], self.repo)
         code, _ = self.gate_json()
         self.assertEqual(code, 0)
@@ -259,7 +259,7 @@ class GateTestCase(unittest.TestCase):
         sh(["git", "add", "-A"], self.repo)
         sh(["git", "commit", "-qm", "evidence: tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--glm", "pass"], self.repo)
+        run(["attest", "--mutation", "pass"], self.repo)
         run(["attest", "--approve", "--approver", "daniel"], self.repo)
         code, out = self.gate_json()
         self.assertEqual(code, 0, out)
@@ -524,18 +524,18 @@ class GateTestCase(unittest.TestCase):
     # ---- Phase-A audit regressions (P0/P1 fail-opens) ----
     def test_pinned_tier_is_a_floor_not_an_override(self):
         """P0 #1: an L3 report gated with a LOWER --tier/--min-tier must still
-        require glm + human (floor, not override)."""
+        require guard-break + human (floor, not override)."""
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
-        run(["attest", "--codex", "pass"], self.repo)  # tests+codex only, no glm/human
-        # bare gate (report says L3) -> FAIL (missing glm+human)
+        run(["attest", "--codex", "pass"], self.repo)  # tests+codex only, no mutation/human
+        # bare gate (report says L3) -> FAIL (missing mutation+human)
         self.assertEqual(self.gate_json()[0], 1)
         # the shipped CI recipe's downgrade attempt must NOT lower it
         for lower in ("L0", "L1", "L2"):
             code, out = self.gate_json(["--tier", lower])
             self.assertEqual(code, 1, f"--tier {lower} wrongly downgraded L3")
             failing = {c["check"] for c in out["checks"] if c["status"] != "pass"}
-            self.assertTrue({"glm", "human_gate"} & failing)
+            self.assertTrue({"mutation", "human_gate"} & failing)
 
     def test_min_tier_raises_the_floor(self):
         """--min-tier can only RAISE: an L1 report gated --min-tier L2 needs codex."""
@@ -563,7 +563,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L3", "--tests"], self.repo)
         run(["attest", "--codex", "pass"], self.repo)
-        run(["attest", "--glm", "pass"], self.repo)
+        run(["attest", "--mutation", "pass"], self.repo)
         run(["attest", "--approve", "--approver", "d"], self.repo)
         self.assertEqual(self.gate_json()[0], 0)  # full L3 passes
         r = run(["attest", "--tier", "L0"], self.repo)
@@ -792,6 +792,139 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(run(["gate", "--min-tier", "L0"], self.repo).returncode, 1)
         self.assertEqual(run(["gate", "--tier", "L2"], self.repo).returncode, 1)
 
+    # guard-break evidence replaces post-code GLM at L3 (v2.12) --------
+    def _l3_base(self, mutation=("--mutation", "pass"), approve=True):
+        self.init_project()
+        run(["attest", "--tier", "L3", "--tests", "--codex", "pass"], self.repo)
+        if mutation:
+            r = run(["attest", *mutation], self.repo)
+            self.assertIn(r.returncode, (0, 1), r.stderr)
+        if approve:
+            run(["attest", "--approve", "--approver", "daniel"], self.repo)
+
+    def _checks(self, out):
+        return {c["check"]: c for c in out["checks"]}
+
+    def test_v212_C1_l3_passes_with_mutation_and_no_glm(self):
+        self._l3_base()
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("glm", self._checks(out))
+        self.assertEqual(self._checks(out)["mutation"]["status"], "pass")
+
+    def test_v212_C2_l3_without_mutation_fails_naming_it(self):
+        self._l3_base(mutation=None)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        failing = [c["check"] for c in out["checks"] if c["status"] != "pass"]
+        self.assertEqual(failing, ["mutation"])
+        self.assertIn("guard-break", self._checks(out)["mutation"]["detail"])
+
+    def test_v212_C3_mutation_fail_or_survivor_fails(self):
+        for flags in (("--mutation", "fail"),
+                      ("--mutation", "pass", "--mutation-findings", "1")):
+            with self.subTest(flags=flags):
+                self.tearDown(); self.setUp()
+                self._l3_base(mutation=flags)
+                code, out = self.gate_json()
+                self.assertEqual(code, 1, out)
+                self.assertNotEqual(self._checks(out)["mutation"]["status"], "pass")
+                self.assertIn("surviving (uncaught) breaks", self._checks(out)["mutation"]["detail"])
+
+    def test_v212_C4_tampered_mutation_transcript_fails(self):
+        self.init_project()
+        self.write("breaks.txt", "broke guard A -> test_a FAILED; broke guard B -> test_b FAILED\n")
+        r = run(["attest", "--tier", "L3", "--tests", "--codex", "pass",
+                 "--mutation", "pass", "--mutation-log", os.path.join(self.repo, "breaks.txt"),
+                 "--approve", "--approver", "daniel"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        log = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.mutation.log")
+        self.assertTrue(os.path.exists(log))
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        self.assertIn("attached", self._checks(out)["mutation"]["detail"])
+        with open(log, "a") as f:
+            f.write("broke guard C -> nothing failed (edited out)\n")
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertIn("transcript is invalid", self._checks(out)["mutation"]["detail"])
+
+    def test_v212_C5_failing_glm_is_advisory_and_still_printed(self):
+        self._l3_base()
+        run(["attest", "--glm", "fail", "--glm-findings", "7"], self.repo)
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        g = self._checks(out)["glm"]
+        self.assertEqual(g["status"], "pass")
+        self.assertIn("advisory", g["detail"])
+        self.assertIn("fail", g["detail"])
+        self.assertIn("open findings: 7", g["detail"])
+        human = run(["gate"], self.repo).stdout
+        self.assertIn("advisory", human)
+        self.assertIn("open findings: 7", human)
+
+    def test_v212_C6_lower_tiers_unchanged(self):
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests", "--codex", "pass"], self.repo)
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("mutation", self._checks(out))
+        self.tearDown(); self.setUp(); self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        self.assertEqual([c["check"] for c in out["checks"] if c["status"] != "pass"], ["codex"])
+
+    def test_v212_C7_self_attested_mutation_fails_require_captured(self):
+        self._l3_base()
+        self.assertEqual(self.gate_json()[0], 0)
+        code, out = self.gate_json(["--require-captured"])
+        self.assertEqual(code, 1, out)
+        self.assertIn("SELF-ATTESTED", self._checks(out)["mutation"]["detail"])
+        code, out = self.gate_json(["--require-executed"])
+        self.assertEqual(code, 1, out)
+
+    def test_v212_C8_malformed_mutation_record_fails_closed(self):
+        self._l3_base()
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        for bad in ({"status": "maybe", "findings_open": 0},
+                    {"status": "pass", "findings_open": True},
+                    {"status": "pass", "findings_open": -1},
+                    "pass"):
+            with self.subTest(bad=bad):
+                with open(p) as f:
+                    rep = json.load(f)
+                rep["mutation"] = bad
+                with open(p, "w") as f:
+                    json.dump(rep, f)
+                self.assertEqual(self.gate_json()[0], 1)
+
+    def test_v212_init_repairs_an_existing_evidence_gitignore(self):
+        self.init_project()
+        gi = os.path.join(self.repo, ".coverloop", ".gitignore")
+        with open(gi, "w") as f:
+            f.write("# mine\n!reports/\n!reports/*.json\n!reports/*.codex.log\n")
+        r = run(["init"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        body = open(gi).read()
+        self.assertIn("# mine", body)
+        self.assertIn("!reports/*.mutation.log", body)
+        self.assertIn("!reports/*.glm.log", body)
+        self.assertEqual(body.count("!reports/*.json"), 1)
+        run(["init"], self.repo)
+        self.assertEqual(open(gi).read(), body)
+
+    def test_v212_mutation_log_survives_a_root_log_ignore(self):
+        self.init_project()
+        self.write(".gitignore", "*.log\n")
+        self.write("breaks.txt", "broke guard A -> test_a FAILED\n")
+        r = run(["attest", "--tier", "L3", "--tests", "--codex", "pass",
+                 "--mutation", "pass", "--mutation-log", os.path.join(self.repo, "breaks.txt")],
+                self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     # attached transcripts (v2.7.1) ----------------------------------
     def test_attached_log_satisfies_require_captured(self):
         """v2.7.1: attach an EXISTING reviewer transcript (--codex-log) — no
@@ -981,7 +1114,7 @@ class GateTestCase(unittest.TestCase):
                       "exit_code": 0, "recorded_at": "2026-01-01T00:00:00Z",
                       "output_file": f".coverloop/reports/{c1}.codex.log",
                       "output_sha256": old_hash},
-            "glm": None, "human_gate": None,
+            "glm": None, "mutation": None, "human_gate": None,
         }
         self.write(f".coverloop/reports/{c2}.json", json.dumps(forged))
         sh(["git", "add", "-A"], self.repo)
@@ -1205,7 +1338,7 @@ class GateTestCase(unittest.TestCase):
         self.init_project()
         run(["attest", "--tier", "L1", "--tests"], self.repo)  # report says L1
         # L1 report + L1 tests would pass at L1, but a coexisting --min-tier L3
-        # must RAISE to L3 (needs codex+glm+human, which are absent) -> FAIL
+        # must RAISE to L3 (needs codex+mutation+human, which are absent) -> FAIL
         r = run(["gate", "--min-tier", "L3", "--tier", "L0"], self.repo)
         self.assertEqual(r.returncode, 1)
         code, out = self.gate_json(["--min-tier", "L3", "--tier", "L0"])

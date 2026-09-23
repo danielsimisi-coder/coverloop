@@ -2,6 +2,43 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-09-23 — guard-break evidence replaces post-code GLM at L3 (PROTOCOL v2.12.0)
+
+Measured across the fleet (2026-06 → 2026-09): GLM failed operationally on
+roughly one run in five, its adjudicated P0/P1 findings were mostly false
+positives from code outside the packet, and the long review tails were design
+errors found late. What caught what no reviewer did was execution — building,
+running, and breaking each safety guard on purpose. Details and the criteria
+this release was held to: `docs/DESIGN-NOTE-v2.12.md`.
+
+- **New evidence record `mutation` (guard-break).** `attest --mutation pass|fail
+  [--mutation-findings N] [--mutation-log FILE | --mutation-run CMD]`. Same
+  transcript rules as a reviewer record; `findings_open` = breaks no test caught.
+- **L3 requires `mutation` (pass, 0 surviving) instead of `glm`.** Codex, tests
+  and the human gate are unchanged; L0–L2 are unchanged.
+- **GLM is advisory at L2/L3**: printed whenever recorded, never hidden, never
+  changing the verdict. Its role moves to reviewing the plan before L3 code.
+- **`<sha>.mutation.log` is an exact evidence-artifact shape**, with the same
+  whitespace-smuggling defence as the reviewer logs.
+- **`init` repairs an existing `.coverloop/.gitignore`** by appending only the
+  negations it lacks. Before this, an old file was never touched, so the
+  "re-run init" advice `attest` prints for swallowed evidence could not work.
+- **Operating contract:** guard-break is mandatory at L3; execute before review;
+  two-round rule (a P1 open after two Codex rounds → stop and redesign).
+
+Tests changed deliberately (they asserted GLM was mandatory at L3):
+`test_L3_requires_everything`, `test_new_commit_invalidates_old_evidence`,
+`test_report_sha_mismatch_fails`, `test_attest_cannot_silently_downgrade_tier`
+(record `--mutation` instead of `--glm`), `test_pinned_tier_is_a_floor_not_an_override`
+and `test_tier_floor_folds_all_flags` (the missing L3 check is now `mutation`).
+Ten new tests cover C1–C8 and the `init` repair. This release's own
+guard-break: 9 deliberate breaks of the new code, 9 caught.
+
+**Upgrading:** a repo that pins Coverloop by SHA is unaffected until it moves
+the pin. On upgrade, an L3 report that carries GLM evidence but no `mutation`
+record fails the gate — record guard-break evidence for in-flight L3 work
+before switching.
+
 ## 2026-09-04 — the session contract stops being a process manual (PROTOCOL v2.11.0)
 
 `classify`, `attest` and `gate` are **byte-identical** to the previous release:

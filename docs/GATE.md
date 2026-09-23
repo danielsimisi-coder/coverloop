@@ -68,7 +68,7 @@ or free-form personal data are not detected.
 **Enforce transcript-backed evidence in CI.** `coverloop gate
 --require-transcript` makes L2/L3 **fail** on any reviewer verdict that is
 merely self-attested — the report must carry a committed transcript (captured
-OR attached) for Codex (L2+) and GLM (L3). `--require-executed` is stricter:
+OR attached) for Codex (L2+) and for the guard-break record (L3). `--require-executed` is stricter:
 the transcript must come from a coverloop-EXECUTED run (`source: "captured"`,
 exit 0) — attached transcripts are rejected. `--require-captured` is kept as a
 deprecated alias of `--require-transcript`. Pair with the risk floor
@@ -77,12 +77,14 @@ merges; only a committed, hash-bound reviewer transcript does.
 
 ## What each tier requires
 
-| Tier | tests pass | Codex pass, 0 open | GLM pass, 0 open | human approval |
+| Tier | tests pass | Codex pass, 0 open | guard-break pass, 0 surviving | human approval |
 |:---:|:---:|:---:|:---:|:---:|
 | **L0** | – | – | – | – |
 | **L1** | ✔ (waived for docs-only diffs) | – | – | – |
 | **L2** | ✔ | ✔ | – | – |
 | **L3** | ✔ | ✔ | ✔ | ✔ (named approver) |
+
+**Guard-break evidence (v2.12)** replaced GLM as the second L3 signal. Break each safety guard on purpose, show a test fails, restore it; attach the transcript with `attest --mutation pass --mutation-log <file>` (or run a harness with `--mutation-run "<cmd>"`). `--mutation-findings N` records breaks that **no** test caught — any N > 0 fails the gate. The record has the same transcript rules as a reviewer's (hash-bound, commit-bound, redacted). A GLM record, if present, is printed as **advisory** at L2/L3 — always shown, never changing the verdict. Why: `docs/DESIGN-NOTE-v2.12.md`.
 
 **Committing the evidence (how the CI flow works).** Attesting writes the
 report, and committing the report necessarily creates a new HEAD — so the

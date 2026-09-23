@@ -77,6 +77,11 @@ def redact_secrets(text):
 
 
 SCHEMA = "coverloop-report/v1"
+# Evidence records that share the reviewer shape (status, findings_open,
+# optional hash-bound transcript). `mutation` is guard-break evidence (v2.12):
+# each safety guard deliberately broken, a test shown to catch it;
+# findings_open = guards whose breakage NO test caught (surviving mutants).
+EVIDENCE_RECORDS = ("codex", "glm", "mutation")
 CONFIG_DIR = ".coverloop"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 REPORTS_DIR = os.path.join(CONFIG_DIR, "reports")
@@ -548,7 +553,7 @@ def classify_paths(paths, breadth_threshold=BREADTH_L2_FILES):
 # "<sha>.json\n" satisfied the artifact shape and took the exemption.
 REPORT_ARTIFACT_RE = re.compile(
     r"^" + re.escape(REPORTS_DIR + "/")
-    + r"[0-9a-f]{40}(?:\.json|\.(?:codex|glm)\.log)\Z")
+    + r"[0-9a-f]{40}(?:\.json|\.(?:codex|glm|mutation)\.log)\Z")
 
 # Documentation for the L1 test-gate waiver. Deliberately strict so a code file
 # cannot masquerade as docs: an EXACT root-level doc file, or a doc-suffixed
@@ -672,11 +677,23 @@ def cmd_init(args):
         "!reports/*.json\n"
         "!reports/*.codex.log\n"
         "!reports/*.glm.log\n"
+        "!reports/*.mutation.log\n"
     )
-    if not os.path.exists(gi_path) or "!reports/" not in open(gi_path, encoding="utf-8").read():
+    if not os.path.exists(gi_path):
         with open(gi_path, "w", encoding="utf-8") as f:
             f.write(gi_body)
         print(f"+ {CONFIG_DIR}/.gitignore  (negations keep evidence commit-able)")
+    else:
+        # An existing file is only ever APPENDED to: re-running init adds the
+        # negations a newer release needs (v2.12: *.mutation.log) — attest tells
+        # the operator to re-run init when evidence is swallowed, so init must be
+        # able to repair an old file — and never rewrites the user's own lines.
+        have = set(open(gi_path, encoding="utf-8").read().splitlines())
+        missing = [ln for ln in gi_body.splitlines() if ln.startswith("!") and ln not in have]
+        if missing:
+            with open(gi_path, "a", encoding="utf-8") as f:
+                f.write("\n" + "\n".join(missing) + "\n")
+            print(f"+ {CONFIG_DIR}/.gitignore  (added: {', '.join(missing)})")
     print(f"+ {REPORTS_DIR}/")
     print("Done. Record evidence with `coverloop attest`, verify with `coverloop gate`.")
     return 0
@@ -715,7 +732,7 @@ def load_report(root, sha):
     # AttributeError deep in evaluate() (e.g. (tests or {}).get(...)) instead of
     # the documented clean "malformed evidence" FAIL. Reject it here so it takes
     # the fail-closed path.
-    for field in ("tests", "codex", "glm", "human_gate"):
+    for field in ("tests",) + EVIDENCE_RECORDS + ("human_gate",):
         v = data.get(field)
         if v is not None and not isinstance(v, dict):
             return None, f"{path}: field {field!r} must be an object, got {type(v).__name__}"
@@ -724,11 +741,11 @@ def load_report(root, sha):
     # clean FAIL path instead of relying on a downstream comparison happening to
     # be falsy. (Note: bool is an int subclass in Python — reject it explicitly so
     # `findings_open: true` can't masquerade as a count.)
-    for rk in ("tests", "codex", "glm"):
+    for rk in ("tests",) + EVIDENCE_RECORDS:
         e = data.get(rk)
         if e is not None and e.get("status") is not None and e.get("status") not in ("pass", "fail"):
             return None, f"{path}: {rk}.status must be 'pass' or 'fail', got {e.get('status')!r}"
-    for rk in ("codex", "glm"):
+    for rk in EVIDENCE_RECORDS:
         e = data.get(rk)
         if e is not None and "findings_open" in e:
             fo = e["findings_open"]
@@ -803,6 +820,7 @@ def new_report(sha, tier):
         "tests": None,
         "codex": None,
         "glm": None,
+        "mutation": None,
         "human_gate": None,
     }
 
@@ -1212,7 +1230,7 @@ def _cmd_attest_locked(args, root):
         # consistent source fields) — otherwise a forged ancestor report could
         # point output_file at any OLD clean artifact and have attest launder
         # it into evidence for the new HEAD.
-        for rname in ("codex", "glm"):
+        for rname in EVIDENCE_RECORDS:
             e = report.get(rname)
             if not (e and e.get("source") in ("captured", "attached") and e.get("output_file")):
                 continue
@@ -1318,6 +1336,7 @@ def _cmd_attest_locked(args, root):
     for name, verdict, findings, run_cmd, log_src in (
         ("codex", args.codex, args.codex_findings, args.codex_run, args.codex_log),
         ("glm", args.glm, args.glm_findings, args.glm_run, args.glm_log),
+        ("mutation", args.mutation, args.mutation_findings, args.mutation_run, args.mutation_log),
     ):
         if run_cmd and log_src:
             fail_usage(f"--{name}-run and --{name}-log are mutually exclusive — "
@@ -1361,7 +1380,7 @@ def _cmd_attest_locked(args, root):
         did.append(f"human_gate=approved({args.approver.strip()})")
 
     if not did and not args.tier:
-        fail_usage("nothing to attest — pass --tests, --codex, --glm, --approve, or --tier")
+        fail_usage("nothing to attest — pass --tests, --codex, --glm, --mutation, --approve, or --tier")
 
     path = save_report(root, report)
     rel = os.path.relpath(path, root)
@@ -1371,7 +1390,7 @@ def _cmd_attest_locked(args, root):
     # `*.log` rule silently swallowed a captured transcript and CI failed on
     # missing evidence (2026-07-10). check-ignore exits 0 (-> non-None) when
     # a path is ignored.
-    evidence_paths = [rel] + [report[r]["output_file"] for r in ("codex", "glm")
+    evidence_paths = [rel] + [report[r]["output_file"] for r in EVIDENCE_RECORDS
                               if report.get(r) and report[r].get("output_file")]
     swallowed = [p for p in evidence_paths if git(["check-ignore", p], cwd=root) is not None]
     if swallowed:
@@ -1388,7 +1407,7 @@ def _cmd_attest_locked(args, root):
     # already saved fail-closed (withheld transcript, gate will reject), but
     # automation reads the EXIT CODE — exiting 0 here let scripts treat a
     # failed review as a successful attestation.
-    for rname in ("codex", "glm"):
+    for rname in EVIDENCE_RECORDS:
         e = report.get(rname)
         if e and e.get("source") == "captured" and e.get("exit_code") not in (None, 0):
             return 1
@@ -1513,7 +1532,7 @@ def verify_capture(root, entry, commit, name):
 
 
 def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
-                   require_executed=False):
+                   require_executed=False, count_label="open findings"):
     """Gate check for a reviewer (codex/glm): pass requires status==pass AND
     zero open findings. A verdict claiming `captured`/`attached` whose
     transcript is missing/tampered/replayed is rejected outright (the label
@@ -1540,7 +1559,7 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                      f"(attest --{name}-run \"<cmd>\"); source "
                      f"{entry.get('source', 'self-attested')!r} does not qualify")
     return check(name, ok,
-                 f"{name}: {entry.get('status')}, open findings: "
+                 f"{name}: {entry.get('status')}, {count_label}: "
                  f"{entry.get('findings_open')} [{source_tag(entry)}]")
 
 
@@ -1584,11 +1603,26 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
             "independent diff review is mandatory at L2/L3", require_captured, root, report_commit,
             require_executed))
 
+    if tier in ("L2", "L3"):
+        # GLM is ADVISORY since v2.12: printed whenever recorded — never hidden,
+        # never able to change the verdict. Its role moved to reviewing the PLAN
+        # before L3 code (see docs/DESIGN-NOTE-v2.12.md for the measurements).
+        g = report.get("glm") if report else None
+        if g:
+            if g.get("source") in ("captured", "attached") and not verify_capture(
+                    root, g, report_commit, "glm"):
+                gd = "transcript invalid"
+            else:
+                gd = f"{g.get('status')}, open findings: {g.get('findings_open')} [{source_tag(g)}]"
+            checks.append(check("glm", True, f"glm: advisory (not a gate since v2.12) — {gd}"))
+
     if tier == "L3":
         checks.append(reviewer_check(
-            "glm", report.get("glm") if report else None,
-            "red-team/audit is mandatory at L3", require_captured, root, report_commit,
-            require_executed))
+            "mutation", report.get("mutation") if report else None,
+            "guard-break evidence is mandatory at L3 — break each safety guard on "
+            "purpose, show a test catches it, then `coverloop attest --mutation pass "
+            "--mutation-log <transcript>`", require_captured, root, report_commit,
+            require_executed, count_label="surviving (uncaught) breaks"))
 
         # WHO gets stopped, and why it is a choice.
         #
@@ -1597,7 +1631,7 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         # fires on half your work is a gate you learn to rubber-stamp, which is
         # the same failure this tool warns about for over-classification, one
         # notch up. `--human-gate-scope irreversible` narrows the STOP (not the
-        # review: tests, diff gate and red-team still run on every L3) to the
+        # review: tests, diff gate and guard-break still run on every L3) to the
         # changes you cannot take back — schema migrations, money paths, and
         # authz/RLS policy. On that same repo it took the human stops from 47%
         # to 25% of commits.
@@ -2169,12 +2203,21 @@ def main(argv=None):
                     "(a review you already ran interactively): redacted, committed, hashed — "
                     "no re-run. Weaker than --codex-run (no execution binding), far stronger "
                     "than a bare self-attested verdict")
-    pa.add_argument("--glm", choices=["pass", "fail"], help="record the GLM red-team/audit verdict")
+    pa.add_argument("--glm", choices=["pass", "fail"], help="record the GLM verdict (advisory since v2.12 — not a gate)")
     pa.add_argument("--glm-findings", type=int, help="open GLM findings (default 0)")
     pa.add_argument("--glm-run", metavar="CMD", help="run CMD as the GLM reviewer and "
                     "capture its output (hashed, committed) as evidence backing the verdict")
     pa.add_argument("--glm-log", metavar="FILE", help="attach an EXISTING GLM transcript "
                     "(same rules as --codex-log)")
+    pa.add_argument("--mutation", choices=["pass", "fail"],
+                    help="record guard-break evidence (mandatory at L3): each safety guard "
+                         "broken on purpose and a test shown to catch it")
+    pa.add_argument("--mutation-findings", type=int,
+                    help="guards whose deliberate breakage NO test caught (default 0)")
+    pa.add_argument("--mutation-run", metavar="CMD",
+                    help="run CMD as the guard-break harness and capture its transcript")
+    pa.add_argument("--mutation-log", metavar="FILE",
+                    help="attach an EXISTING guard-break transcript (hash-bound to HEAD)")
     pa.add_argument("--approve", action="store_true", help="record the human gate approval (L3)")
     pa.add_argument("--approver", help="who approved (required with --approve)")
     pa.set_defaults(fn=cmd_attest)

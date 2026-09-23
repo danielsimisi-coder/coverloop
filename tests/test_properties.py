@@ -1802,7 +1802,7 @@ class NinthRoundRegressions(unittest.TestCase):
         and skipped the L1 floor. git reports the real name; a name with
         surrounding whitespace is a different, more suspicious file."""
         sha = "a" * 40
-        for suffix in (".json", ".codex.log", ".glm.log"):
+        for suffix in (".json", ".codex.log", ".glm.log", ".mutation.log"):
             for path in (f".coverloop/reports/{sha}{suffix} ",
                          f" .coverloop/reports/{sha}{suffix}",
                          f".coverloop/reports/{sha}{suffix}\t",
@@ -1812,7 +1812,7 @@ class NinthRoundRegressions(unittest.TestCase):
 
     def test_the_genuine_artifact_is_still_exempt(self):
         sha = "b" * 40
-        for suffix in (".json", ".codex.log", ".glm.log"):
+        for suffix in (".json", ".codex.log", ".glm.log", ".mutation.log"):
             with self.subTest(suffix=suffix):
                 self.assertEqual(
                     self.mod.classify_paths([f".coverloop/reports/{sha}{suffix}"])[0],

@@ -7,7 +7,7 @@
 
 This project runs the **Coverloop Multi-Model Production Protocol** (current `PROTOCOL_VERSION` lives in `CLAUDE.md` / run `~/bin/protocol-selftest` — this contract stays version-agnostic so protocol bumps never require a project resync). **No model is an authority** — every finding is a claim, verified against code/tests/runtime. **Execution/tests are the PRIMARY correctness gate.**
 
-**Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex (GPT-5.6 Sol)** gates diffs (line-level correctness; effort EXPLICIT — high for L2, xhigh for L3, max for design red-team/deadlocks, never ultra for a gate) · **GLM-5.2 (full-ZDR)** red-teams architecture/implementation + audits consistency · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **the operator** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
+**Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex (GPT-5.6 Sol)** gates diffs (line-level correctness; effort EXPLICIT — high for L2, xhigh for L3, max for design red-team/deadlocks, never ultra for a gate) · **GLM-5.2 (full-ZDR)** red-teams the **plan** before L3 code (advisory; not a gate on finished code since v2.12 — see `docs/DESIGN-NOTE-v2.12.md` for the measurements) · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **the operator** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
 **Session Start — run FIRST and report it:**
 1. State the current `PROTOCOL_VERSION` (from `CLAUDE.md`, or run `~/bin/protocol-selftest`) + `CONTRACT_VERSION` v2.6 + the roster above.
@@ -18,12 +18,18 @@ This project runs the **Coverloop Multi-Model Production Protocol** (current `PR
 
 **Risk → gates** (pick the lightest safe row; on a tie pick the heavier):
 
-| Risk | Tests (primary) | Codex | GLM | M3 | the operator |
-|------|-----------------|-------|-----|----|--------|
-| **L0** trivial (copy/CSS) | quick check | – | – | – | – |
-| **L1** normal (isolated fix/refactor) | relevant tests + typecheck | if behavior changed | – | – | – |
-| **L2** product flow (no money/auth/migration) | + acceptance | **mandatory** | if subtle | – | if launch-critical |
-| **L3** money / auth·RLS / migration / deploy / secrets / worker | full suite | **mandatory** | **mandatory** (pre + post) | optional (VPS) | **mandatory** |
+| Risk | Tests (primary) | Guard-break | Codex | GLM | M3 | the operator |
+|------|-----------------|-------------|-------|-----|----|--------|
+| **L0** trivial (copy/CSS) | quick check | – | – | – | – | – |
+| **L1** normal (isolated fix/refactor) | relevant tests + typecheck | – | if behavior changed | – | – | – |
+| **L2** product flow (no money/auth/migration) | + acceptance | if it adds a guard | **mandatory** | – | – | if launch-critical |
+| **L3** money / auth·RLS / migration / deploy / secrets / worker | full suite | **mandatory** | **mandatory** | plan review, before code | optional (VPS) | **mandatory** |
+
+**Guard-break (mandatory at L3):** for every safety guard the change adds or relies on — a permission check, a fail-closed branch, an idempotency key, a lock, a validation — break it on purpose and show that a test fails; restore it. A guard no test notices is not protected. Record the transcript: `coverloop attest --mutation pass --mutation-log <file>` (`--mutation-findings N` = breaks nothing caught).
+
+**Execute before review:** build, run the tests and the guard-break BEFORE sending the diff to Codex. The reviewer then reads code that already survived what a machine can check — in the field, a build caught what typecheck and tests missed, and a real run refuted what two cold reviewers had approved.
+
+**Two-round rule:** if a P1 is still open after two Codex rounds, stop and redesign instead of starting a third round. The measured 7–16-round review tails were each a design error found late, not a review problem.
 
 **Batch BY TIER:** a PR inherits its highest-tier item — never bundle a copy fix with a billing migration. Standing authorization ("keep going") covers L0–L2 product work; it never extends to L3 merges/applies.
 

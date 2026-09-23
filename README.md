@@ -36,7 +36,7 @@ The question nobody answers on pages like this. Measured, on this repo:
 | `coverloop gate` — is the evidence complete? | **0.5 s** | free |
 | **L1** — tests, typecheck, no model call | your test suite | free |
 | **L2** — adds an independent diff gate | **+ ~14 s** | on your ChatGPT plan, not per-token |
-| **L3** — adds a red-team pass and hashed evidence | **+ ~30 s** | ~2–4¢ |
+| **L3** — adds guard-break evidence (each safety guard broken on purpose; a test must catch it) and hashed evidence | your test suite, once per guard | free |
 | **L3, the part that costs you** — reading the diff and approving it | **however long you take** | your attention |
 
 That last row is the real price, and no table can shrink it. Everything above it is machine time you can ignore; the human gate is the one thing Coverloop deliberately will not do for you.
@@ -61,7 +61,7 @@ So the stop is adjustable, and the automated review is not:
 coverloop gate --human-gate-scope irreversible
 ```
 
-Every L3 change still gets the whole automated loop — tests, an independent diff gate, a red-team pass, hashed commit-bound evidence. What narrows is **which ones wait for you personally**: only the ones you cannot take back — schema migrations, money paths, and authz/RLS policy. On the same repo, that moved human stops from **47% to 25%** of commits.
+Every L3 change still gets the whole automated loop — tests, an independent diff gate, guard-break evidence, hashed commit-bound evidence. What narrows is **which ones wait for you personally**: only the ones you cannot take back — schema migrations, money paths, and authz/RLS policy. On the same repo, that moved human stops from **47% to 25%** of commits.
 
 It is opt-in, and stays opt-in. Quietly relaxing an existing user's gate on upgrade is precisely the kind of unannounced weakening this project exists to make impossible — so if you want it, you type it.
 
@@ -244,7 +244,7 @@ Twelve false positives bought one real catch. Whether that trade is worth it on 
 | **L0** trivial | copy, CSS | quick check |
 | **L1** normal | isolated fix | tests + typecheck |
 | **L2** product flow | onboarding, admin UX | ➕ mandatory independent review |
-| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + red-team + 2nd auditor + **your gate** |
+| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + guard-break + independent review + **your gate** |
 
 ---
 
