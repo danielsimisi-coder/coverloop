@@ -204,7 +204,7 @@ def main():
     if "--help" in args or "-h" in args:
         print("usage: glm-review [--mode ask|scout|tests|audit|redteam|code] [--version] "
               "[--zdr-selftest] [--no-git] TASK... (optional: pipe text via stdin)\n"
-              "Least-privilege GLM advisory CLI: sends ONLY the explicit task + piped text "
+              "Least-privilege advisory reviewer CLI (default model: " + MODEL + ", via a ZDR-only route): sends ONLY the explicit task + piped text "
               "(secret-scanned, fail-closed) to GLM via full-ZDR OpenRouter. No file/shell/repo "
               "access. Never pipe secrets/.env/PII.")
         sys.exit(0)

@@ -36,7 +36,7 @@ Then **you** do the one manual wiring step it deliberately won't do for you: **i
 ```
 Session Start (v2.5 protocol). Before any work, do this and report it:
 1. Run $HOME/bin/protocol-selftest from the project root and report its output (GREEN or the FAIL lines). It verifies versions, hooks, CLIs, contract, memory, ledger, and the test-gate in one shot.
-2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · GLM-5.2 full-ZDR red-team+audit · M3 data_collection:deny L3-only · the operator gate).
+2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · Kimi K3 full-ZDR plan review (via glm-* helpers) · M3 data_collection:deny L3-only · the operator gate).
 3. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
 4. Read docs/REVIEW_LEDGER.md; skip findings already marked rejected.
 5. Restate the Task Card + risk tier (L0–L3) before touching code.

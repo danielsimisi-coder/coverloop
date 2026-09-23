@@ -8,9 +8,13 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
   `guards_broken`. The gate fails a pass without it — including every record
   written by v2.12.0 — and rejects `findings_open > guards_broken`. Found by the
   plan-review pilot (all four models): `pass, 0 surviving` alone was satisfiable
-  by breaking nothing. `--mutation fail` needs no count.
+  by breaking nothing. `--mutation fail` needs no count. The count is an
+  attested claim (same trust as `findings_open`), not verified against the
+  transcript: it closes the silent empty pass, not a deliberately false one.
 - **Reviewer helpers default to Kimi K3** (`glm-review` 2.1.0; `GLM_MODEL` still
-  overrides; the `glm-*` names stay). A known-answer pilot — three historical
+  overrides; the `glm-*` names stay). The privacy rule now names the reviewer
+  the helpers route to, gated on a passing `--zdr-selftest` — not GLM-5.2 by
+  name. CONTRACT_VERSION v2.10. A known-answer pilot — three historical
   design packets with bugs confirmed later, same ZDR route and prompt for every
   model — ranked Kimi K3 first on confirmed bugs found and fastest (~1 min), with
   no false P0/P1; Gemini 3.1 Pro named one root cause the others missed but ran

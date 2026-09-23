@@ -71,6 +71,14 @@ Found by the plan-review pilot (all four models): nothing says how many guards
 a guard-break run covered, so `mutation pass, 0 surviving` is satisfiable by
 breaking nothing. Smallest fail-closed fix: the record states the count.
 
+**What this does and does not do (Codex r1, narrowed on purpose):** the count
+is an ATTESTED claim, at the same trust level as `findings_open` and every
+other value the attester writes — the gate cannot read a free-form transcript
+and verify it. It turns a SILENT empty pass into an EXPLICIT statement ("I
+broke N guards"): a sloppy session can no longer pass by omission, only by
+writing a false number, and the number sits next to the transcript a reviewer
+can check. It does not make the count verified.
+
 - G1. `attest --mutation pass` without `--mutation-guards N` (N ≥ 1) is refused.
 - G2. The gate passes `mutation` only if status is pass, `findings_open` is 0,
   and `guards_broken` is an int ≥ 1 (bool rejected). A pass record without
