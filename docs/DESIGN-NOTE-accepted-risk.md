@@ -1,6 +1,8 @@
 # Design note — accepted risk: a third state, without rewriting evidence
 
-**Status:** not built. Scoped from a field report (2026-09-17) after a real
+**Status:** not built — **deferred until a real case is blocked** (Daniel,
+2026-09-23: build it when a stuck FAIL actually stops work, not before; let
+v2.12 prove itself in the field first). Scoped from a field report (2026-09-17) after a real
 L3 run on a financial project, and checked against `bin/coverloop`. First
 written 2026-09-17 against `725d630`; that commit was never pushed and the
 checkout holding it was lost, so this is a **restoration (2026-09-23)**,
@@ -49,20 +51,26 @@ undisclosed open findings is worth less than a red one.
 Every mechanism below is judged by one test: **can it only make the gate
 stricter or more honest?** Anything that can make it looser is out of slice 1.
 
-## Prerequisite *(2026-09-23)*: the v2 authority boundary is not wired
+## Decision *(2026-09-23)*: build on the existing trust level, not on report/v2
 
-Slice 1 places the acceptance object inside the signed v2 authorization
-(`REPORT_V2.md`). Verified at `1cc1adc`: `bin/coverloop_report_v2.py` exists
-with its own adversarial tests, but `bin/coverloop` never imports it — the gate
-still reads the v1 `human_gate` object from the PR-authored report. Building
-`accepted_findings` on v1 would make it a builder-writable field the gate
-trusts: a new forgery surface, the report's own §4 done wrong. So slice 1 is
-two releases, in this order:
+Verified at `1cc1adc`: `bin/coverloop_report_v2.py` (signed L3 authorization)
+exists but is not wired into the gate. Wiring it was considered and **rejected**:
 
-1. **Wire v2 into the L3 gate** — pure authority tightening: the L3 human gate
-   stops trusting bytes inside the PR and requires the signed authorization
-   whose digest the report references.
-2. **Then** the four changes below, the acceptance object riding on (1).
+- A signature only adds security if the builder cannot produce it. On the
+  operator's Mac the agent can read the SSH key and load its passphrase from
+  the keychain unattended, so an ordinary SSH key would be ceremony, not
+  authority. Real separation needs a presence-bound key (Touch ID / security
+  key), which ends phone approvals for every L3 change — a daily manual cost
+  paid against a risk (an agent recording an approval nobody gave) that has
+  never occurred and that the contract already forbids.
+- So the acceptance object below lives **next to the existing human-gate
+  record, at the same trust level as today's approval**: the operator names
+  the accepted findings in the same message that approves ("approved; F5 and
+  F6 accepted as risk"), and the session records exactly that. No additional
+  manual step. Everything else in this note is unchanged.
+
+If presence-bound approval is ever wanted, it is an opt-in gate flag on top of
+this design, never a prerequisite for it.
 
 ## Slice 1 — what to build
 
@@ -91,12 +99,10 @@ OPEN · FIXED · RETESTED · REJECTED_AS_INVALID · DEFERRED · ACCEPTED_RISK
 `REJECTED_AS_INVALID`, `DEFERRED`, `ACCEPTED_RISK` are claimed only by the
 acceptance object (below). A builder cannot move a finding's status.
 
-### 3. The acceptance object — on the v2 authority boundary
+### 3. The acceptance object — recorded with the human gate
 
-Per `REPORT_V2.md`, approval is a closed sum type and the report holds only a
-reference plus the SHA-256 of the signed authorization bytes. The acceptance
-object is **part of that signed authorization**, not a field the builder
-writes:
+Recorded by `attest` next to the human-gate approval, only from an operator
+message that names the findings (same rule as recording an approval today):
 
 ```json
 {
@@ -129,7 +135,7 @@ COVERLOOP L3 — <sha>
   glm          advisory — round 1 FAIL (9): 1 P2, 8 P3        [attached]
   acceptance   APPROVE_WITH_ACCEPTED_RISK by Daniel — 2 findings accepted,
                reopen_if: production-deploy
-  human gate   approved (v2 authority ref …, digest …)
+  human gate   approved by 'Daniel'
 DISPOSITION: APPROVED_WITH_ACCEPTED_RISK
 ```
 
@@ -160,9 +166,8 @@ The historical FAIL line is **always printed**. There is no flag to hide it.
    descendant → **red**.
 6. `attest --codex pass` on a report that already has `codex[0].status=fail`
    appends; the file diff shows `codex[0]` byte-identical. Same for `mutation`.
-7. A builder-written `accepted_findings` inside the report (not in the signed
-   authorization) is **rejected as malformed** (v2 rule: PR-authored
-   attribution is not authorization).
+7. An acceptance that names a finding id not present in any round, or that
+   has an empty `reason`, is **rejected as malformed** (fail closed).
 8. Every existing test in `tests/` passes; `bin/coverloop` on a v1/v2 report
    behaves byte-identically to the release this builds on.
 9. *(2026-09-23, per v2.12)* The release is guard-broken: removing each new
@@ -171,6 +176,6 @@ The historical FAIL line is **always printed**. There is no flag to hide it.
 ## Authority
 
 Every item in slice 1 can only add a required condition or add printed
-history. Nothing removes a check. That is why it can ship as one L3 release —
-after the v2 wiring it depends on; the excluded items each carry a way to
-loosen the gate, which is why they cannot ride along.
+history. Nothing removes a check. That is why it can ship as one L3 release;
+the excluded items each carry a way to loosen the gate, which is why they
+cannot ride along.
