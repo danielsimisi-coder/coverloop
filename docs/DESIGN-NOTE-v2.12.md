@@ -64,3 +64,27 @@ Codex (GPT-5.6 Sol, xhigh), at most two rounds. After round two only defects
 that let the gate pass WITHOUT the required evidence are fixed; everything
 else is recorded and deferred. No GLM round on this change (consistent with
 the change itself).
+
+## v2.12.1 — close the vacuous-pass gap (criteria fixed before implementation, 2026-09-23)
+
+Found by the plan-review pilot (all four models): nothing says how many guards
+a guard-break run covered, so `mutation pass, 0 surviving` is satisfiable by
+breaking nothing. Smallest fail-closed fix: the record states the count.
+
+- G1. `attest --mutation pass` without `--mutation-guards N` (N ≥ 1) is refused.
+- G2. The gate passes `mutation` only if status is pass, `findings_open` is 0,
+  and `guards_broken` is an int ≥ 1 (bool rejected). A pass record without
+  `guards_broken` (e.g. written by v2.12.0) FAILS, and says to re-attest with
+  `--mutation-guards`.
+- G3. `findings_open` > `guards_broken` is malformed → FAIL (can't have more
+  survivors than guards broken).
+- G4. `--mutation fail` does not require `--mutation-guards`; if given it is
+  validated the same way.
+- G5. The gate prints the count: `N guards broken, surviving (uncaught) breaks: M`.
+- G6. Codex/GLM records and L0–L2 are unaffected.
+- G7. Every existing test passes (tests that attest `--mutation pass` gain
+  `--mutation-guards`, listed in the CHANGELOG).
+- G8. Guard-broken: removing each new check makes a test fail.
+
+Also in this release: the reviewer helpers' default model becomes Kimi K3
+(`GLM_MODEL` still overrides), per the same pilot.
