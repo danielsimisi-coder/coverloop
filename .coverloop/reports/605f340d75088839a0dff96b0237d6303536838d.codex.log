@@ -1,0 +1,75 @@
+=== Codex (gpt-5.6-sol, xhigh) ROUND 1 on 1ce009e — final message ===
+codex
+Release v2.12 is not merge-ready. I found one strict-mode fail-open, contradictory canonical instructions, and missing release-bound mutation evidence.
+
+## Real defects
+
+- P1 — Empty captured mutation output passes even `--require-executed`. `capture_run()` accepts a successful command producing zero bytes ([bin/coverloop:994](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:994)); unlike attached logs, it never rejects empty content ([bin/coverloop:1075](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1075)). `verify_capture()` then accepts the empty-file SHA-256 ([bin/coverloop:1515](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1515)), and strict execution mode passes it ([bin/coverloop:1551](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1551)). My pure-function reproduction returned `verify_empty_capture True` and a passing `require_executed_check`. Thus `--mutation pass --mutation-run true` can satisfy strict L3 mutation evidence without any guard-break transcript.
+
+- P1 — The canonical protocol still mandates the retired GLM-POST workflow. GLM-POST is declared retired at [CLAUDE.md:137](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:137), but the task card says it is required for L3 at [CLAUDE.md:177](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:177), the design section calls it mandatory at [CLAUDE.md:193](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:193), and the final summary still assigns GLM implementation red-teaming at [CLAUDE.md:434](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:434). The primary gate guide also demonstrates GLM evidence while omitting the newly required mutation evidence at [docs/GATE.md:25](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:25).
+
+- P1 — The distributable contract was changed but remains labeled v2.6. The release declares contract v2.9 at [CLAUDE.md:3](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:3), while the template header and session instruction still say v2.6 at [docs/OPERATING_CONTRACT.md:1](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:1) and [docs/OPERATING_CONTRACT.md:13](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:13). `init-project.sh` copies that stale-version template into projects at [init-project.sh:57](/Users/[REDACTED:user]/code/coverloop/init-project.sh:57). Section 13 is also stale, claiming the header is v2.8 and the template deliberately v2.6 at [CLAUDE.md:428](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:428). This defeats the intended contract-resync signal.
+
+- P1 release-evidence gap — C10 requires the guard-break results to be recorded as the release’s mutation evidence ([docs/DESIGN-NOTE-v2.12.md:56](/Users/[REDACTED:user]/code/coverloop/docs/DESIGN-NOTE-v2.12.md:56)). The scratch transcript reports nine caught mutants ([guardbreak-transcript.txt:1](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak-transcript.txt:1)), but commit `1ce009e` contains no mutation report or `.mutation.log`. Running `coverloop gate --min-tier L3 --json` at that head returns `verdict: fail` because only stale ancestral evidence exists.
+
+- P2 — “GLM is always shown and never changes the verdict” is overstated. The promise appears at [docs/GATE.md:87](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:87). An empty GLM object is hidden by `if g` at [bin/coverloop:1610](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1610); an invalid attached transcript prints only `transcript invalid`, omitting its status/count at [bin/coverloop:1612](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1612); malformed GLM fields reject the entire report through shared validation at [bin/coverloop:735](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:735). The ordinary valid `fail/7` case behaves correctly, but the unconditional documentation does not.
+
+## C1–C10
+
+| Criterion | Result | Evidence |
+|---|---|---|
+| C1 | MET | L3 evaluates Codex, mutation and human approval without requiring GLM at [bin/coverloop:1599](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1599); covered at [tests/test_gate.py:808](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:808). |
+| C2 | MET | Missing mutation produces the named mandatory check at [bin/coverloop:1619](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1619) and [tests/test_gate.py:815](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:815). |
+| C3 | MET | Pass requires `status == pass` and zero survivors at [bin/coverloop:1551](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1551); covered at [tests/test_gate.py:823](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:823). |
+| C4 | NOT MET | Canonical-path replay and tampering are rejected at [bin/coverloop:1500](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1500), but an empty captured “transcript” is accepted as valid evidence. |
+| C5 | NOT MET | Valid fail/open GLM records work, but invalid/empty records can be hidden, lose their status/count, or fail the report, contrary to the unqualified criterion. |
+| C6 | MET | Mutation is evaluated only at L3; L2 still requires Codex only at [bin/coverloop:1599](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1599) and [tests/test_gate.py:867](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:867). |
+| C7 | NOT MET | The flags are wired to mutation, but `--require-executed` accepts a zero-byte captured transcript, so its strict guarantee is bypassable. |
+| C8 | MET | Mutation shape/type validation is at [bin/coverloop:735](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:735), exact artifact shape at [bin/coverloop:554](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:554), and whitespace defenses at [tests/test_properties.py:1799](/Users/[REDACTED:user]/code/coverloop/tests/test_properties.py:1799). |
+| C9 | MET, author evidence | The discovered transcript reports `240 passed, 187 subtests` plus `24 passed` at [full_suite.txt:4](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/full_suite.txt:4); changed legacy tests are listed at [CHANGELOG.md:29](/Users/[REDACTED:user]/code/coverloop/CHANGELOG.md:29). My sandbox could not independently rerun them because temporary-directory creation is prohibited. |
+| C10 | NOT MET | The nine mutations were caught, but the results are not recorded as commit-bound mutation evidence and the candidate’s own L3 gate currently fails. |
+
+No evidence-only ancestry laundering was found in the implemented rebind path: mutation is included in the common evidence set, the ancestor transcript is verified before copying, and `origin_commit` is retained at [bin/coverloop:1219](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1219). Malformed mutation records fail closed. The `.gitignore` append path does not create a gate pass; swallowed artifacts cause attestation failure at [bin/coverloop:1393](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1393).
+
+Bare self-attested mutation evidence remains accepted by design unless transcript enforcement is enabled ([tests/test_gate.py:879](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:879)). Fully forged captured-shaped evidence also remains the documented trust ceiling at [docs/GATE.md:234](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:234); neither is a new v2.12 regression. The zero-byte strict-mode path is new behavior exposed by applying that shared machinery to mutation evidence.
+
+Style findings: none.
+
+VERDICT: FAIL
+
+=== Codex (gpt-5.6-sol, xhigh) ROUND 2 (final) on a7db6d5 — final message ===
+codex
+No release-blocking defect remains. Two documentation/version findings are incomplete, but neither can weaken the executable gate.
+
+### Round-one findings
+
+| Finding | Result | Evidence |
+|---|---|---|
+| Empty captured transcript passes `--require-executed` | **FIXED** | Empty and whitespace-only transcripts now fail centrally for every evidence type at [bin/coverloop:1531](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1531), with regression coverage at [tests/test_gate.py:904](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:904). Non-empty Codex/GLM captures remain valid in direct probes. |
+| Canonical docs still require GLM-POST; GATE example omits mutation | **NOT FIXED**, non-blocking | The task card, summary, and GATE example were corrected at [CLAUDE.md:176](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:176), [CLAUDE.md:433](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:433), and [docs/GATE.md:32](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:32). However, [CLAUDE.md:192](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:192) still says a second GLM-POST is “required.” This over-requires review; it cannot let the gate pass without evidence. |
+| Contract template labelled v2.6 while contract declares v2.9 | **NOT FIXED**, non-blocking | The template remains explicitly “v2.6 base” at [docs/OPERATING_CONTRACT.md:1](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:1) and [docs/OPERATING_CONTRACT.md:13](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:13), while the canonical declaration is v2.9 at [CLAUDE.md:3](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:3). The self-test will consequently report drift through [bin/protocol-selftest:104](/Users/[REDACTED:user]/code/coverloop/bin/protocol-selftest:104). This does not weaken executable mutation enforcement. |
+| Release lacks its own C10 mutation evidence | **FIXED for this review stage** | The harness covers eleven applicable mutations at [guardbreak.py:11](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak.py:11), rejects unapplied mutants at line 57, and reports `11/11` caught at [guardbreak-transcript.txt:1](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak-transcript.txt:1). Attaching this after review at final HEAD is the correct commit-binding procedure. |
+| Advisory GLM display overstated | **FIXED** | Any present GLM object is printed with status/count, including invalid-transcript annotation, without affecting the verdict at [bin/coverloop:1617](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1617). Documentation now states the malformed-report boundary at [docs/GATE.md:89](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:89). |
+
+### New fail-open / false rejection check
+
+None found.
+
+The fix rejects only empty or whitespace-only transcripts. Valid non-empty attached and captured evidence for Codex, GLM, and mutation still verifies through [bin/coverloop:1471](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1471). Missing mutation, failing mutation, survivors, and invalid transcript provenance all remain fail-closed through [bin/coverloop:1541](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1541) and [bin/coverloop:1625](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1625).
+
+### C1–C10
+
+| Criterion | Result |
+|---|---|
+| C1 | **MET** — L3 passes with tests, Codex, mutation pass/0, and human approval without GLM: [bin/coverloop:1606](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1606), [tests/test_gate.py:808](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:808). |
+| C2 | **MET** — absent mutation produces a named mandatory failure: [bin/coverloop:1625](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1625), [tests/test_gate.py:815](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:815). |
+| C3 | **MET** — fail status or nonzero survivors fails: [bin/coverloop:1558](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1558), [tests/test_gate.py:823](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:823). |
+| C4 | **MET** — canonical path, commit binding, symlink, missing file, empty content, and digest checks are enforced at [bin/coverloop:1500](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1500). |
+| C5 | **MET** — failing/open GLM is displayed as advisory and cannot alter the verdict: [bin/coverloop:1613](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1613). |
+| C6 | **MET** — mutation remains L3-only; L2 still requires Codex only: [bin/coverloop:1607](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1607), [tests/test_gate.py:867](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:867). |
+| C7 | **MET** — transcript/executed policies flow into mutation through [bin/coverloop:2071](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:2071) and [bin/coverloop:2088](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:2088). |
+| C8 | **MET** — mutation shape/type validation is at [bin/coverloop:735](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:735); exact artifact matching is at [bin/coverloop:554](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:554). |
+| C9 | **MET on supplied author evidence** — commit records 242 passing tests; the current mutation runs exercise the corrected paths. My independent full-suite attempt was prevented solely by the read-only sandbox having no writable temporary directory; syntax parsing and `git diff --check` passed. |
+| C10 | **MET for the required procedure/transcript** — all eleven mutations were applied and caught, including the three mandatory acceptance mutations and both round-two guards. Final-HEAD `attest --mutation` remains the expected post-review binding step. |
+
+VERDICT: PASS
