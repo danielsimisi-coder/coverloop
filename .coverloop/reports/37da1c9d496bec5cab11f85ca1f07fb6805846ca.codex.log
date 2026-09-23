@@ -1,0 +1,113 @@
+=== Codex (gpt-5.6-sol, xhigh) ROUND 1 on 2aa8fbf — final message ===
+codex
+## Findings
+
+No P0s.
+
+### P1 — “Vacuous pass” remains possible
+
+`guards_broken` is syntactically validated but never matched to the transcript:
+
+- Capture runs any operator-supplied command and records only output/exit metadata: [bin/coverloop:977](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:977).
+- The claimed count is added separately after capture/attachment: [bin/coverloop:1373](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1373), [bin/coverloop:1387](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1387).
+- Attached evidence needs only nonempty text; its contents are not interpreted: [bin/coverloop:1083](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1083).
+- Verification checks source, exit code, path, hash, and nonempty output—but not mutant identities/results or their relationship to `guards_broken`: [bin/coverloop:1501](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1501), [bin/coverloop:1552](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1552).
+- Default gating explicitly accepts self-attested mutation evidence: [tests/test_gate.py:879](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:879).
+
+Therefore an L3 report can pass:
+
+- Normally: `--mutation pass --mutation-guards 1`, with no transcript.
+- With `--require-transcript`: attach any nonempty text.
+- With `--require-executed`: run an exit-zero command producing any nonempty output, such as `printf done`.
+
+This is partly acknowledged by the general attester-authored trust ceiling, but it means v2.12.1 does not operationally close the vacuous-pass gap it claims to close at [docs/DESIGN-NOTE-v2.12.md:68](/Users/[REDACTED:user]/code/coverloop/docs/DESIGN-NOTE-v2.12.md:68).
+
+### P1 — G8 guard-break evidence is incomplete
+
+The implementation adds a distinct attest-time lower-bound check at [bin/coverloop:1355](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1355), but the v2.12.1 mutants cover missing count, gate enforcement, report validation, survivor comparison, and count storage—never removal of this `g < 1` check: [guardbreak.py:45](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak.py:45).
+
+The transcript’s M12–M17 results reflect that same incomplete set: [guardbreak-transcript.txt:12](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak-transcript.txt:12). Thus “removing each new check makes a test fail” is not demonstrated.
+
+### P1 — Default model conflicts with the hard privacy contract
+
+The executable now defaults to Kimi K3 at [bin/glm-review:21](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:21), while the authoritative hard rule still says:
+
+- The verified full-ZDR destination “today” is GLM-5.2: [CLAUDE.md:59](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:59).
+- T2 is “GLM only”: [CLAUDE.md:64](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:64).
+- The role remains defined as GLM-5.2: [CLAUDE.md:77](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:77).
+
+So the technical route remains full-ZDR, but the new default violates the written model allowlist for sensitive traffic. This is a policy/implementation conflict on a privacy hard rule.
+
+### P2 — Further documentation/version drift
+
+- `glm-review --help` still says content is sent to GLM, although the default is Kimi: [bin/glm-review:205](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:205).
+- The session bootstrap still names GLM-5.2 in the current roster: [docs/SESSION_BOOTSTRAP.md:39](/Users/[REDACTED:user]/code/coverloop/docs/SESSION_BOOTSTRAP.md:39).
+- The operating-contract roster changed at [docs/OPERATING_CONTRACT.md:10](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:10), but `CONTRACT_VERSION` remains v2.9 despite the explicit rule that content changes bump it: [CLAUDE.md:3](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:3), [CLAUDE.md:427](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:427). Version-only project drift detection therefore cannot identify old v2.9 contracts carrying the previous roster.
+
+## G1–G8
+
+| Criterion | Result | Evidence |
+|---|---|---|
+| G1 | MET | Pass without a count and counts below 1 are refused at [bin/coverloop:1349](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1349). |
+| G2 | MET syntactically | Report loading rejects bool/non-int/zero/negative values at [bin/coverloop:754](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:754); the L3 gate rejects a missing count at [bin/coverloop:1582](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1582). The count’s truth is not validated, per P1 above. |
+| G3 | MET | Both attest and report loading reject survivors greater than guards: [bin/coverloop:1357](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1357), [bin/coverloop:759](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:759). |
+| G4 | MET | Only `pass` requires a count; a supplied count is still range/relationship validated: [bin/coverloop:1351](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1351). |
+| G5 | MET | Count is incorporated into gate output at [bin/coverloop:1584](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1584) and [bin/coverloop:1602](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1602). |
+| G6 | MET | Codex remains L2/L3; mutation remains L3-only: [bin/coverloop:1641](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1641), [bin/coverloop:1659](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1659). |
+| G7 | NOT MET as independently verified evidence | The commit claims 248 passed and the tree contains 248 test methods, but no clean-suite transcript was supplied. My run was infrastructure-blocked because the read-only environment had no writable temporary directory; all 130 gate cases failed in setup, not assertions. |
+| G8 | NOT MET | The `g < 1` attest check has no corresponding deliberate mutant; see P1 above. |
+
+## Requested edge cases
+
+- Bool/string/float/zero/negative `guards_broken`: rejected. CLI parsing also rejects non-integer values at [bin/coverloop:2256](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:2256).
+- Missing count on pass: rejected with re-attest guidance.
+- `findings_open > guards_broken`: rejected at attest and load.
+- Ancestry rebinding: no automatic count loss or fabrication found; the record dictionaries preserve `guards_broken` through rebinding at [bin/coverloop:1222](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1222). It retains the general attester-authored-report ceiling.
+- Legitimate false rejection: none found. Rejection of v2.12.0 pass records without counts is intentional and documented.
+- Diff integrity: the supplied diff exactly matches `2daa9d0..2aa8fbf`; `git diff --check` and Python AST parsing passed.
+
+## Privacy controls
+
+The model change does not weaken the implementation-level controls:
+
+- Secret redaction and fail-closed scanning remain at [bin/glm-review:129](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:129).
+- ZDR remains mandatory and non-disableable: [bin/glm-review:25](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:25).
+- Routing still requests `zdr:true`, disables fallbacks, and denies collection: [bin/glm-review:77](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:77).
+- Egress logging remains fail-closed: [bin/glm-review:100](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:100).
+- The atomic daily call cap remains before transmission: [bin/glm-review:281](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:281), [bin/egress_cap.py:91](/Users/[REDACTED:user]/code/coverloop/bin/egress_cap.py:91).
+
+The failure is the contradictory privacy contract, not removal of these technical protections.
+
+VERDICT: FAIL
+
+=== Codex (gpt-5.6-sol, xhigh) ROUND 2 (final) on 37da1c9 — final message ===
+codex
+## Round-1 findings
+
+| Finding | Status | Evidence |
+|---|---|---|
+| Vacuous-pass claim | FIXED by narrowing the documented guarantee | The count remains attester-supplied at [bin/coverloop:1367](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1367) and shape-checked—not transcript-derived—at [bin/coverloop:1580](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1580). The limitation is now explicit in [docs/DESIGN-NOTE-v2.12.md:74](/Users/[REDACTED:user]/code/coverloop/docs/DESIGN-NOTE-v2.12.md:74) and [docs/GATE.md:90](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:90). The documentation now matches the code: it prevents silent omission, not deliberate false attestation. |
+| G8 missing lower-bound mutant | FIXED | M18 removes the `g < 1` attest guard at [guardbreak.py:63](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak.py:63); it is caught at [guardbreak-transcript.txt:18](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak-transcript.txt:18). All 18 mutants were caught. |
+| Privacy contract/default-model conflict | FIXED | The hard rule now names Kimi K3 through the verified `glm-*` route and requires a passing self-test at [CLAUDE.md:59](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:59), with T1/T2 routing aligned at [CLAUDE.md:63](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:63). The executable default is Kimi at [bin/glm-review:21](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:21), and ZDR routing remains fail-closed at [bin/glm-review:160](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:160). |
+| Help text drift | NOT FIXED, non-blocking | The help now displays the Kimi model but still says content is sent “to GLM” at [bin/glm-review:207](/Users/[REDACTED:user]/code/coverloop/bin/glm-review:207). |
+| Bootstrap drift | FIXED | [docs/SESSION_BOOTSTRAP.md:39](/Users/[REDACTED:user]/code/coverloop/docs/SESSION_BOOTSTRAP.md:39). |
+| `CONTRACT_VERSION` drift | FIXED | Version is now v2.10 at [CLAUDE.md:3](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:3), with sync semantics updated at [CLAUDE.md:427](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:427). |
+
+No new fail-open or wrongly rejected legitimate flow was found. Rejection of pre-v2.12.1 pass records without a count is deliberate and documented at [CHANGELOG.md:26](/Users/[REDACTED:user]/code/coverloop/CHANGELOG.md:26).
+
+Some stale GLM-specific nomenclature remains at [CLAUDE.md:137](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:137), [CLAUDE.md:144](/Users/[REDACTED:user]/code/coverloop/CLAUDE.md:144), and [docs/OPERATING_CONTRACT.md:36](/Users/[REDACTED:user]/code/coverloop/docs/OPERATING_CONTRACT.md:36). This is non-blocking under the stated stop rule: the authoritative privacy rule and executable route both require verified full-ZDR and do not permit a non-compliant send.
+
+## G1–G8
+
+| Criterion | Result |
+|---|---|
+| G1 | MET — missing/zero/negative counts refused at [bin/coverloop:1349](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1349). |
+| G2 | MET — type/range validation and missing-count gate rejection at [bin/coverloop:754](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:754) and [bin/coverloop:1582](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1582). |
+| G3 | MET — survivor/count relationship enforced at [bin/coverloop:1357](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1357) and [bin/coverloop:759](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:759). |
+| G4 | MET — only pass requires a count; fail without one remains valid evidence recording but cannot pass the gate, tested at [tests/test_gate.py:985](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:985). |
+| G5 | MET — count printed at [bin/coverloop:1602](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1602). |
+| G6 | MET — mutation remains L3-only at [bin/coverloop:1659](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1659); lower-tier regression test at [tests/test_gate.py:867](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:867). |
+| G7 | MET — supplied run reports 248 tests plus 191 subtests and 24 shell checks passing at [full-suite-transcript.txt:1](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/full-suite-transcript.txt:1). |
+| G8 | MET — M12–M18 cover the new guards at [guardbreak.py:45](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak.py:45), with zero survivors at [guardbreak-transcript.txt:20](/private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak-transcript.txt:20). |
+
+VERDICT: PASS
