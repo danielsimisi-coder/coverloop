@@ -1,4 +1,4 @@
-<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.6) =====================
+<!-- ===================== MULTI-MODEL PROTOCOL — OPERATING CONTRACT (v2.6 base + v2.9 L3 evidence rows; v2.7–v2.8 content not yet resynced — see CLAUDE.md §13) =====================
      Inlined so the loop loads into ACTIVE context every session. This contract is AUTHORITATIVE
      for the code-review roster and supersedes any older/partial roster elsewhere in this repo
      (including AGENTS.md and docs/). Full protocol + depth: docs/MULTI_MODEL_PROTOCOL.md. -->
@@ -10,7 +10,7 @@ This project runs the **Coverloop Multi-Model Production Protocol** (current `PR
 **Roster (authoritative for CODE REVIEW):** Claude builds & coordinates · **Codex (GPT-5.6 Sol)** gates diffs (line-level correctness; effort EXPLICIT — high for L2, xhigh for L3, max for design red-team/deadlocks, never ultra for a gate) · **GLM-5.2 (full-ZDR)** red-teams the **plan** before L3 code (advisory; not a gate on finished code since v2.12 — see `docs/DESIGN-NOTE-v2.12.md` for the measurements) · **MiniMax M3 (`data_collection:deny`, L3 only)** optional 2nd auditor — value is in *divergence* · **the operator** gates risky actions. Browser/UX-QA agents (e.g. Antigravity) are *complementary* (mobile/RTL/a11y/screenshots) — never substitutes for this review loop.
 
 **Session Start — run FIRST and report it:**
-1. State the current `PROTOCOL_VERSION` (from `CLAUDE.md`, or run `~/bin/protocol-selftest`) + `CONTRACT_VERSION` v2.6 + the roster above.
+1. State the current `PROTOCOL_VERSION` (from `CLAUDE.md`, or run `~/bin/protocol-selftest`) + `CONTRACT_VERSION` (this template: v2.6 base + v2.9 L3 evidence rows) + the roster above.
 2. **Load memory:** read `docs/MEMORY.md` (git-tracked — machine-local Claude memory does NOT travel between the Mac / VPS sessions).
 3. Read the Risk Map + `docs/REVIEW_LEDGER.md` (skip findings already marked rejected) and, where present, cross-check `docs/DECISIONS.md` / `STATE.md` before ranking any audit finding — "not in the file I happened to read" ≠ "not done"; mark findings **already-decided** vs **new**.
 4. Resolve helper absolute paths (`glm-*` / `m3-*`) and record them in the Risk Map — Claude Code does NOT inherit the terminal `~/bin` PATH.

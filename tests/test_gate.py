@@ -901,6 +901,36 @@ class GateTestCase(unittest.TestCase):
                     json.dump(rep, f)
                 self.assertEqual(self.gate_json()[0], 1)
 
+    def test_v212_empty_captured_mutation_run_is_not_evidence(self):
+        """Sol r1 P1: a successful zero-byte capture (`--mutation-run true`)
+        must not satisfy the gate — not even with --require-executed."""
+        self._l3_base(mutation=("--mutation", "pass", "--mutation-run", "true"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertIn("transcript is invalid", self._checks(out)["mutation"]["detail"])
+        self.assertEqual(self.gate_json(["--require-executed"])[0], 1)
+
+    def test_v212_empty_or_unverifiable_glm_is_still_shown(self):
+        """Sol r1 P2: an advisory GLM record is always printed with its status
+        and count — an empty object is not silently hidden."""
+        self._l3_base()
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = json.load(open(p)); rep["glm"] = {}
+        json.dump(rep, open(p, "w"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        self.assertIn("advisory", self._checks(out)["glm"]["detail"])
+        rep["glm"] = {"status": "fail", "findings_open": 3, "source": "attached",
+                      "output_file": f".coverloop/reports/{sha}.glm.log",
+                      "output_sha256": "0" * 64}
+        json.dump(rep, open(p, "w"))
+        code, out = self.gate_json()
+        self.assertEqual(code, 0, out)
+        d = self._checks(out)["glm"]["detail"]
+        self.assertIn("open findings: 3", d)
+        self.assertIn("transcript invalid", d)
+
     def test_v212_init_repairs_an_existing_evidence_gitignore(self):
         self.init_project()
         gi = os.path.join(self.repo, ".coverloop", ".gitignore")

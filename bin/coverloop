@@ -1528,6 +1528,13 @@ def verify_capture(root, entry, commit, name):
     # Sol verify 2026-07-11 P1)
     if WITHHELD_RE.match(data.decode("utf-8", errors="replace").strip()):
         return False
+    # An EMPTY transcript is not evidence (v2.12, Sol r1 P1): attach_log already
+    # refuses one, but capture_run recorded a successful zero-byte run — so
+    # `--mutation-run true` satisfied even --require-executed without a single
+    # guard being broken. Rejected here, at verification, for every record and
+    # both sources, so no path that writes a transcript can bypass it.
+    if not data.decode("utf-8", errors="replace").strip():
+        return False
     return hashlib.sha256(data).hexdigest() == digest
 
 
@@ -1608,12 +1615,11 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         # never able to change the verdict. Its role moved to reviewing the PLAN
         # before L3 code (see docs/DESIGN-NOTE-v2.12.md for the measurements).
         g = report.get("glm") if report else None
-        if g:
+        if g is not None:
+            gd = f"{g.get('status')}, open findings: {g.get('findings_open')} [{source_tag(g)}]"
             if g.get("source") in ("captured", "attached") and not verify_capture(
                     root, g, report_commit, "glm"):
-                gd = "transcript invalid"
-            else:
-                gd = f"{g.get('status')}, open findings: {g.get('findings_open')} [{source_tag(g)}]"
+                gd += " — transcript invalid"
             checks.append(check("glm", True, f"glm: advisory (not a gate since v2.12) — {gd}"))
 
     if tier == "L3":
