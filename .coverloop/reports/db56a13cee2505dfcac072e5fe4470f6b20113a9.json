@@ -1,0 +1,36 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "db56a13cee2505dfcac072e5fe4470f6b20113a9",
+  "risk_tier": "L3",
+  "created_at": "2026-10-08T05:46:50Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-10-08T05:49:29Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-10-08T05:49:30Z",
+    "source": "attached",
+    "output_file": ".coverloop/reports/db56a13cee2505dfcac072e5fe4470f6b20113a9.codex.log",
+    "output_sha256": "5630e9375aa40ae8c72767ab972cb588a85578edcda4761e9c27c569bcef7d10",
+    "output_lines": 38,
+    "attached_at": "2026-10-08T05:49:30Z"
+  },
+  "glm": null,
+  "mutation": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-10-08T05:49:31Z",
+    "source": "captured",
+    "command": "python3 /private/tmp/claude-501/-Users-[REDACTED:user]-Downloads-ai-dev-for-arcade/[REDACTED:uuid]/scratchpad/guardbreak.py",
+    "exit_code": 0,
+    "output_file": ".coverloop/reports/db56a13cee2505dfcac072e5fe4470f6b20113a9.mutation.log",
+    "output_sha256": "c5ca592036a34d9dec81fd209e21e5dff2711a60d5c14b9b0e84978cbd3e826b",
+    "output_lines": 17,
+    "ran_at": "2026-10-08T05:52:59Z",
+    "guards_broken": 4
+  },
+  "human_gate": null
+}

@@ -1,0 +1,38 @@
+Codex review transcript — Coverloop v2.12.2 (final review message of each round; the raw session logs are not committed because they contain the reviewer's unrelated tool output).
+
+==============================================================================
+ROUND 1 — reviewed 6e3e084 (codex exec -m gpt-5.6-sol -c model_reasoning_effort=xhigh --sandbox read-only, fresh session). Findings P1 + P2 fixed in cea2c83.
+==============================================================================
+Two findings:
+
+- **P1 — Legacy failed captures can gate GREEN after evidence-only inheritance.** During rebinding, an invalid captured entry is converted to `source="self-attested"` without normalizing its legacy `status:"pass"` or removing `exit_code:7` ([bin/coverloop](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1241)). `reviewer_check` then ignores the exit code for self-attested entries and accepts `status=="pass"` with zero findings ([bin/coverloop](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1579)). Reproduced for both L2 Codex and L3 mutation evidence: the legacy report initially failed, but after an evidence-only commit followed by `attest --tests`, the default gate returned GREEN; mutation retained `guards_broken:2`. This contradicts [CHANGELOG.md](/Users/[REDACTED:user]/code/coverloop/CHANGELOG.md:16), which says old reports remain rejected and need no migration. `--require-transcript` catches it, but the default gate does not.
+
+- **P2 — The regression test pins only the exact-HEAD Codex case.** The test hardcodes `--codex-run` ([tests/test_gate.py](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:1257)); it does not cover GLM, mutation with `guards_broken`, successful captures remaining `pass`, or evidence-only rebinding. A disposable matrix confirmed the new write path works for all three records: successful runs remain `pass`; failed runs save `fail` and exit 1; failed GLM remains advisory as designed. However, the committed test does not pin the full documented contract or the P1 legacy path.
+
+The new direct capture behavior, report-shape validation, withheld placeholder, recorded exit code, warning, and mutation guard preservation otherwise behaved correctly. `evaluate`, `reviewer_check`, and `verify_capture` are unchanged. Full suite: 249 tests passed; `git diff --check` passed; worktree clean.
+
+VERDICT: FAIL
+
+==============================================================================
+ROUND 2 — reviewed main..cea2c83 (same invocation). P1 fixed in be52680 (operator-approved gate change, Daniel 2026-10-08).
+==============================================================================
+### Finding
+
+- **P1 — already-inherited failures are still propagated as green evidence.** The inheritance loop skips entries unless they are `captured`/`attached` and retain an `output_file` ([bin/coverloop:1241](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1241)); therefore an already-inherited `self-attested` entry with `status: pass` and non-zero `exit_code` never reaches the correction at [bin/coverloop:1257](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1257). `attest` saves it under the new HEAD, and the default gate accepts its pass status. A disposable-repo reproduction produced: `attest_exit=0, status=pass, exit_code=7, gate_exit=0`. I consider this P1 for this release—not merely the generic gate limitation—because v2.12.2 actively re-inherits the known-failed entry as green evidence. The new inheritance test covers only the first transition from invalid `captured` to `self-attested` ([tests/test_gate.py:1306](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:1306)), not a subsequent inheritance of that legacy self-attested shape.
+
+  The Upgrading paragraph correctly admits that these reports remain green ([CHANGELOG.md:27](/Users/[REDACTED:user]/code/coverloop/CHANGELOG.md:27)), but “re-attest those commits” is insufficient unless it specifically means rerunning/replacing the affected evidence record; a normal `attest --tests` preserves the problem. Its grep finds affected reports but also overmatches rejected captured failures. The unconditional “stays fail” statement in [docs/GATE.md:65](/Users/[REDACTED:user]/code/coverloop/docs/GATE.md:65) is therefore inaccurate for this acknowledged legacy shape.
+
+Everything else checked out: new captures behave correctly for codex/GLM/mutation, successful pass captures remain pass, mutation guard counts survive, attached entries remain unaffected, report-shape validation accepts the new records, and the three gate functions named in the changelog are untouched. The three targeted tests passed; the full suite passed all 251 tests; `git diff --check` passed.
+
+VERDICT: FAIL
+
+==============================================================================
+ROUND 3 — reviewed main..be52680 (same invocation; operator-approved third round past the 2-round cap). P2 #2 (CHANGELOG wording) fixed in db56a13, a CHANGELOG-only commit not re-reviewed. P2 #1 (exit_code shape validation, pre-existing) deferred as a follow-up.
+==============================================================================
+- **P2 — `exit_code` lacks shape validation.** [`bin/coverloop:735`](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:735) validates other nested fields but not `exit_code`. Consequently, `false`, `null`, and `0.0` can gate as successful; `false` also passes captured evidence under `--require-executed` because [`verify_capture`](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1526) treats it as integer zero. Require an actual non-boolean integer whenever the field is present. New tests only cover integer `0/1/7` at [`tests/test_gate.py:1287`](/Users/[REDACTED:user]/code/coverloop/tests/test_gate.py:1287), leaving this unpinned. The withheld-placeholder guard still prevents this from laundering a genuine failed capture, so this is not P1.
+
+- **P2 — Upgrading guidance overstates the affected set.** [`CHANGELOG.md:33`](/Users/[REDACTED:user]/code/coverloop/CHANGELOG.md:33) says matching reports “now fail,” and its grep matches non-zero GLM records too, although GLM remains advisory by [`bin/coverloop:1671`](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1671). It should disclose that false positive. The suggested `attest --<record>-run`/`--<record>-log` shorthand is also incomplete: a verdict plus command/file is mandatory at [`bin/coverloop:1372`](/Users/[REDACTED:user]/code/coverloop/bin/coverloop:1372).
+
+The intended integer behavior for (a), (b), and (c) is correctly implemented. Negative exit codes fail, successful/inherited evidence remains accepted, mutation guard counts survive, and GLM remains advisory. Full suite: **253/253 passed**; `git diff --check` passed; worktree remained clean.
+
+VERDICT: PASS (no open P0/P1)
