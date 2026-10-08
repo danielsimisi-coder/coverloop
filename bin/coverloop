@@ -1376,8 +1376,14 @@ def _cmd_attest_locked(args, root):
                 entry["status"] = verdict
                 entry["findings_open"] = findings if findings is not None else 0
                 if entry.get("exit_code") != 0:
+                    # v2.12.2: a run that failed is a fail, whatever was claimed.
+                    # Recording the caller's "pass" next to exit_code 1 showed a
+                    # pass the gate rejects (field, astro-lab 2026-10-07: 12
+                    # such reports misled both the builder and a human audit).
+                    entry["status"] = "fail"
                     print(f"WARNING: {name} reviewer command exited {entry['exit_code']} — "
-                          f"the capture is an error transcript and the gate will REJECT it. "
+                          f"recorded as status=fail (not your --{name} {verdict}); the "
+                          f"capture is an error transcript and the gate will REJECT it. "
                           f"Fix the command and re-run.", file=sys.stderr)
             elif log_src:
                 # attach_log sets source="attached" + provenance; keep verdict.
@@ -1387,7 +1393,7 @@ def _cmd_attest_locked(args, root):
             if name == "mutation" and args.mutation_guards is not None:
                 entry["guards_broken"] = args.mutation_guards
             report[name] = entry
-            did.append(f"{name}={verdict}[{entry['source']}]")
+            did.append(f"{name}={entry['status']}[{entry['source']}]")
 
     if args.approve:
         if not args.approver or not args.approver.strip():

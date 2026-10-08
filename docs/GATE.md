@@ -63,8 +63,9 @@ shared secret filter: key/token/DB-credential/private-key **values** are
 replaced with `[REDACTED:…]`, and (v2.7.2) so are **PII shapes** — home-dir
 usernames (`/Users/<name>`, `/home/<name>`), email addresses, and UUID-shaped
 session ids. A **failed** reviewer run (nonzero exit — expired auth, a hang) is
-withheld entirely rather than committing its error/env dump, and `attest`
-exits non-zero for it. Honesty note: this is pattern-based redaction — a
+withheld entirely rather than committing its error/env dump, is recorded as
+`status: "fail"` whatever verdict was passed (v2.12.2), and `attest` exits
+non-zero for it. Honesty note: this is pattern-based redaction — a
 tripwire against the common leaks, not a full DLP pass; unrecognized secrets
 or free-form personal data are not detected.
 

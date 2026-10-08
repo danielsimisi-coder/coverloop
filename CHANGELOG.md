@@ -2,6 +2,24 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-10-08 — a failed captured run is recorded as a fail (PROTOCOL v2.12.2)
+
+- **`attest --<record> pass --<record>-run CMD` now saves `status: "fail"` when
+  CMD exits non-zero**, for every record (codex, glm, mutation). Before, the
+  report kept the caller's `pass` next to `exit_code: 1`. The gate already
+  rejected those entries — no bad report ever passed — but the saved JSON
+  showed a pass the gate refused. Found in the field (astro-lab, 2026-10-07):
+  12 intermediate reports read `pass` with `exit_code: 1` and misled both the
+  builder and a human audit. The withheld-transcript placeholder, the
+  recorded exit code, the stderr warning and `attest` exiting 1 are unchanged;
+  the warning and the `recorded [...]` line now say `fail`.
+- **`gate` is unchanged** (`evaluate`, `reviewer_check`, `verify_capture`
+  untouched). Reports written by earlier versions still say `pass` with a
+  non-zero `exit_code`; they gate exactly as before (rejected) and need no
+  migration — read `exit_code`, not `status`, on old records.
+- Tests: one new test (`test_failed_reviewer_capture_records_status_fail`);
+  no existing test changed.
+
 ## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
 
 - **`attest --mutation pass` requires `--mutation-guards N` (N ≥ 1)**, recorded as

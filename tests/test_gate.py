@@ -1253,6 +1253,32 @@ class GateTestCase(unittest.TestCase):
         self.assertTrue(os.path.exists(
             os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")))
 
+    # v2.12.2 ---------------------------------------------------------
+    def test_failed_reviewer_capture_records_status_fail(self):
+        """v2.12.2 (field, astro-lab 2026-10-07): a --codex pass whose
+        --codex-run exited 1 was saved as status "pass" next to exit_code 1 —
+        a pass on display that the gate rejects. The saved status is now
+        "fail"; the withheld placeholder, exit code, attest exit 1 and the
+        gate's rejection are unchanged."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo boom; exit 1"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("codex=fail[captured]", r.stdout)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            codex = json.load(f)["codex"]
+        self.assertEqual(codex["status"], "fail")
+        self.assertEqual(codex["exit_code"], 1)
+        self.assertEqual(codex["source"], "captured")
+        self.assertIn("transcript withheld", self._read_log())
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(out["verdict"], "fail")
+        self.assertEqual(
+            [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
+
     def test_pii_is_redacted_in_committed_transcripts(self):
         """v2.7.2: home-dir usernames, emails, and UUID session ids never
         reach a committed transcript (a live transcript had committed a real
