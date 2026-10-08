@@ -1279,6 +1279,57 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(
             [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
 
+    def _report(self):
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            return json.load(f)
+
+    def test_captured_status_follows_exit_code_for_every_record(self):
+        """v2.12.2 (Codex r1 P2): codex, glm and mutation alike — a failed run
+        saves "fail" and attest exits 1; a successful run keeps the stated
+        "pass". mutation keeps its guard count either way."""
+        self.init_project()
+        for name in ("codex", "glm", "mutation"):
+            guards = ["--mutation-guards", "2"] if name == "mutation" else []
+            for cmd, rc, status in (("echo boom; exit 1", 1, "fail"),
+                                    ("echo real review", 0, "pass")):
+                with self.subTest(record=name, cmd=cmd):
+                    r = run(["attest", "--tier", "L3", f"--{name}", "pass",
+                             f"--{name}-run", cmd] + guards, self.repo)
+                    self.assertEqual(r.returncode, rc, r.stderr)
+                    e = self._report()[name]
+                    self.assertEqual(e["status"], status)
+                    self.assertEqual(e["exit_code"], rc)
+                    if name == "mutation":
+                        self.assertEqual(e["guards_broken"], 2)
+
+    def test_legacy_failed_capture_is_not_laundered_by_inheritance(self):
+        """v2.12.2 (Codex r1 P1): a pre-v2.12.2 failed capture (status "pass"
+        next to exit_code 7) was dropped to self-attested on inheritance across
+        an evidence-only commit, KEEPING "pass" — and the default gate accepts
+        a self-attested pass. It must be inherited as a fail."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo boom; exit 7"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        path = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = self._report()
+        rep["codex"]["status"] = "pass"  # what every version before v2.12.2 wrote
+        with open(path, "w") as f:
+            json.dump(rep, f)
+        code, _ = self.gate_json()
+        self.assertEqual(code, 1)  # rejected at its own commit, as before
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)  # any later attest inherits it
+        codex = self._report()["codex"]
+        self.assertEqual(codex["source"], "self-attested")
+        self.assertEqual(codex["status"], "fail")
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(
+            [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
+
     def test_pii_is_redacted_in_committed_transcripts(self):
         """v2.7.2: home-dir usernames, emails, and UUID session ids never
         reach a committed transcript (a live transcript had committed a real

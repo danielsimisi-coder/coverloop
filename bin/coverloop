@@ -1249,6 +1249,13 @@ def _cmd_attest_locked(args, root):
                 report[rname] = dict(e, source="self-attested")
                 report[rname].pop("output_file", None)
                 report[rname].pop("output_sha256", None)
+                # v2.12.2 (Codex r1 P1): a run recorded as FAILED stays a fail.
+                # A pre-v2.12.2 failed capture saved the caller's "pass"; dropped
+                # to self-attested it became a self-attested pass the default
+                # gate accepts — a known-failed review laundered green by any
+                # later attest after an evidence-only commit.
+                if e.get("exit_code") not in (None, 0):
+                    report[rname]["status"] = "fail"
                 continue
             src_rel = e["output_file"]
             old_path = os.path.join(root, src_rel)

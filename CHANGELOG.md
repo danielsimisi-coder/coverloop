@@ -13,12 +13,29 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
   builder and a human audit. The withheld-transcript placeholder, the
   recorded exit code, the stderr warning and `attest` exiting 1 are unchanged;
   the warning and the `recorded [...]` line now say `fail`.
+- **Inheritance keeps a failed run a fail** (found by this release's own Codex
+  review, round 1). When `attest` inherits evidence across an evidence-only
+  commit, a captured entry whose transcript does not verify is dropped to
+  `self-attested`, keeping its status. A pre-v2.12.2 failed capture therefore
+  became a **self-attested `pass`**, which the default gate accepts (only
+  `--require-transcript` / `--require-executed` refused it): any later
+  `attest` after an evidence-only commit turned a known-failed review green.
+  An inherited entry with a non-zero `exit_code` is now recorded as `fail`.
 - **`gate` is unchanged** (`evaluate`, `reviewer_check`, `verify_capture`
-  untouched). Reports written by earlier versions still say `pass` with a
-  non-zero `exit_code`; they gate exactly as before (rejected) and need no
-  migration — read `exit_code`, not `status`, on old records.
-- Tests: one new test (`test_failed_reviewer_capture_records_status_fail`);
-  no existing test changed.
+  untouched). Both fixes are in `attest`, i.e. in what gets written.
+
+**Upgrading:** reports written by earlier versions may still say `pass` next
+to a non-zero `exit_code`. At their own commit the gate rejects them, as
+before. But a report that an earlier version already carried across an
+evidence-only commit holds a self-attested `pass` with a non-zero `exit_code`
+— the gate accepts it, and this release does not rewrite it. Find them with
+`grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json` and re-attest those
+commits, or gate with `--require-transcript`.
+
+Tests: three new tests (`test_failed_reviewer_capture_records_status_fail`,
+`test_captured_status_follows_exit_code_for_every_record`,
+`test_legacy_failed_capture_is_not_laundered_by_inheritance`); no existing
+test changed.
 
 ## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
 
