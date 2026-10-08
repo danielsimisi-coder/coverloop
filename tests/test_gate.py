@@ -1490,6 +1490,89 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
         self.assertEqual(run(["gate"], self.repo).returncode, 1)
 
+    # ---- v2.12.3: exit_code must be a real int (Codex v2.12.2 review P2) ----
+    def _captured_all_records(self):
+        """L2 report with a successful CAPTURED run on codex, glm and mutation."""
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--tests",
+                 "--codex", "pass", "--codex-run", "echo verified app.py:1 CLEAN",
+                 "--glm", "pass", "--glm-run", "echo red-team app.py:1 CLEAN",
+                 "--mutation", "pass", "--mutation-guards", "1",
+                 "--mutation-run", "echo broke guard app.py:1, test caught it"],
+                self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        return os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+
+    def _set_exit_code(self, p, rname, value):
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
+        rep[rname]["exit_code"] = value
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
+
+    def test_v2123_non_int_exit_code_is_malformed(self):
+        """false == 0 and 0.0 == 0 in Python, so `exit_code: false` passed even
+        --require-executed. A present exit_code that is not a real non-boolean
+        int (false, null, 0.0, "0") must reject the report as malformed, on
+        every evidence record."""
+        p = self._captured_all_records()
+        with open(p, encoding="utf-8") as _fh:
+            original = _fh.read()
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 0)
+        for rname in ("codex", "glm", "mutation"):
+            for bad in (False, None, 0.0, "0"):
+                with self.subTest(record=rname, exit_code=bad):
+                    with open(p, "w", encoding="utf-8") as _fh:
+                        _fh.write(original)
+                    self._set_exit_code(p, rname, bad)
+                    for extra in ([], ["--require-executed"]):
+                        code, out = self.gate_json(extra)
+                        self.assertEqual(code, 1, out)
+                        self.assertIn(f"{rname}.exit_code must be an integer",
+                                      json.dumps(out))
+
+    def test_v2123_int_zero_exit_code_still_passes(self):
+        p = self._captured_all_records()
+        for rname in ("codex", "glm", "mutation"):
+            self._set_exit_code(p, rname, 0)
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 0)
+        self.assertEqual(run(["gate"], self.repo).returncode, 0)
+
+    def test_v2123_negative_int_exit_code_still_fails(self):
+        """A signal-killed run (negative returncode) is a well-formed int, so it
+        is not 'malformed' — it is a FAILED run, and the gate rejects it where
+        the record gates (codex at L2, mutation at L3; glm is advisory)."""
+        p = self._captured_all_records()
+        with open(p, encoding="utf-8") as _fh:
+            original = _fh.read()
+        for rname in ("codex", "glm"):
+            with self.subTest(record=rname):
+                with open(p, "w", encoding="utf-8") as _fh:
+                    _fh.write(original)
+                self._set_exit_code(p, rname, -9)
+                code, out = self.gate_json(["--require-executed"])
+                self.assertNotIn("must be an integer", json.dumps(out))
+                detail = self._checks(out)[rname]["detail"]
+                if rname == "codex":
+                    self.assertEqual(code, 1, out)
+                    self.assertIn("transcript is invalid", detail)
+                    self.assertEqual(self.gate_json()[0], 1)
+                else:
+                    self.assertIn("transcript invalid", detail)  # advisory, flagged
+
+    def test_v2123_negative_int_mutation_exit_code_fails_l3(self):
+        self._l3_base(mutation=("--mutation", "pass", "--mutation-guards", "1",
+                                "--mutation-run", "echo broke guard app.py:1, caught"))
+        self.assertEqual(self.gate_json()[0], 0)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        self._set_exit_code(p, "mutation", -9)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("must be an integer", json.dumps(out))
+        self.assertEqual(self._checks(out)["mutation"]["status"], "FAIL")
+
     def test_secret_filter_catches_bare_KEY_family(self):
         """P1: AWS_SECRET_ACCESS_KEY / SECRET_KEY / ENCRYPTION_KEY etc. must be
         scanned (egress-blocked) and redacted; MONKEY must not over-match."""

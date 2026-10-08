@@ -67,7 +67,9 @@ withheld entirely rather than committing its error/env dump, is recorded as
 `status: "fail"` whatever verdict was passed, and `attest` exits non-zero for
 it. The gate rejects any codex/mutation record carrying a non-zero `exit_code`,
 whatever its `source` or `status`, and `attest` saves such a record as `fail`
-when it inherits it across an evidence-only commit (v2.12.2). Honesty note: this is pattern-based redaction — a
+when it inherits it across an evidence-only commit (v2.12.2). An `exit_code`
+that is present but not a real integer (`false`, `null`, `0.0`, `"0"`) makes the
+whole report malformed — Python reads `false` and `0.0` as equal to `0` (v2.12.3). Honesty note: this is pattern-based redaction — a
 tripwire against the common leaks, not a full DLP pass; unrecognized secrets
 or free-form personal data are not detected.
 

@@ -751,6 +751,15 @@ def load_report(root, sha):
             fo = e["findings_open"]
             if isinstance(fo, bool) or not isinstance(fo, int) or fo < 0:
                 return None, f"{path}: {rk}.findings_open must be a non-negative integer"
+        # v2.12.3 (Codex v2.12.2 review P2): exit_code is a subprocess return
+        # code — an int, negative when killed by a signal. Every downstream
+        # check compares it to 0, and in Python False == 0 and 0.0 == 0, so
+        # `exit_code: false` passed --require-executed and `null` read as
+        # absent. A PRESENT exit_code must be a real non-boolean int.
+        if e is not None and "exit_code" in e:
+            ec = e["exit_code"]
+            if isinstance(ec, bool) or not isinstance(ec, int):
+                return None, f"{path}: {rk}.exit_code must be an integer, got {ec!r}"
     m = data.get("mutation")
     if m is not None and "guards_broken" in m:
         gb = m["guards_broken"]

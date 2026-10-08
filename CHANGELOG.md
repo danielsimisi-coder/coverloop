@@ -2,6 +2,25 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-10-08 — a recorded exit code must be a real integer (PROTOCOL v2.12.3)
+
+Found by Codex reviewing v2.12.2 (P2). Report-shape validation checked
+`findings_open` and `guards_broken` but not `exit_code`. Every exit-code check
+compares it to `0`, and in Python `False == 0` and `0.0 == 0`, so a captured
+record with `exit_code: false` passed even `--require-executed`, and `null`
+read as "no exit code". The withheld-placeholder check still stopped this from
+laundering a real failed capture, so it was not a P1.
+
+- **A present `exit_code` on a codex, glm or mutation record must be a
+  non-boolean integer**, or the whole report is rejected as malformed (fail
+  closed, like every other malformed field). `false`, `null`, `0.0` and `"0"`
+  are rejected. Negative integers (a signal-killed run) are well-formed and
+  still fail as a failed run. A record with no `exit_code` (self-attested,
+  attached) and `exit_code: 0` gate exactly as before.
+
+**Upgrading:** nothing to do for reports `coverloop` wrote — `capture_run`
+always records an integer. Only a hand-edited report changes verdict.
+
 ## 2026-10-08 — a failed reviewer run is never a pass: saved, inherited or gated (PROTOCOL v2.12.2)
 
 Found in the field (astro-lab, 2026-10-07): 12 intermediate reports read
