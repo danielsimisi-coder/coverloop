@@ -1231,6 +1231,15 @@ def _cmd_attest_locked(args, root):
         # reads this field, so re-attesting can no longer shrink what it covers.
         report.setdefault("origin_commit", anc_sha)
         report["commit"] = sha
+        # v2.12.2 (Codex r1+r2 P1): a run recorded as FAILED is inherited as a
+        # fail, whatever its source. Before v2.12.2 a failed capture saved the
+        # caller's "pass"; dropped to self-attested below, it read as a pass
+        # (the gate now rejects any non-zero exit_code — this keeps the saved
+        # report from displaying a pass the gate refuses).
+        for rname in EVIDENCE_RECORDS:
+            e = report.get(rname)
+            if e and e.get("exit_code") not in (None, 0):
+                report[rname] = dict(e, status="fail")
         # Re-bind any reviewer transcript to the new commit's filename so the
         # gate's commit+reviewer binding still recognizes it. The transcript is
         # trusted ONLY if it verifies AGAINST THE ANCESTOR first (exact
@@ -1249,13 +1258,6 @@ def _cmd_attest_locked(args, root):
                 report[rname] = dict(e, source="self-attested")
                 report[rname].pop("output_file", None)
                 report[rname].pop("output_sha256", None)
-                # v2.12.2 (Codex r1 P1): a run recorded as FAILED stays a fail.
-                # A pre-v2.12.2 failed capture saved the caller's "pass"; dropped
-                # to self-attested it became a self-attested pass the default
-                # gate accepts — a known-failed review laundered green by any
-                # later attest after an evidence-only commit.
-                if e.get("exit_code") not in (None, 0):
-                    report[rname]["status"] = "fail"
                 continue
             src_rel = e["output_file"]
             old_path = os.path.join(root, src_rel)
@@ -1590,6 +1592,15 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                      f"{name}: claims {entry.get('source')!r} but the transcript is invalid "
                      f"(missing / tampered / wrong commit / failed or inconsistent run) — "
                      f"evidence rejected (re-run attest --{name}-run or --{name}-log)")
+    # v2.12.2 (Codex r2 P1): a recorded non-zero exit_code means the run FAILED,
+    # whatever the source says. Before v2.12.2 a failed capture kept the
+    # caller's "pass"; inherited across an evidence-only commit it became a
+    # self-attested pass this check accepted. A failed run is never evidence.
+    if entry.get("exit_code") not in (None, 0):
+        return check(name, False,
+                     f"{name}: recorded exit_code {entry.get('exit_code')!r} — the run "
+                     f"FAILED and is not evidence (re-run attest --{name}-run "
+                     f"or --{name}-log) [{source_tag(entry)}]")
     ok = entry.get("status") == "pass" and entry.get("findings_open") == 0
     guards = ""
     if require_guards:

@@ -64,9 +64,10 @@ replaced with `[REDACTED:…]`, and (v2.7.2) so are **PII shapes** — home-dir
 usernames (`/Users/<name>`, `/home/<name>`), email addresses, and UUID-shaped
 session ids. A **failed** reviewer run (nonzero exit — expired auth, a hang) is
 withheld entirely rather than committing its error/env dump, is recorded as
-`status: "fail"` whatever verdict was passed — and stays `fail` when a later
-`attest` inherits it across an evidence-only commit (v2.12.2) — and `attest`
-exits non-zero for it. Honesty note: this is pattern-based redaction — a
+`status: "fail"` whatever verdict was passed, and `attest` exits non-zero for
+it. The gate rejects any codex/mutation record carrying a non-zero `exit_code`,
+whatever its `source` or `status`, and `attest` saves such a record as `fail`
+when it inherits it across an evidence-only commit (v2.12.2). Honesty note: this is pattern-based redaction — a
 tripwire against the common leaks, not a full DLP pass; unrecognized secrets
 or free-form personal data are not detected.
 

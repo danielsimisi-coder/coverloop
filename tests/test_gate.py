@@ -1330,6 +1330,41 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(
             [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
 
+    def _assert_already_inherited_failed_run_rejected(self, name, tier, extra=()):
+        """v2.12.2 (Codex r2 P1): an earlier version may ALREADY have carried a
+        failed capture forward as {source: self-attested, status: pass,
+        exit_code: 7}. The gate accepted that shape; it must reject any record
+        carrying a non-zero exit_code, and a further inheritance saves "fail"."""
+        self.init_project()
+        run(["attest", "--tier", tier, "--tests"], self.repo)
+        run(["attest", f"--{name}", "pass", f"--{name}-run",
+             "echo boom; exit 7"] + list(extra), self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        path = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = self._report()
+        rep[name].update(status="pass", source="self-attested")  # legacy shape
+        rep[name].pop("output_file")
+        rep[name].pop("output_sha256")
+        with open(path, "w") as f:
+            json.dump(rep, f)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        failing = [c["check"] for c in out["checks"] if c["status"] != "pass"]
+        self.assertIn(name, failing)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)
+        self.assertEqual(self._report()[name]["status"], "fail")
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+
+    def test_already_inherited_failed_codex_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected("codex", "L2")
+
+    def test_already_inherited_failed_mutation_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected(
+            "mutation", "L3", ["--mutation-guards", "2"])
+
     def test_pii_is_redacted_in_committed_transcripts(self):
         """v2.7.2: home-dir usernames, emails, and UUID session ids never
         reach a committed transcript (a live transcript had committed a real

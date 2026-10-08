@@ -2,40 +2,48 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-10-08 — a failed captured run is recorded as a fail (PROTOCOL v2.12.2)
+## 2026-10-08 — a failed reviewer run is never a pass: saved, inherited or gated (PROTOCOL v2.12.2)
 
-- **`attest --<record> pass --<record>-run CMD` now saves `status: "fail"` when
-  CMD exits non-zero**, for every record (codex, glm, mutation). Before, the
-  report kept the caller's `pass` next to `exit_code: 1`. The gate already
-  rejected those entries — no bad report ever passed — but the saved JSON
-  showed a pass the gate refused. Found in the field (astro-lab, 2026-10-07):
-  12 intermediate reports read `pass` with `exit_code: 1` and misled both the
-  builder and a human audit. The withheld-transcript placeholder, the
-  recorded exit code, the stderr warning and `attest` exiting 1 are unchanged;
-  the warning and the `recorded [...]` line now say `fail`.
-- **Inheritance keeps a failed run a fail** (found by this release's own Codex
-  review, round 1). When `attest` inherits evidence across an evidence-only
-  commit, a captured entry whose transcript does not verify is dropped to
-  `self-attested`, keeping its status. A pre-v2.12.2 failed capture therefore
-  became a **self-attested `pass`**, which the default gate accepts (only
-  `--require-transcript` / `--require-executed` refused it): any later
-  `attest` after an evidence-only commit turned a known-failed review green.
-  An inherited entry with a non-zero `exit_code` is now recorded as `fail`.
-- **`gate` is unchanged** (`evaluate`, `reviewer_check`, `verify_capture`
-  untouched). Both fixes are in `attest`, i.e. in what gets written.
+Found in the field (astro-lab, 2026-10-07): 12 intermediate reports read
+`status: pass` next to `exit_code: 1`, which misled both the builder and a
+human audit. At their own commit the gate rejected them. This release's own
+Codex review (two rounds) then showed the same records could gate **green**
+after an evidence-only commit — so this is a gate fix, not only a display fix.
 
-**Upgrading:** reports written by earlier versions may still say `pass` next
-to a non-zero `exit_code`. At their own commit the gate rejects them, as
-before. But a report that an earlier version already carried across an
-evidence-only commit holds a self-attested `pass` with a non-zero `exit_code`
-— the gate accepts it, and this release does not rewrite it. Find them with
-`grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json` and re-attest those
-commits, or gate with `--require-transcript`.
+- **`attest --<record> pass --<record>-run CMD` saves `status: "fail"` when
+  CMD exits non-zero**, for every record (codex, glm, mutation). It used to
+  keep the caller's `pass`. The withheld-transcript placeholder, the recorded
+  exit code, the stderr warning and `attest` exiting 1 are unchanged; the
+  warning and the `recorded [...]` line now say `fail`.
+- **Inheritance saves a failed run as a fail.** When `attest` carries evidence
+  across an evidence-only commit, any record with a non-zero `exit_code` is
+  rewritten to `status: "fail"`, whatever its source. Before, a failed capture
+  whose transcript did not verify was dropped to `self-attested` *keeping* its
+  `pass` — and the default gate accepts a self-attested pass (only
+  `--require-transcript` / `--require-executed` refused it). Any later
+  `attest` after an evidence-only commit turned a known-failed review green,
+  and every further `attest` carried it forward.
+- **The gate rejects any codex or mutation record carrying a non-zero
+  `exit_code`**, whatever its `source` or `status` (`reviewer_check`). This
+  closes reports an earlier version already carried forward, without
+  rewriting them. It only makes the gate stricter: a record with no
+  `exit_code` (self-attested, attached) or `exit_code: 0` gates exactly as
+  before. GLM stays advisory and never changes the verdict.
 
-Tests: three new tests (`test_failed_reviewer_capture_records_status_fail`,
+**Upgrading:** a report written by an earlier version that holds a
+self-attested `pass` with a non-zero `exit_code` — a failed review carried
+across an evidence-only commit — gated green and now fails. That is the fix:
+re-run the reviewer (`attest --<record>-run` or `--<record>-log`). To find
+them before upgrading: `grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json`
+(this also lists failed captures at their own commit, which were already
+rejected).
+
+Tests: five new tests (`test_failed_reviewer_capture_records_status_fail`,
 `test_captured_status_follows_exit_code_for_every_record`,
-`test_legacy_failed_capture_is_not_laundered_by_inheritance`); no existing
-test changed.
+`test_legacy_failed_capture_is_not_laundered_by_inheritance`,
+`test_already_inherited_failed_codex_run_is_rejected`,
+`test_already_inherited_failed_mutation_run_is_rejected`); no existing test
+changed.
 
 ## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
 
