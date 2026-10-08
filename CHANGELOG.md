@@ -30,13 +30,14 @@ after an evidence-only commit — so this is a gate fix, not only a display fix.
   `exit_code` (self-attested, attached) or `exit_code: 0` gates exactly as
   before. GLM stays advisory and never changes the verdict.
 
-**Upgrading:** a report written by an earlier version that holds a
-self-attested `pass` with a non-zero `exit_code` — a failed review carried
-across an evidence-only commit — gated green and now fails. That is the fix:
-re-run the reviewer (`attest --<record>-run` or `--<record>-log`). To find
-them before upgrading: `grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json`
-(this also lists failed captures at their own commit, which were already
-rejected).
+**Upgrading:** a codex or mutation record that an earlier version carried
+across an evidence-only commit — self-attested, `pass`, non-zero `exit_code` —
+gated green and now fails the gate. That is the fix: re-run that reviewer and
+re-attest it (`attest --<record> pass|fail --<record>-run "<cmd>"` or
+`--<record>-log <file>`). To find candidates:
+`grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json`. It over-matches:
+it also lists failed captures at their own commit (already rejected) and GLM
+records (advisory — they never change the verdict).
 
 Tests: five new tests (`test_failed_reviewer_capture_records_status_fail`,
 `test_captured_status_follows_exit_code_for_every_record`,
