@@ -2,6 +2,54 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-10-11 — the baseline walk has no cap (PROTOCOL v2.12.4)
+
+Found in the field (astro-lab, 2026-10-11). To find the evidence baseline
+for the floor, the gate validated at most the newest **100** evidence
+commits, within the newest **2000** commits. Astro Lab's only approved L3
+report (the T6 migration) sat behind more than 100 later reports, so the walk
+never reached it and fell back to the repo's first commit. "Changes since the
+baseline" then meant the whole history, migration included, and **every
+`attest` and every `gate` run without `--base` floored at L3**. A docs-only
+PR was refused. Each merged PR adds reports, so once an anchor slid out of the
+window it never came back. A gate run with `--base origin/main` was not
+affected. The cap failed closed, so this was a liveness bug, not a fail-open.
+The same cap also broke a repo with no L3 at all: with more than 100 honest L1
+reports, the oldest one in the window had to cover a 10+-file segment, which
+is L2 by breadth, so the chain never validated.
+
+- **The walk is bounded by history, not by a count.** Both the 100-report cap
+  and the 2000-commit `rev-list` limit are gone.
+- **It stops at an anchor**: the newest L3 report that passes its own
+  evaluation (tests, Codex, guard-break, human approval). L3 covers every
+  floor, and `evaluate()` does not depend on earlier reports, so such a report
+  validates whatever precedes it. The chain from the anchor onward is exactly
+  what replaying every report from the root gives. A test checks this on
+  random histories against a reference full replay.
+- **Fail-closed is unchanged.** Only an L3 report anchors. A lower tier's
+  validity depends on the segment it governs. A report that would not count
+  up close does not count from far away either. With no valid report
+  anywhere, the floor still covers everything from the root, the root's own
+  files included.
+- **Cost.** With an anchor, the walk reads reports back to the anchor and
+  replays only the ones after it. Without an anchor it replays every report
+  in history: one `git diff` per report, the same per-report cost as before
+  but no longer capped.
+
+**Upgrading:** nothing to do. A repo whose floor was stuck at L3 for this
+reason gates at its real tier again. Operators who raised the cap by hand in
+a local copy as a workaround (astro-lab: the builder's `~/bin/coverloop`)
+should replace that copy with this release. No verdict gets weaker: the walk
+accepts exactly the baselines a full replay from the root would accept.
+
+Tests: six new tests in `BaselineWalkHasNoCap`
+(`test_an_L3_anchor_older_than_100_reports_still_bounds_the_floor`,
+`test_an_unapproved_L3_anchor_out_of_reach_still_floors_at_L3`,
+`test_a_valid_report_below_L3_is_not_an_anchor`,
+`test_a_failing_L3_newer_than_the_anchor_is_replayed_not_skipped`,
+`test_without_an_anchor_the_whole_chain_is_replayed`,
+`test_the_anchor_shortcut_matches_the_full_replay`). No existing test changed.
+
 ## 2026-10-08 — a recorded exit code must be a real integer (PROTOCOL v2.12.3)
 
 Found by Codex reviewing v2.12.2 (P2). Report-shape validation checked

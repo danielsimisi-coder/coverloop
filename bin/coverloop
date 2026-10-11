@@ -325,7 +325,7 @@ def _changed_paths_for_gate(root, args):
     return list(tracked) + list(untracked)
 
 
-def _validated_baseline(root, sha, limit=2000):
+def _validated_baseline(root, sha):
     """The newest ancestor of SHA whose evidence chain actually VALIDATES.
 
     Returns (baseline, validated): `validated` is False when the baseline is the
@@ -346,32 +346,53 @@ def _validated_baseline(root, sha, limit=2000):
         no-evidence L3 report on a migration commit advanced the baseline and
         let a later docs commit gate at L0 (probed end-to-end).
 
-    Cost is bounded: at most _BASELINE_WALK_CAP evidence commits are validated
-    (newest-first); anything older folds into the pre-baseline segment, which
-    only ever ENLARGES what the gate classifies.
+    There is no cap. v2.12.3 and earlier validated at most the newest 100
+    evidence commits (of at most 2000 commits); a repo whose only approved L3
+    report sat behind more than 100 later reports fell back to the root, so
+    every gate and attest without --base floored at L3 — a docs-only change
+    was refused, and every merged PR pushed the anchor further out of reach
+    (field: astro-lab, 2026-10-11). The walk is bounded by history instead,
+    and an ANCHOR keeps it short: an L3 report that passes its own evaluation
+    covers every floor, and evaluate() does not depend on what came before it,
+    so it validates whatever precedes it. The chain from the newest such
+    report onward is therefore exactly what replaying every report from the
+    root would give, and nothing older needs reading. Without an anchor, the
+    whole history is replayed from the root.
     """
     shallow = git(["rev-parse", "--is-shallow-repository"], cwd=root)
     if shallow is None or shallow.strip() == "true":
         return None, False
-    out = git(["rev-list", f"--max-count={limit}", sha], cwd=root)
+    out = git(["rev-list", sha], cwd=root)
     if not out:
         return None, False
     commits = out.split()
-    attested = []
-    for c in commits[1:]:
-        if os.path.exists(report_path(root, c)):
-            rep, _why = load_report(root, c)
-            if rep is not None and rep.get("risk_tier") in TIERS:
-                attested.append((c, rep))
-        if len(attested) >= _BASELINE_WALK_CAP:
-            break
-    root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
-    if not root_out:
-        return None, False
-    baseline = root_out.split()[-1]
-    validated = False
     cfg, _cfg_err = load_json(os.path.join(root, CONFIG_FILE))
     cfg_cmd = (cfg or {}).get("test_command")
+    attested = []
+    anchor = None
+    for c in commits[1:]:
+        if not os.path.exists(report_path(root, c)):
+            continue
+        rep, _why = load_report(root, c)
+        if rep is None or rep.get("risk_tier") not in TIERS:
+            continue
+        # Only the TOP tier anchors: a lower tier's validity depends on the
+        # segment it governs, which depends on the baseline before it.
+        if rep["risk_tier"] == TIERS[-1]:
+            ok, _checks = evaluate(rep, rep["risk_tier"], None, root=root,
+                                   test_command=cfg_cmd)
+            if ok:
+                anchor = c
+                break
+        attested.append((c, rep))
+    if anchor is not None:
+        baseline, validated = anchor, True
+    else:
+        root_out = git(["rev-list", "--max-parents=0", sha], cwd=root)
+        if not root_out:
+            return None, False
+        baseline = root_out.split()[-1]
+        validated = False
     for c, rep in reversed(attested):
         if c == baseline and validated:
             continue
@@ -397,8 +418,6 @@ def _validated_baseline(root, sha, limit=2000):
         validated = True
     return baseline, validated
 
-
-_BASELINE_WALK_CAP = 100
 
 
 def _gate_floor_paths(root, args, report, sha):

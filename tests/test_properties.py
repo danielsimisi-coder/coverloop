@@ -1869,6 +1869,221 @@ class NinthRoundRegressions(unittest.TestCase):
         self.assertIn("is_report_artifact(path)", src)
 
 
+class BaselineWalkHasNoCap(unittest.TestCase):
+    """v2.12.4 (field, astro-lab 2026-10-11): the baseline walk validated at
+    most the newest 100 evidence commits. A repo whose only approved L3 report
+    sat behind more than 100 later reports fell back to the root, so the
+    floor re-covered the whole history, migration included, and every gate
+    and attest without --base floored at L3 — a docs-only change was refused.
+    Each merged PR pushed the anchor further out of the window."""
+
+    AFTER_ANCHOR = 120  # more than the old 100-report window
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load_coverloop()
+
+    def _git(self, d, *a):
+        return subprocess.run(("git",) + a, cwd=d, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def _cl(self, d, *a):
+        return subprocess.run([CLI] + list(a), cwd=d, capture_output=True, text=True)
+
+    def _commit(self, d, rel, text, msg):
+        path = os.path.join(d, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(text)
+        self._git(d, "add", "-A")
+        self._git(d, "commit", "-qm", msg)
+        return self._git(d, "rev-parse", "HEAD")
+
+    def _report(self, d, sha, tier, **records):
+        """A report the gate would accept on its own evidence. Written by hand
+        because 120 real `attest` runs would take minutes; the shape is what
+        `attest` writes (self-attested records)."""
+        rep = {"schema": self.mod.SCHEMA, "commit": sha, "risk_tier": tier,
+               "tests": {"command": "true", "status": "pass"}}
+        rep.update(records)
+        with open(self.mod.report_path(d, sha), "w") as fh:
+            json.dump(rep, fh)
+
+    L3_EVIDENCE = dict(
+        codex={"status": "pass", "findings_open": 0, "source": "self-attested"},
+        mutation={"status": "pass", "findings_open": 0, "source": "self-attested",
+                  "guards_broken": 1},
+        human_gate={"required": True, "approved": True, "approver": "daniel"})
+
+    def _repo(self, d):
+        self._git(d, "init", "-q", "-b", "main", ".")
+        self._git(d, "config", "user.email", "t@example.com")
+        self._git(d, "config", "user.name", "t")
+        root = self._commit(d, "README.md", "x\n", "init")
+        r = self._cl(d, "init", "--test-command", "true")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._git(d, "add", "-A")
+        self._git(d, "commit", "-qm", "scaffolding")
+        return root
+
+    def _docs_reports(self, d, n, tier="L1"):
+        """n docs commits, each with an honest report committed alongside the
+        next one. Returns the newest attested commit."""
+        last = None
+        for i in range(n):
+            last = self._commit(d, "NOTES.md", f"note {i}\n", f"docs {i}")
+            self._report(d, last, tier)
+        return last
+
+    def _head_floor(self, d):
+        r = self._cl(d, "gate", "--json", "--min-tier", "L0")
+        out = json.loads(r.stdout)
+        return r.returncode, out
+
+    def test_an_L3_anchor_older_than_100_reports_still_bounds_the_floor(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            mig = self._commit(d, "migrations/1.sql", "drop table x;\n", "T6: migration")
+            r = self._cl(d, "attest", "--tier", "L3", "--tests")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for args in (["--codex", "pass"], ["--mutation", "pass", "--mutation-guards", "1"],
+                         ["--approve", "--approver", "daniel"]):
+                r = self._cl(d, "attest", *args)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            last = self._docs_reports(d, self.AFTER_ANCHOR)
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+
+            baseline, validated = self.mod._validated_baseline(d, head)
+            self.assertTrue(validated, "no baseline validated: the walk fell back to the root")
+            self.assertEqual(baseline, last)
+            self.assertNotIn("migrations/1.sql",
+                             self._git(d, "diff", "--name-only", f"{baseline}..{head}"))
+            code, out = self._head_floor(d)
+            self.assertEqual(out["tier"], "L0",
+                             f"a docs-only change floored at {out['tier']}: the migration on "
+                             f"{mig[:7]} was re-classified because its anchor was out of reach")
+            self.assertEqual(code, 0, out)
+
+    def test_an_unapproved_L3_anchor_out_of_reach_still_floors_at_L3(self):
+        """Fail closed: walking further must not make a report count that would
+        not count up close. The anchor here lacks the human approval."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            mig = self._commit(d, "migrations/1.sql", "drop table x;\n", "migration")
+            ev = dict(self.L3_EVIDENCE)
+            ev["human_gate"] = {"required": True, "approved": False}
+            self._report(d, mig, "L3", **ev)
+            self._docs_reports(d, self.AFTER_ANCHOR)
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            self.assertEqual(self.mod._validated_baseline(d, head), (root, False))
+            code, out = self._head_floor(d)
+            self.assertEqual(out["tier"], "L3")
+            self.assertNotEqual(code, 0)
+
+    def test_a_valid_report_below_L3_is_not_an_anchor(self):
+        """Only an L3 report validates whatever came before it. An L1 report with
+        passing tests, sitting after an unreviewed migration, under-declares its
+        segment — stopping the walk at it would hide the migration."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            self._commit(d, "migrations/1.sql", "drop table x;\n", "unreviewed migration")
+            self._docs_reports(d, 3)
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            self.assertEqual(self.mod._validated_baseline(d, head), (root, False))
+            code, out = self._head_floor(d)
+            self.assertEqual(out["tier"], "L3")
+            self.assertNotEqual(code, 0)
+
+    def test_a_failing_L3_newer_than_the_anchor_is_replayed_not_skipped(self):
+        """The walk passes over an L3 that fails its own evaluation and anchors
+        on an older valid one; the failing report must stay in the replay,
+        where it does not advance the baseline, and the floor must still see
+        the migration it carried."""
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            mig1 = self._commit(d, "migrations/1.sql", "drop table x;\n", "reviewed migration")
+            self._report(d, mig1, "L3", **self.L3_EVIDENCE)
+            ev = dict(self.L3_EVIDENCE)
+            ev["human_gate"] = {"required": True, "approved": False}
+            mig2 = self._commit(d, "migrations/2.sql", "drop table y;\n", "unapproved migration")
+            self._report(d, mig2, "L3", **ev)
+            self._commit(d, "NOTES.md", "evidence\n", "evidence")
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            self.assertEqual(self.mod._validated_baseline(d, head), (mig1, True))
+            code, out = self._head_floor(d)
+            self.assertEqual(out["tier"], "L3", "the unapproved migration fell out of the floor")
+            self.assertNotEqual(code, 0)
+
+    def test_without_an_anchor_the_whole_chain_is_replayed(self):
+        # No L3 anywhere: the honest L1 chain runs from the root through more
+        # than 100 reports, and must still reach the newest one.
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            last = self._docs_reports(d, self.AFTER_ANCHOR)
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            self.assertEqual(self.mod._validated_baseline(d, head), (last, True))
+            code, out = self._head_floor(d)
+            self.assertEqual((code, out["tier"]), (0, "L0"), out)
+
+    def _reference_chain(self, d, sha):
+        """The definition the walk must match: replay EVERY report from the
+        root, oldest first, with no cap and no anchor short-cut."""
+        m = self.mod
+        commits = self._git(d, "rev-list", sha).split()
+        attested = []
+        for c in commits[1:]:
+            if os.path.exists(m.report_path(d, c)):
+                rep, _ = m.load_report(d, c)
+                if rep is not None and rep.get("risk_tier") in m.TIERS:
+                    attested.append((c, rep))
+        baseline = self._git(d, "rev-list", "--max-parents=0", sha).split()[-1]
+        validated = False
+        cfg, _ = m.load_json(os.path.join(d, m.CONFIG_FILE))
+        cmd = (cfg or {}).get("test_command")
+        for c, rep in reversed(attested):
+            if c == baseline and validated:
+                continue
+            seg = m._git_paths(["diff", "--name-only", f"{baseline}..{c}"], d)
+            if not validated:
+                seg = list(seg) + m._git_paths(
+                    ["show", "--name-only", "--pretty=format:", baseline], d)
+            floor, _ = m.classify_paths(seg, m.BREADTH_L2_FILES)
+            if m.tier_max(rep["risk_tier"], floor) != rep["risk_tier"]:
+                continue
+            if not m.evaluate(rep, rep["risk_tier"], None, root=d, test_command=cmd)[0]:
+                continue
+            baseline, validated = c, True
+        return baseline, validated
+
+    def test_the_anchor_shortcut_matches_the_full_replay(self):
+        """Stopping at the newest valid L3 report is an optimisation, not a new
+        rule: on random histories it must give exactly what replaying every
+        report from the root gives."""
+        rng = random.Random(20261011)
+        files = ["NOTES.md", "src/app.py", "migrations/{}.sql", "api/routes.ts"]
+        for trial in range(12):
+            with self.subTest(trial=trial), tempfile.TemporaryDirectory() as d:
+                self._repo(d)
+                for i in range(rng.randint(6, 14)):
+                    rel = rng.choice(files).format(i)
+                    sha = self._commit(d, rel, f"{i}\n", f"c{i}")
+                    roll = rng.random()
+                    if roll < 0.25:
+                        continue
+                    tier = rng.choice(self.mod.TIERS)
+                    ev = {}
+                    if tier in ("L2", "L3"):
+                        ev["codex"] = self.L3_EVIDENCE["codex"]
+                    if tier == "L3":
+                        ev["mutation"] = self.L3_EVIDENCE["mutation"]
+                        ev["human_gate"] = (self.L3_EVIDENCE["human_gate"] if roll > 0.45
+                                            else {"required": True, "approved": False})
+                    self._report(d, sha, tier, **ev)
+                head = self._commit(d, "docs/guide.md", "head\n", "head")
+                self.assertEqual(self.mod._validated_baseline(d, head),
+                                 self._reference_chain(d, head))
+
+
 class SuiteCollectsItself(unittest.TestCase):
     """The entry point is load-bearing, not decorative.
 
