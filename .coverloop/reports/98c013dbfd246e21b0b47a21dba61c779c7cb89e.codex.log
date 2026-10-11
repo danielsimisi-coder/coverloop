@@ -1,0 +1,37 @@
+Codex (gpt-5.6-sol, model_reasoning_effort=xhigh, --sandbox read-only, fresh session each round) reviewing v2.12.4 on branch v2.12.4-baseline-walk.
+
+=================== ROUND 1 ===================
+VERDICT: FAIL
+
+| Severity P0/P1/P2 | file:line | Finding | Concrete failing scenario |
+|---|---|---|---|
+| P1 | `bin/coverloop:388` | The shortcut marks the anchor validated without performing the historical Git reads required by the reference replay. This disproves the claimed exact equivalence and weakens fail-closed handling. | Reproduced in a non-shallow repo with a missing pre-anchor root tree: `rev-list` and `diff anchor..HEAD` succeed, while `diff root..anchor` fails. The shortcut returns `(anchor, True)`; the full replay returns `(None, False)`. Gate/attest can therefore exclude unreadable history instead of refusing. |
+| P2 | `bin/coverloop:382` | Anchor evaluation hardcodes the default human requirement and cannot honor `--human-gate-scope irreversible`. | Reproduced: an L3 `workers/job.py` report without human approval passes the scoped gate, but cannot become an anchor. A later docs-only commit falls back to the root and is floored at L3 again. |
+| P2 | `tests/test_properties.py:2032` | `_reference_chain` does not match the old algorithm minus caps: it omits the shallow-repository guard and the `None` checks for failed `diff`/`show`. The randomized test also creates only linear, successful histories—no merges, date-order variations, shallow clones, or Git failures. | In the missing-tree scenario above, the real reference behavior is `(None, False)`, while this test oracle crashes when treating `None` as a list. A shallow clone is likewise treated as having a genuine root rather than failing closed. |
+| P2 | `bin/coverloop:365` | The anchor does not bound the commit walk: `git rev-list SHA` completes and buffers the entire history before Python can stop at an anchor. | A repository whose full `rev-list` exceeds the helper’s 30-second timeout cannot gate or attest even with a valid anchor one commit back. This also overstates the cost claim in `CHANGELOG.md:34`. |
+
+Verification: all 6 new focused tests and the full 263-test suite passed; the adversarial failure scenarios above were reproduced separately.
+
+The full suite left one untracked test artifact, `.coverloop/reports/d5ecc3cbf2a1aece1206e4a37baacd67ad09a2fe.json`. No tracked files changed. Cleanup was not authorized under the “do not modify files” constraint, so it remains present.
+
+
+
+=================== ROUND 2 ===================
+VERDICT: PASS
+
+| severity P0/P1/P2 | file:line | finding | concrete failing scenario |
+|---|---|---|---|
+| P2 | `bin/coverloop:361` | The claim that pre-anchor unreadable objects “never” made v2.12.3’s floor unknowable is too broad; `CHANGELOG.md:31` similarly says fail-closed behavior is unchanged. The safety disposition itself is sound, but this historical rationale should be narrowed. | With a valid L3 anchor and docs-only HEAD, delete the root tree object. v2.12.3 starts from the root and refuses when `diff root..report` fails; v2.12.4 stops at the anchor and permits the documented L0 PASS. |
+
+
+
+=================== ROUND 3 ===================
+VERDICT: PASS
+
+| Severity | file:line | finding | scenario |
+|---|---|---|---|
+| — | — | No findings | — |
+
+`98c013d` changes only the `_validated_baseline` docstring and CHANGELOG prose. The corrected wording matches both walks, and no other v2.12.4 CHANGELOG claim is contradicted by the code. No files were modified.
+
+
