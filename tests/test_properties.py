@@ -2026,17 +2026,26 @@ class BaselineWalkHasNoCap(unittest.TestCase):
             self.assertEqual((code, out["tier"]), (0, "L0"), out)
 
     def _reference_chain(self, d, sha):
-        """The definition the walk must match: replay EVERY report from the
-        root, oldest first, with no cap and no anchor short-cut."""
+        """The definition the walk must match: the v2.12.3 walk with its two
+        caps removed and nothing else changed — replay EVERY report from the
+        root, oldest first, failing closed wherever git cannot answer."""
         m = self.mod
-        commits = self._git(d, "rev-list", sha).split()
+        shallow = m.git(["rev-parse", "--is-shallow-repository"], cwd=d)
+        if shallow is None or shallow.strip() == "true":
+            return None, False
+        out = m.git(["rev-list", sha], cwd=d)
+        if not out:
+            return None, False
         attested = []
-        for c in commits[1:]:
+        for c in out.split()[1:]:
             if os.path.exists(m.report_path(d, c)):
                 rep, _ = m.load_report(d, c)
                 if rep is not None and rep.get("risk_tier") in m.TIERS:
                     attested.append((c, rep))
-        baseline = self._git(d, "rev-list", "--max-parents=0", sha).split()[-1]
+        root_out = m.git(["rev-list", "--max-parents=0", sha], cwd=d)
+        if not root_out:
+            return None, False
+        baseline = root_out.split()[-1]
         validated = False
         cfg, _ = m.load_json(os.path.join(d, m.CONFIG_FILE))
         cmd = (cfg or {}).get("test_command")
@@ -2044,9 +2053,13 @@ class BaselineWalkHasNoCap(unittest.TestCase):
             if c == baseline and validated:
                 continue
             seg = m._git_paths(["diff", "--name-only", f"{baseline}..{c}"], d)
+            if seg is None:
+                return None, False
             if not validated:
-                seg = list(seg) + m._git_paths(
-                    ["show", "--name-only", "--pretty=format:", baseline], d)
+                own = m._git_paths(["show", "--name-only", "--pretty=format:", baseline], d)
+                if own is None:
+                    return None, False
+                seg = list(seg) + own
             floor, _ = m.classify_paths(seg, m.BREADTH_L2_FILES)
             if m.tier_max(rep["risk_tier"], floor) != rep["risk_tier"]:
                 continue
@@ -2055,34 +2068,84 @@ class BaselineWalkHasNoCap(unittest.TestCase):
             baseline, validated = c, True
         return baseline, validated
 
+    def _random_report(self, rng, d, sha):
+        roll = rng.random()
+        if roll < 0.25:
+            return
+        tier = rng.choice(self.mod.TIERS)
+        ev = {}
+        if tier in ("L2", "L3"):
+            ev["codex"] = self.L3_EVIDENCE["codex"]
+        if tier == "L3":
+            ev["mutation"] = self.L3_EVIDENCE["mutation"]
+            ev["human_gate"] = (self.L3_EVIDENCE["human_gate"] if roll > 0.45
+                                else {"required": True, "approved": False})
+        self._report(d, sha, tier, **ev)
+
     def test_the_anchor_shortcut_matches_the_full_replay(self):
         """Stopping at the newest valid L3 report is an optimisation, not a new
-        rule: on random histories it must give exactly what replaying every
-        report from the root gives."""
+        rule: on random histories — some with a merged side branch whose commit
+        dates are skewed, so rev-list's date order is not the topology — it
+        must give exactly what replaying every report from the root gives."""
         rng = random.Random(20261011)
         files = ["NOTES.md", "src/app.py", "migrations/{}.sql", "api/routes.ts"]
+        side_files = ["side/{}.md", "src/side{}.py", "migrations/side{}.sql"]
         for trial in range(12):
             with self.subTest(trial=trial), tempfile.TemporaryDirectory() as d:
                 self._repo(d)
+                main_shas = []
                 for i in range(rng.randint(6, 14)):
-                    rel = rng.choice(files).format(i)
-                    sha = self._commit(d, rel, f"{i}\n", f"c{i}")
-                    roll = rng.random()
-                    if roll < 0.25:
-                        continue
-                    tier = rng.choice(self.mod.TIERS)
-                    ev = {}
-                    if tier in ("L2", "L3"):
-                        ev["codex"] = self.L3_EVIDENCE["codex"]
-                    if tier == "L3":
-                        ev["mutation"] = self.L3_EVIDENCE["mutation"]
-                        ev["human_gate"] = (self.L3_EVIDENCE["human_gate"] if roll > 0.45
-                                            else {"required": True, "approved": False})
-                    self._report(d, sha, tier, **ev)
+                    sha = self._commit(d, rng.choice(files).format(i), f"{i}\n", f"c{i}")
+                    main_shas.append(sha)
+                    self._random_report(rng, d, sha)
+                if trial % 2:
+                    fork = rng.choice(main_shas[:-1])
+                    self._git(d, "add", "-A")
+                    self._git(d, "commit", "-qm", "evidence", "--allow-empty")
+                    self._git(d, "checkout", "-q", "-b", "side", fork)
+                    skew = rng.choice(["2001-01-01T00:00:00", "2099-01-01T00:00:00"])
+                    env = dict(os.environ, GIT_COMMITTER_DATE=skew, GIT_AUTHOR_DATE=skew)
+                    for j in range(rng.randint(1, 3)):
+                        rel = rng.choice(side_files).format(j)
+                        os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
+                        with open(os.path.join(d, rel), "a") as fh:
+                            fh.write(f"{j}\n")
+                        subprocess.run(["git", "add", "-A"], cwd=d, check=True, env=env)
+                        subprocess.run(["git", "commit", "-qm", f"side{j}"], cwd=d,
+                                       check=True, env=env)
+                        sha = self._git(d, "rev-parse", "HEAD")
+                        self._random_report(rng, d, sha)
+                    self._git(d, "add", "-A")
+                    self._git(d, "commit", "-qm", "side evidence", "--allow-empty")
+                    self._git(d, "checkout", "-q", "main")
+                    self._git(d, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+                    merge = self._git(d, "rev-parse", "HEAD")
+                    self._random_report(rng, d, merge)
                 head = self._commit(d, "docs/guide.md", "head\n", "head")
                 self.assertEqual(self.mod._validated_baseline(d, head),
                                  self._reference_chain(d, head))
 
+    def test_history_before_the_anchor_is_not_read(self):
+        """A pinned decision (Codex v2.12.4 round 1). The anchor stands for
+        everything before it, so the walk does not read that history — and a
+        pre-anchor object git cannot read no longer makes the floor unknowable.
+        The full replay does read it and refuses. v2.12.3 never read history
+        beyond its 100-report window either: those reads were never an
+        integrity check. What the floor depends on, anchor..HEAD, must still be
+        readable — that path is unchanged."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            mig = self._commit(d, "migrations/1.sql", "drop table x;\n", "migration")
+            self._report(d, mig, "L3", **self.L3_EVIDENCE)
+            self._commit(d, "NOTES.md", "evidence\n", "evidence")
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            tree = self._git(d, "rev-parse", root + "^{tree}")
+            os.remove(os.path.join(d, ".git", "objects", tree[:2], tree[2:]))
+            self.assertIsNone(self.mod._git_paths(["diff", "--name-only", f"{root}..{mig}"], d))
+            self.assertEqual(self._reference_chain(d, head), (None, False))
+            self.assertEqual(self.mod._validated_baseline(d, head), (mig, True))
+            code, out = self._head_floor(d)
+            self.assertEqual((code, out["tier"]), (0, "L0"), out)
 
 class SuiteCollectsItself(unittest.TestCase):
     """The entry point is load-bearing, not decorative.

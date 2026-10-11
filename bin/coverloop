@@ -354,10 +354,14 @@ def _validated_baseline(root, sha):
     (field: astro-lab, 2026-10-11). The walk is bounded by history instead,
     and an ANCHOR keeps it short: an L3 report that passes its own evaluation
     covers every floor, and evaluate() does not depend on what came before it,
-    so it validates whatever precedes it. The chain from the newest such
-    report onward is therefore exactly what replaying every report from the
-    root would give, and nothing older needs reading. Without an anchor, the
-    whole history is replayed from the root.
+    so it validates whatever precedes it. On any history git can read, the
+    chain from the newest such report onward is therefore exactly what
+    replaying every report from the root would give, and nothing older is
+    read — so an unreadable object before the anchor no longer makes the
+    floor unknowable (it never did beyond v2.12.3's window either; anchor..HEAD
+    must still be readable). Without an anchor, the whole history is replayed
+    from the root. Cost: one `git diff` per report newer than the anchor (all
+    reports without one); `rev-list` still lists the whole history first.
     """
     shallow = git(["rev-parse", "--is-shallow-repository"], cwd=root)
     if shallow is None or shallow.strip() == "true":

@@ -23,32 +23,56 @@ is L2 by breadth, so the chain never validated.
 - **It stops at an anchor**: the newest L3 report that passes its own
   evaluation (tests, Codex, guard-break, human approval). L3 covers every
   floor, and `evaluate()` does not depend on earlier reports, so such a report
-  validates whatever precedes it. The chain from the anchor onward is exactly
-  what replaying every report from the root gives. A test checks this on
-  random histories against a reference full replay.
+  validates whatever precedes it. On any history git can read, the chain from
+  the anchor onward is exactly what replaying every report from the root
+  gives. A test checks this on random histories, including merged side
+  branches with skewed commit dates, against a reference: the v2.12.3 walk
+  with its caps removed.
 - **Fail-closed is unchanged.** Only an L3 report anchors. A lower tier's
   validity depends on the segment it governs. A report that would not count
   up close does not count from far away either. With no valid report
   anywhere, the floor still covers everything from the root, the root's own
   files included.
-- **Cost.** With an anchor, the walk reads reports back to the anchor and
-  replays only the ones after it. Without an anchor it replays every report
-  in history: one `git diff` per report, the same per-report cost as before
-  but no longer capped.
+- **One deliberate difference from a full replay:** history *before* the
+  anchor is not read, so a git object there that cannot be read no longer
+  makes the floor unknowable. The full replay would refuse. v2.12.3 did not
+  read history beyond its 100-report window either, so those reads were
+  never an integrity check. What the floor depends on, `anchor..HEAD`, must
+  still be readable, exactly as before. A test pins this
+  (`test_history_before_the_anchor_is_not_read`).
+- **Cost.** One `git diff` per report newer than the anchor, or per report in
+  history when there is no anchor. That is the same per-report cost as
+  before, but no longer capped at 100. Measured on a Mac: about 33–53 ms per
+  report, so 1000 reports with no L3 anchor take about 50 s. A repo replays
+  only the reports since its last approved L3, so this matters only in long
+  runs without one. `git rev-list` still lists the whole history before the
+  walk starts. A history too large to list inside git's 30 s timeout makes
+  the floor unknowable and the gate refuses, which is fail-closed.
+
+**Known limits, unchanged by this release:** the walk evaluates historical
+reports with the default human gate, so an L3 report that passed under
+`--human-gate-scope irreversible` without approval never anchors or advances
+the baseline. The walk also does not apply `--require-transcript` /
+`--require-executed` to historical reports. Both pre-date v2.12.4.
 
 **Upgrading:** nothing to do. A repo whose floor was stuck at L3 for this
 reason gates at its real tier again. Operators who raised the cap by hand in
 a local copy as a workaround (astro-lab: the builder's `~/bin/coverloop`)
-should replace that copy with this release. No verdict gets weaker: the walk
-accepts exactly the baselines a full replay from the root would accept.
+should replace that copy with this release. The root-owned merge-gate copy
+(`/usr/local/lib/astro-merge/coverloop`) still has the cap and needs the same
+upgrade. Verdicts change only where the old walk could not reach a valid
+anchor. On readable history, the walk accepts only baselines that a full
+replay from the root would accept.
 
-Tests: six new tests in `BaselineWalkHasNoCap`
+Tests: seven new tests in `BaselineWalkHasNoCap`
 (`test_an_L3_anchor_older_than_100_reports_still_bounds_the_floor`,
 `test_an_unapproved_L3_anchor_out_of_reach_still_floors_at_L3`,
 `test_a_valid_report_below_L3_is_not_an_anchor`,
 `test_a_failing_L3_newer_than_the_anchor_is_replayed_not_skipped`,
 `test_without_an_anchor_the_whole_chain_is_replayed`,
-`test_the_anchor_shortcut_matches_the_full_replay`). No existing test changed.
+`test_the_anchor_shortcut_matches_the_full_replay`,
+`test_history_before_the_anchor_is_not_read`). The first and fifth fail on
+v2.12.3. No existing test changed.
 
 ## 2026-10-08 — a recorded exit code must be a real integer (PROTOCOL v2.12.3)
 
