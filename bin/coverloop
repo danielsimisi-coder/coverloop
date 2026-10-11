@@ -358,8 +358,10 @@ def _validated_baseline(root, sha):
     chain from the newest such report onward is therefore exactly what
     replaying every report from the root would give, and nothing older is
     read — so an unreadable object before the anchor no longer makes the
-    floor unknowable (it never did beyond v2.12.3's window either; anchor..HEAD
-    must still be readable). Without an anchor, the whole history is replayed
+    floor unknowable. (v2.12.3 refused in that case when it read the object,
+    i.e. when it was within its 100-report window; it never read beyond it.
+    anchor..HEAD, which the floor depends on, must still be readable.)
+    Without an anchor, the whole history is replayed
     from the root. Cost: one `git diff` per report newer than the anchor (all
     reports without one); `rev-list` still lists the whole history first.
     """

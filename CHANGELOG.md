@@ -28,17 +28,20 @@ is L2 by breadth, so the chain never validated.
   gives. A test checks this on random histories, including merged side
   branches with skewed commit dates, against a reference: the v2.12.3 walk
   with its caps removed.
-- **Fail-closed is unchanged.** Only an L3 report anchors. A lower tier's
+- **Fail-closed is unchanged for everything the floor depends on** (one
+  deliberate exception for history before the anchor is described next).
+  Only an L3 report anchors. A lower tier's
   validity depends on the segment it governs. A report that would not count
   up close does not count from far away either. With no valid report
   anywhere, the floor still covers everything from the root, the root's own
   files included.
 - **One deliberate difference from a full replay:** history *before* the
   anchor is not read, so a git object there that cannot be read no longer
-  makes the floor unknowable. The full replay would refuse. v2.12.3 did not
-  read history beyond its 100-report window either, so those reads were
-  never an integrity check. What the floor depends on, `anchor..HEAD`, must
-  still be readable, exactly as before. A test pins this
+  makes the floor unknowable. The full replay would refuse, and so did
+  v2.12.3 when such an object fell within its 100-report window. It never
+  read history beyond that window, so those reads were never a whole-history
+  integrity check. What the floor depends on, `anchor..HEAD`, must still be
+  readable, exactly as before. A test pins this
   (`test_history_before_the_anchor_is_not_read`).
 - **Cost.** One `git diff` per report newer than the anchor, or per report in
   history when there is no anchor. That is the same per-report cost as
