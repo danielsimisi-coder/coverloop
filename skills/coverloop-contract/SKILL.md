@@ -32,12 +32,12 @@ You may **raise** a tier. **You may never lower a deterministic floor** — not 
 
 ## 2. What each tier must earn
 
-| | Build | Tests (the deciding vote) | Independent diff gate | GLM red-team | Human gate |
+| | Build | Tests (the deciding vote) | Independent diff gate | Plan review / guard-break | Human gate |
 |---|---|---|---|---|---|
 | **L0** | direct | quick check | – | – | – |
 | **L1** | focused | relevant tests + typecheck + lint + build | if behaviour changed | – | – |
 | **L2** | plan first | + acceptance tests | **required** | if subtle or the gate flags | if launch-critical |
-| **L3** | design first | full suite + the right *kind* of test | **required** (before *and* after fixes) | **required** | **required** before merge/apply/deploy |
+| **L3** | design first | full suite + the right *kind* of test | **required**, after tests | **plan review before code; guard-break required** | **required** before merge/apply/deploy |
 
 **Execution is the primary correctness gate. Model review is secondary.** A reviewer's "looks good" never outranks a failing test.
 
@@ -46,22 +46,30 @@ You may **raise** a tier. **You may never lower a deterministic floor** — not 
 The reviewer sees the change as a **cold artifact** — a diff/files packet in a **fresh** session — never "review what you just wrote" inside the builder's own conversation. Fresh context removes most self-review bias; a **different model lineage** adds a second, smaller layer.
 
 - **Diff gate:** the Codex CLI in a fresh session (`codex exec -m gpt-5.6-sol --sandbox read-only`), with reasoning effort set explicitly — high for L2, xhigh for L3. It defaults to low on its own; a lazy judge is worse than none.
-- **Red-team / consistency audit:** `glm-redteam` / `glm-audit` (full ZDR).
+- **Advisory plan review / consistency audit:** `glm-redteam` / `glm-audit` (ZDR route; currently Kimi K3 behind the glm-* names; verify availability).
 - Demand **file:line** evidence. A bare verdict is noise.
 
-**Privacy differs by reviewer, and it matters:** GLM is the only reviewer here on a strict zero-data-retention endpoint. M3 routes under `data_collection: deny` — a weaker promise — which is why it is optional and L3-only. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter.
+**Privacy differs by reviewer, and it matters:** The glm-* helper requires a strict ZDR route; availability must be verified before use. M3 routes under `data_collection: deny` — a weaker promise — which is why it is optional and L3-only. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter.
 
 ## 4. Record evidence, then let the gate decide
 
 ```bash
 coverloop attest --tier L2 --tests            # run + record the tests
-coverloop attest --codex-log review.txt       # attach the review you already ran
-coverloop gate --min-tier "$(coverloop classify --quiet)"
+coverloop attest --codex pass --codex-log review.txt       # attach the review you already ran
+coverloop gate --require-transcript --min-tier "$(coverloop classify --quiet)"
 ```
 
 - Evidence is bound to the **commit**. Any code change after attesting invalidates it — **re-attest at HEAD**, never push stale evidence.
 - Attach the real transcript (`--codex-log` / `--glm-log`). A bare self-attested verdict is the weak path and the gate labels it as such.
 - **L3 `--approve` only when the operator named THIS action.** A generic "go ahead" is not an approval — ask for the named gate.
+
+At L3, break each relevant safety guard in an isolated copy, prove a test catches
+it, then restore it. Record the real transcript with `attest --mutation pass
+--mutation-guards N --mutation-log guard-break.txt` (N >= 1; surviving breaks fail).
+GLM/Kimi output on completed code is advisory; it does not replace this evidence.
+Named human approval remains required before merge/apply/deploy. The v1 approval
+field records a claim, not cryptographic identity; see docs/REPORT_V2.md for the
+separate external-authority verifier.
 
 ## 5. Stop conditions
 

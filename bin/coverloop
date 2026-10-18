@@ -38,6 +38,7 @@ Exit codes: 0 = all required gates pass; 1 = gate failure (missing/failed
 evidence); 2 = usage or environment error.
 """
 import argparse
+import stat
 import contextlib
 import datetime
 import hashlib
@@ -653,6 +654,17 @@ def load_json(path):
 def cmd_init(args):
     root = repo_root()
     cfg_path = os.path.join(root, CONFIG_FILE)
+    # Setup is not permission to follow repository-controlled links off-tree.
+    for rel in (CONFIG_DIR, REPORTS_DIR, CONFIG_FILE, os.path.join(CONFIG_DIR, ".gitignore")):
+        path = os.path.join(root, rel)
+        if os.path.realpath(path) != path or os.path.islink(path):
+            fail_usage("refusing symlinked setup destination")
+        if os.path.exists(path):
+            st = os.stat(path)
+            if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)) or (stat.S_ISREG(st.st_mode) and st.st_nlink != 1):
+                fail_usage("refusing non-regular or hardlinked setup destination")
+            if st.st_uid != os.getuid() or st.st_mode & 0o022:
+                fail_usage("refusing unsafe setup permissions")
     os.makedirs(os.path.join(root, REPORTS_DIR), exist_ok=True)
     if os.path.exists(cfg_path):
         print(f"skip {CONFIG_FILE} (exists)")
@@ -662,7 +674,7 @@ def cmd_init(args):
         # that ships inside the PR under review.
         cfg = {
             "schema": "coverloop-config/v1",
-            "test_command": args.test_command or "npx tsc --noEmit",
+            "test_command": args.test_command or "false",
         }
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
@@ -751,6 +763,15 @@ def load_report(root, sha):
             fo = e["findings_open"]
             if isinstance(fo, bool) or not isinstance(fo, int) or fo < 0:
                 return None, f"{path}: {rk}.findings_open must be a non-negative integer"
+        # v2.12.3 (Codex v2.12.2 review P2): exit_code is a subprocess return
+        # code — an int, negative when killed by a signal. Every downstream
+        # check compares it to 0, and in Python False == 0 and 0.0 == 0, so
+        # `exit_code: false` passed --require-executed and `null` read as
+        # absent. A PRESENT exit_code must be a real non-boolean int.
+        if e is not None and "exit_code" in e:
+            ec = e["exit_code"]
+            if isinstance(ec, bool) or not isinstance(ec, int):
+                return None, f"{path}: {rk}.exit_code must be an integer, got {ec!r}"
     m = data.get("mutation")
     if m is not None and "guards_broken" in m:
         gb = m["guards_broken"]
@@ -1231,6 +1252,15 @@ def _cmd_attest_locked(args, root):
         # reads this field, so re-attesting can no longer shrink what it covers.
         report.setdefault("origin_commit", anc_sha)
         report["commit"] = sha
+        # v2.12.2 (Codex r1+r2 P1): a run recorded as FAILED is inherited as a
+        # fail, whatever its source. Before v2.12.2 a failed capture saved the
+        # caller's "pass"; dropped to self-attested below, it read as a pass
+        # (the gate now rejects any non-zero exit_code — this keeps the saved
+        # report from displaying a pass the gate refuses).
+        for rname in EVIDENCE_RECORDS:
+            e = report.get(rname)
+            if e and e.get("exit_code") not in (None, 0):
+                report[rname] = dict(e, status="fail")
         # Re-bind any reviewer transcript to the new commit's filename so the
         # gate's commit+reviewer binding still recognizes it. The transcript is
         # trusted ONLY if it verifies AGAINST THE ANCESTOR first (exact
@@ -1376,8 +1406,13 @@ def _cmd_attest_locked(args, root):
                 entry["status"] = verdict
                 entry["findings_open"] = findings if findings is not None else 0
                 if entry.get("exit_code") != 0:
+                    # v2.12.2: a run that failed is a fail, whatever was claimed.
+                    # Recording the caller's "pass" next to a non-zero exit code
+                    # could mislead readers even when the gate rejects the report.
+                    entry["status"] = "fail"
                     print(f"WARNING: {name} reviewer command exited {entry['exit_code']} — "
-                          f"the capture is an error transcript and the gate will REJECT it. "
+                          f"recorded as status=fail (not your --{name} {verdict}); the "
+                          f"capture is an error transcript and the gate will REJECT it. "
                           f"Fix the command and re-run.", file=sys.stderr)
             elif log_src:
                 # attach_log sets source="attached" + provenance; keep verdict.
@@ -1387,7 +1422,7 @@ def _cmd_attest_locked(args, root):
             if name == "mutation" and args.mutation_guards is not None:
                 entry["guards_broken"] = args.mutation_guards
             report[name] = entry
-            did.append(f"{name}={verdict}[{entry['source']}]")
+            did.append(f"{name}={entry['status']}[{entry['source']}]")
 
     if args.approve:
         if not args.approver or not args.approver.strip():
@@ -1577,6 +1612,15 @@ def reviewer_check(name, entry, mandatory_msg, require_captured, root, commit,
                      f"{name}: claims {entry.get('source')!r} but the transcript is invalid "
                      f"(missing / tampered / wrong commit / failed or inconsistent run) — "
                      f"evidence rejected (re-run attest --{name}-run or --{name}-log)")
+    # v2.12.2 (Codex r2 P1): a recorded non-zero exit_code means the run FAILED,
+    # whatever the source says. Before v2.12.2 a failed capture kept the
+    # caller's "pass"; inherited across an evidence-only commit it became a
+    # self-attested pass this check accepted. A failed run is never evidence.
+    if entry.get("exit_code") not in (None, 0):
+        return check(name, False,
+                     f"{name}: recorded exit_code {entry.get('exit_code')!r} — the run "
+                     f"FAILED and is not evidence (re-run attest --{name}-run "
+                     f"or --{name}-log) [{source_tag(entry)}]")
     ok = entry.get("status") == "pass" and entry.get("findings_open") == 0
     guards = ""
     if require_guards:
@@ -1845,32 +1889,35 @@ def cmd_doctor(args):
          claude or "not on PATH (fine if you drive coverloop yourself)")
 
     # --- the one credential the review loop actually needs ---------------
-    key_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    key_file = os.path.expanduser("~/.config/openrouter/api_key")
-    plugin_key = os.environ.get("CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
-    have_file = False
-    if os.path.isfile(key_file):
-        try:
-            with open(key_file, encoding="utf-8") as _fh:
-                have_file = bool(_fh.read().strip())
-        except OSError:
-            have_file = False
-    if plugin_key:
-        line(ok, "openrouter key", "provided by the plugin (stored in your keychain)")
-    elif key_env:
-        line(ok, "openrouter key", "from $OPENROUTER_API_KEY")
-    elif have_file:
-        mode = oct(os.stat(key_file).st_mode & 0o777)[2:]
-        # A world-readable key on a shared box is a real leak, not a nit.
-        note = key_file + ("" if mode == "600" else
-                           f"   [!] mode {mode} — run: chmod 600 {key_file}")
-        line(ok if mode == "600" else warn, "openrouter key", note)
+    if args.no_credentials:
+        line(warn, "credentials", "not inspected (--no-credentials); provider readiness is unverified")
     else:
-        line(bad, "openrouter key", "MISSING")
-        problems.append(
-            "get a key at https://openrouter.ai/keys, then:\n"
-            "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
-            "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
+        key_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        key_file = os.path.expanduser("~/.config/openrouter/api_key")
+        plugin_key = os.environ.get("CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
+        have_file = False
+        if os.path.isfile(key_file):
+            try:
+                with open(key_file, encoding="utf-8") as _fh:
+                    have_file = bool(_fh.read().strip())
+            except OSError:
+                have_file = False
+        if plugin_key:
+            line(ok, "openrouter key", "provided by the plugin (stored in your keychain)")
+        elif key_env:
+            line(ok, "openrouter key", "from $OPENROUTER_API_KEY")
+        elif have_file:
+            mode = oct(os.stat(key_file).st_mode & 0o777)[2:]
+            # A world-readable key on a shared box is a real leak, not a nit.
+            note = key_file + ("" if mode == "600" else
+                               f"   [!] mode {mode} — run: chmod 600 {key_file}")
+            line(ok if mode == "600" else warn, "openrouter key", note)
+        else:
+            line(bad, "openrouter key", "MISSING")
+            problems.append(
+                "get a key at https://openrouter.ai/keys, then:\n"
+                "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
+                "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
 
     # --- the reviewers ---------------------------------------------------
     here = os.path.dirname(os.path.abspath(__file__))
@@ -2212,11 +2259,12 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
-    pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
+    pi.add_argument("--test-command", help="command that must pass (default: false; configure an installed test runner explicitly)")
     pi.set_defaults(fn=cmd_init)
 
     pd = sub.add_parser("doctor",
                         help="check the install and say exactly what to fix")
+    pd.add_argument("--no-credentials", action="store_true", help="offline inventory without inspecting environment or key files")
     pd.set_defaults(fn=cmd_doctor)
 
     pc = sub.add_parser("classify",

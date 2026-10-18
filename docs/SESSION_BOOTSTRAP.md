@@ -1,54 +1,73 @@
-# Session Bootstrap — what to install & what to paste into a session
+# Session bootstrap — Coverloop 2.12.4 candidate
 
-How to take a new machine, a project, or a fresh Claude/Codex session and get it **actually running** the v2.3 loop — not just "having the docs nearby." Three layers, in order.
+## Machine
 
-> These are templates + prompts. Applying them to a specific project (editing its `CLAUDE.md`, etc.) is **your call** — nothing here edits a project repo on its own.
+Use macOS or Linux, Python 3.9+, Bash and Git. Claude Code drives the workflow;
+Codex CLI with a working buyer-owned account is needed for L2/L3 independent review.
+OpenRouter is separate and buyer-funded for advisory plan review. No provider usage
+is included in the MIT engine or a commercial onboarding package.
 
-## 1) Machine (once per machine — Mac / each VPS)
-Installs the CLIs, skills, hooks, and **auto-wires the hooks**.
-
-> **On a VPS / remote box, authenticate `gh` FIRST** — as the OS user the agent runs as (e.g. `su - your-vps-user` → `gh auth login` → GitHub.com → HTTPS → "Login with a web browser" → enter the device code). This **private** repo won't clone otherwise, and gh auth is also what lets that box **open its own PRs**. A box's git *deploy key* usually reaches only its one project repo, so it's `gh` auth — not the deploy key — that unblocks the protocol repo. (Credential lands in `~/.config/gh`, chmod 600; "saved in plain text" is normal on a headless box.)
+The public repository can be cloned without signing in. For reproducible installation,
+use an approved full commit SHA, not `main`. Inspect the checkout before execution.
 
 ```bash
-gh repo clone danielsimisi-coder/coverloop   # (or git clone https://… on an already-authed box)
-cd coverloop
-./install.sh                             # <-- RUN THIS YOURSELF (see note below)
-printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
-~/bin/glm-audit --zdr-selftest          # must print OK (full-ZDR)
-# On a VPS where M3 is approved:
-#   touch ~/.config/openrouter/m3_enabled && ~/bin/m3-review --privacy-selftest
+./install.sh                       # offline preview; changes nothing
+./install.sh --apply               # approve listed file copies
+./install.sh --wire-hooks          # preview optional user hook settings
+# After inspecting that plan, run in your terminal:
+./install.sh --apply --wire-hooks
 ```
-> **Run `install.sh` YOURSELF** — in the box's terminal, or with the `!` prefix inside a session (`! ./install.sh`). Do NOT ask the agent to run it: it wires hooks into `~/.claude/settings.json`, and the harness **correctly blocks an agent from modifying its own hook config** (self-modification guard). The right split is: the *agent clones + inspects* `install.sh` and the hook scripts; the *human runs it*.
-> **Linux:** `install.sh` preflights Codex's sandbox (unprivileged user namespaces). If it prints a WARNING, the Codex gate won't run until you apply the one-line **root** fix from [`docs/CODEX_SANDBOX_LINUX.md`](CODEX_SANDBOX_LINUX.md) — do **not** use the `--dangerously-bypass` flag.
 
-## 2) Project (once per repo — creates NEW files only, never edits your CLAUDE.md)
+A changed existing file or file mode needs `--replace-existing`; private backups are
+kept alongside replaced files. Custom `BIN_DIR` / `--bin-dir` is supported inside
+owned, non-symlinked home directories. For other locations, use the inspected source
+checkout directly. No automatic shell-profile changes or system packages are installed.
+Do not bypass a host rule that prevents agents changing their own hook settings.
+
+Run `~/bin/coverloop doctor --no-credentials` first. It inventories local tools and
+reports unavailable reviewers without reading keys or making network calls. The normal
+`doctor` inspects credential availability; `protocol-selftest` can make paid provider
+calls. Authorize those separately. Configure keys privately using your provider's
+supported method; never paste them into chat, commit them, or include them in logs.
+Linux sandbox setup is a separate check; do not disable it or automatically weaken
+system-wide security settings.
+
+## Project
+
+Inspect the actual repository and its test command before trusting it:
+
 ```bash
-cd /path/to/your-project
-/path/to/coverloop/init-project.sh
-```
-`init-project.sh` scaffolds (idempotent, never overwrites): `.claude/loop.conf`, `docs/REVIEW_LEDGER.md`, `docs/RISK_MAP.md`, **`docs/MEMORY.md`** (portable git-tracked memory), and **`docs/OPERATING_CONTRACT.md`**.
-
-Then **you** do the one manual wiring step it deliberately won't do for you: **inline the Operating Contract at the top of the project's `CLAUDE.md`** (copy from `docs/OPERATING_CONTRACT.md`). This is the step that makes the loop load into active context — a `CLAUDE.md` that only points to `docs/`, or whose roster omits GLM/M3, means the protocol never loads. (`init-project.sh` skips writing `docs/OPERATING_CONTRACT.md` if `CLAUDE.md` already carries the contract.)
-
-**Also enable auto-delete of merged branches** (once per repo): `gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true`. Otherwise a lingering merged branch can be re-merged into empty **duplicate PRs** — we hit exactly this (the `#87`/`#88` no-op merges).
-
-## 3) Every session — paste this FIRST to a fresh Claude/Codex session
-```
-Session Start (v2.5 protocol). Before any work, do this and report it:
-1. Run $HOME/bin/protocol-selftest from the project root and report its output (GREEN or the FAIL lines). It verifies versions, hooks, CLIs, contract, memory, ledger, and the test-gate in one shot.
-2. State PROTOCOL_VERSION and the roster (Claude build · Codex diff-gate · Kimi K3 full-ZDR plan review (via glm-* helpers) · M3 data_collection:deny L3-only · the operator gate).
-3. Read docs/MEMORY.md (git-tracked memory) and summarize what's relevant to today's task.
-4. Read docs/REVIEW_LEDGER.md; skip findings already marked rejected.
-5. Restate the Task Card + risk tier (L0–L3) before touching code.
-If the Operating Contract is not present in your loaded CLAUDE.md/AGENTS.md, say so — that's a wiring bug.
+cd /absolute/path/to/project
+/path/to/coverloop/init-project.sh   # generic templates; no automatic trust
+/path/to/coverloop/bin/coverloop init --test-command 'YOUR_REVIEWED_TEST_COMMAND'
 ```
 
-## Quick "is it actually wired?" self-check — paste to verify a running session
-```
-Answer from your LOADED context only (don't open files): (a) what PROTOCOL_VERSION are you on? (b) name the 5 roster members. (c) where is durable memory stored for this project? (d) what is the cheap per-stop test gate? If you can't answer (a) and (b) from loaded context, the protocol isn't wired — stop and flag it.
-```
+Replace the example command with an installed, project-appropriate test runner.
+The default is `false`, so an unconfigured project cannot accidentally pass. Avoid
+package-manager commands that download or install dependencies implicitly.
+Configure `.claude/loop.conf` independently for the cheap Stop-hook check.
+`init-project.sh` preserves existing project files and never imports this repository's
+review history. It may append the required local-counter gitignore entry.
 
-## End of every meaningful task — paste to close the loop
-```
-Run reflect-and-save: did anything durable happen (a correction/preference, a non-obvious infra fact, a decision + why, a recurring workflow)? If yes, append one concise entry to docs/MEMORY.md and commit it with the work. If nothing durable, say "nothing to save" — don't save noise.
-```
+With project-owner permission, inline `docs/OPERATING_CONTRACT.md` in `CLAUDE.md`.
+After inspecting the test command, explicitly run `init-project.sh --trust` to allow
+this project's Stop hook. Hooks provide context and a bounded completion check;
+only `coverloop gate` enforces evidence requirements. Use a required CI check for
+repository enforcement. GitHub branch rules/settings need separate authorization.
+
+## Session and evidence
+
+1. Read the project's contract, risk map and relevant approved memory; do not ingest
+   legacy raw failure logs. Resolve engine path/version and report missing dependencies.
+2. Classify the actual diff, using a trusted base. Raise the tier if semantics warrant it.
+3. Build and test. At L3, run real guard-break experiments before independent diff review.
+4. Obtain genuine Codex review for L2+. An unavailable or failed reviewer cannot pass.
+   Advisory Kimi plan review uses `glm-*`; optional M3 needs its own privacy opt-in.
+5. Record only actual evidence with `attest`. Commit the evidence files, then verify
+   at the final HEAD with `gate --require-transcript` and the derived tier floor.
+6. L3 also requires a named human approval. Never record it without actual permission.
+   Passing the gate does not authorize push, merge, deployment, billing or production work.
+
+Keep durable, approved project lessons in `docs/MEMORY.md`. The new failure hook keeps
+only bounded diagnostic metadata under the current project's hashed namespace. Old
+`reflect-staging.md` files are not read or migrated; the owner can inspect them privately.

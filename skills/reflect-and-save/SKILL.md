@@ -23,6 +23,14 @@ After a meaningful task, reflect and persist what's durable. The model isn't ret
 Trivial edits, pure conversation, or anything already captured.
 
 ## v2.3 additions
-- First check `~/.claude/reflect-staging.md` (auto-captured failures) and curate anything durable from it.
+- With permission to use local diagnostics, inspect only this project's metadata
+  under `~/.claude/coverloop-failures/<project-id>.jsonl` (ID is the first 24 hex
+  characters of SHA-256 of the resolved checkout root). It records time, event,
+  tool, bounded exit code and a fingerprint; retrieve context from the current
+  authorized conversation, never infer a fix from the fingerprint.
+- Legacy `~/.claude/reflect-staging.md` may contain raw sensitive data. Do not load,
+  migrate or send it to a model. Its local review/deletion is the owner's decision.
+- Durable memory belongs in git-tracked `docs/MEMORY.md` (or the project's existing
+  store), only for approved non-sensitive lessons. Do not mix other projects' logs.
 - PROVENANCE GUARD: never paste GLM/M3/Codex text verbatim into memory — rewrite the lesson in your own words, human-confirmed.
 - Prefer rewriting an existing memory/lesson over appending a near-duplicate (avoid bloat).

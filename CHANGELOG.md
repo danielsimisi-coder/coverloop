@@ -1,6 +1,79 @@
 # Protocol changelog
 
+## 2.12.4 — release candidate (not published)
+
+- Failure hook stores bounded per-project metadata only; rejects unsafe log destinations and does not consume legacy raw logs.
+- Installer defaults to a preview. File copies, hook wiring and overwrites each have explicit flags; no credential access or model calls during installation.
+- Project trust is explicit, command defaults fail closed, templates are generic, and setup refuses unsafe filesystem targets.
+- Adds credential-free dependency inventory, privacy/setup regressions and real isolated guard-break experiments. Synchronizes contract, skills and hook guidance with L3 mutation evidence.
+- Preserves the six local fixes since public 2.12.1, including failed-review status inheritance and integer exit-code validation.
+- No release/human approval or hosted CI pass is implied. See tools/release-plan.md.
+
+
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
+
+## 2026-10-08 — a recorded exit code must be a real integer (PROTOCOL v2.12.3)
+
+Found by Codex reviewing v2.12.2 (P2). Report-shape validation checked
+`findings_open` and `guards_broken` but not `exit_code`. Every exit-code check
+compares it to `0`, and in Python `False == 0` and `0.0 == 0`, so a captured
+record with `exit_code: false` passed even `--require-executed`, and `null`
+read as "no exit code". The withheld-placeholder check still stopped this from
+laundering a real failed capture, so it was not a P1.
+
+- **A present `exit_code` on a codex, glm or mutation record must be a
+  non-boolean integer**, or the whole report is rejected as malformed (fail
+  closed, like every other malformed field). `false`, `null`, `0.0` and `"0"`
+  are rejected. Negative integers (a signal-killed run) are well-formed and
+  still fail as a failed run. A record with no `exit_code` (self-attested,
+  attached) and `exit_code: 0` gate exactly as before.
+
+**Upgrading:** nothing to do for reports `coverloop` wrote — `capture_run`
+always records an integer. Only a hand-edited report changes verdict.
+
+## 2026-10-08 — a failed reviewer run is never a pass: saved, inherited or gated (PROTOCOL v2.12.2)
+
+Failed captured runs could leave reports that read
+`status: pass` next to `exit_code: 1`, which misled both the builder and a
+human audit. At their own commit the gate rejected them. This release's own
+Codex review (two rounds) then showed the same records could gate **green**
+after an evidence-only commit — so this is a gate fix, not only a display fix.
+
+- **`attest --<record> pass --<record>-run CMD` saves `status: "fail"` when
+  CMD exits non-zero**, for every record (codex, glm, mutation). It used to
+  keep the caller's `pass`. The withheld-transcript placeholder, the recorded
+  exit code, the stderr warning and `attest` exiting 1 are unchanged; the
+  warning and the `recorded [...]` line now say `fail`.
+- **Inheritance saves a failed run as a fail.** When `attest` carries evidence
+  across an evidence-only commit, any record with a non-zero `exit_code` is
+  rewritten to `status: "fail"`, whatever its source. Before, a failed capture
+  whose transcript did not verify was dropped to `self-attested` *keeping* its
+  `pass` — and the default gate accepts a self-attested pass (only
+  `--require-transcript` / `--require-executed` refused it). Any later
+  `attest` after an evidence-only commit turned a known-failed review green,
+  and every further `attest` carried it forward.
+- **The gate rejects any codex or mutation record carrying a non-zero
+  `exit_code`**, whatever its `source` or `status` (`reviewer_check`). This
+  closes reports an earlier version already carried forward, without
+  rewriting them. It only makes the gate stricter: a record with no
+  `exit_code` (self-attested, attached) or `exit_code: 0` gates exactly as
+  before. GLM stays advisory and never changes the verdict.
+
+**Upgrading:** a codex or mutation record that an earlier version carried
+across an evidence-only commit — self-attested, `pass`, non-zero `exit_code` —
+gated green and now fails the gate. That is the fix: re-run that reviewer and
+re-attest it (`attest --<record> pass|fail --<record>-run "<cmd>"` or
+`--<record>-log <file>`). To find candidates:
+`grep -lE '"exit_code": -?[1-9]' .coverloop/reports/*.json`. It over-matches:
+it also lists failed captures at their own commit (already rejected) and GLM
+records (advisory — they never change the verdict).
+
+Tests: five new tests (`test_failed_reviewer_capture_records_status_fail`,
+`test_captured_status_follows_exit_code_for_every_record`,
+`test_legacy_failed_capture_is_not_laundered_by_inheritance`,
+`test_already_inherited_failed_codex_run_is_rejected`,
+`test_already_inherited_failed_mutation_run_is_rejected`); no existing test
+changed.
 
 ## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
 

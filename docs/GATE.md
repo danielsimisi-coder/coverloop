@@ -63,8 +63,13 @@ shared secret filter: key/token/DB-credential/private-key **values** are
 replaced with `[REDACTED:…]`, and (v2.7.2) so are **PII shapes** — home-dir
 usernames (`/Users/<name>`, `/home/<name>`), email addresses, and UUID-shaped
 session ids. A **failed** reviewer run (nonzero exit — expired auth, a hang) is
-withheld entirely rather than committing its error/env dump, and `attest`
-exits non-zero for it. Honesty note: this is pattern-based redaction — a
+withheld entirely rather than committing its error/env dump, is recorded as
+`status: "fail"` whatever verdict was passed, and `attest` exits non-zero for
+it. The gate rejects any codex/mutation record carrying a non-zero `exit_code`,
+whatever its `source` or `status`, and `attest` saves such a record as `fail`
+when it inherits it across an evidence-only commit (v2.12.2). An `exit_code`
+that is present but not a real integer (`false`, `null`, `0.0`, `"0"`) makes the
+whole report malformed — Python reads `false` and `0.0` as equal to `0` (v2.12.3). Honesty note: this is pattern-based redaction — a
 tripwire against the common leaks, not a full DLP pass; unrecognized secrets
 or free-form personal data are not detected.
 
@@ -156,8 +161,8 @@ jobs:
       - name: Coverloop gate
         env:
           # Bump BOTH together on every upgrade to a release you vetted:
-          COVERLOOP_SHA: e6b3a4dabfcf24724ff314a4d520540c81b74b06        # v2.8.0 release commit (immutable)
-          COVERLOOP_SHA256: 27caf03a2faef295e0a6d6735937bc2204b93b206213e481de424ea2b8bb35fe  # shasum -a 256 bin/coverloop @ that commit
+          COVERLOOP_SHA: 4f5912bcadb679644a85ba0e76989dfe8b0becfe # 2.12.4 candidate; must be published before use
+          COVERLOOP_SHA256: 327b2842fe0323dd2b0d27f56ec3a60b66c3460a8ebf7c20a1f34b0616067a7b
           # base_ref via env, never interpolated into the shell (a ref name can
           # carry shell metacharacters).
           BASE_REF: ${{ github.base_ref }}

@@ -92,12 +92,18 @@ coverloop init        # once per repo
 
 ```bash
 git clone https://github.com/danielsimisi-coder/coverloop.git
-cd coverloop && ./install.sh
+cd coverloop && ./install.sh           # preview only, no network/credentials
+./install.sh --apply                   # approve file installation
+./install.sh --wire-hooks              # preview optional user hook settings
+# After reviewing settings, run locally: ./install.sh --apply --wire-hooks
+# Existing differing files require --replace-existing (backed up).
+# Optional provider setup, performed privately by the account owner:
+mkdir -p ~/.config/openrouter
 printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key
 ~/bin/protocol-selftest
 ```
 
-Same tool, more steps — and you own the `PATH` and file modes yourself. `coverloop doctor` works either way and will tell you what's still missing.
+The installer never reads keys or runs a model. Use `coverloop doctor --no-credentials` for a local dependency inventory. `protocol-selftest` is a separate, explicit provider check and may incur usage charges. Run project setup without trust first; after inspecting its test command, `init-project.sh --trust` opts that project into the Stop hook.
 
 </details>
 

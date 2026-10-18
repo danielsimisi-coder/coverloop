@@ -7,7 +7,9 @@
 # a PR/CI instead). Pick the line that fits your stack:
 
 # TypeScript (recommended — fast, catches "you broke compilation"):
-TEST_CMD="npx tsc --noEmit"
+# Safe until configured: no package downloads, no false green.
+TEST_CMD="false"
+# Installed TypeScript runner: TEST_CMD="./node_modules/.bin/tsc --noEmit"
 
 # Other options (uncomment ONE, replacing the line above):
 # TEST_CMD="npm run typecheck"          # if you have a typecheck script

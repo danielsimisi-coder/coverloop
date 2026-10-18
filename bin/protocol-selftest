@@ -134,11 +134,9 @@ if [ -f "$PROJ/CLAUDE.md" ] && [ "$PROJ" != "$SRC" ]; then
   ok "project: $PROJ (branch $D)"
 fi
 
-# ---------- reflect staging size ----------
-RS="$HOME/.claude/reflect-staging.md"
-if [ -f "$RS" ]; then
-  L=$(wc -l < "$RS")
-  [ "$L" -gt 500 ] && warn "reflect-staging.md has $L lines — reflect-and-save then let rotation trim" || ok "reflect-staging.md size OK ($L lines)"
+# Never consume the legacy raw failure log. New metadata is per-project.
+if [ -e "$HOME/.claude/reflect-staging.md" ]; then
+  warn "legacy raw failure log exists; inspect privately before sharing (not read by selftest)"
 fi
 
 echo "----"

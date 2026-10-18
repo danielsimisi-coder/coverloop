@@ -1,6 +1,6 @@
 {
   "name": "coverloop",
-  "version": "2.11.0",
+  "version": "2.12.4",
   "description": "Never let the model that wrote the code be the one that approves it. Risk-tiered gates, independent cross-lineage review, and evidence bound to the commit.",
   "author": {
     "name": "Daniel Siman Tov",
@@ -8,17 +8,22 @@
   },
   "homepage": "https://github.com/danielsimisi-coder/coverloop",
   "license": "MIT",
-  "keywords": ["code-review", "safety", "gate", "risk", "evidence", "multi-model"],
-
+  "keywords": [
+    "code-review",
+    "safety",
+    "gate",
+    "risk",
+    "evidence",
+    "multi-model"
+  ],
   "userConfig": {
     "openrouter_api_key": {
       "type": "string",
       "title": "OpenRouter API key",
-      "description": "Powers the independent reviewers (GLM red-team, and the optional Sol diff gate). Get one at https://openrouter.ai/keys — reviews cost a few cents each, and only L2/L3 changes call a model at all. Stored in your OS keychain, never in the repo.",
+      "description": "Optional for advisory plan review through the existing glm-* helpers (currently Kimi K3). Buyer-funded OpenRouter account; Codex diff review uses its own account. Never paste keys into chat or a repository.",
       "sensitive": true
     }
   },
-
   "hooks": {
     "SessionStart": [
       {

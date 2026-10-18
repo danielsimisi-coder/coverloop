@@ -11,8 +11,9 @@
 name: tests
 on:
   push:
-    branches: [main]
+    branches: [main, release/agensi-launch-prep]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -32,6 +33,8 @@ jobs:
       # `python` (not `python3`): setup-python guarantees `python` on PATH for
       # the selected version on all three OSes; `python3` is not aliased on the
       # Windows runner, which would fail the whole Windows leg (Sol + GLM R3).
+      - name: Privacy and offline setup regressions
+        run: python -m unittest discover -s tests -p "test_launch*.py" -v
       - name: Gate test suite
         run: python tests/test_gate.py
       - name: Report v2 external-authority tests
@@ -45,3 +48,8 @@ jobs:
       - name: Stop-hook behavioral tests
         if: runner.os != 'Windows'
         run: bash tests/test_hooks.sh
+
+      - name: Real isolated guard-break experiments
+        run: python tools/guardbreak_launch.py
+      - name: Offline synthetic customer journey
+        run: python tools/qualify_local.py --commit "$GITHUB_SHA"

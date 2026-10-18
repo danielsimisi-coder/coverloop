@@ -1253,6 +1253,118 @@ class GateTestCase(unittest.TestCase):
         self.assertTrue(os.path.exists(
             os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")))
 
+    # v2.12.2 ---------------------------------------------------------
+    def test_failed_reviewer_capture_records_status_fail(self):
+        """v2.12.2 regression: a --codex pass whose
+        --codex-run exited 1 was saved as status "pass" next to exit_code 1 —
+        a pass on display that the gate rejects. The saved status is now
+        "fail"; the withheld placeholder, exit code, attest exit 1 and the
+        gate's rejection are unchanged."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        r = run(["attest", "--tier", "L2", "--codex", "pass",
+                 "--codex-run", "echo boom; exit 1"], self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("codex=fail[captured]", r.stdout)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            codex = json.load(f)["codex"]
+        self.assertEqual(codex["status"], "fail")
+        self.assertEqual(codex["exit_code"], 1)
+        self.assertEqual(codex["source"], "captured")
+        self.assertIn("transcript withheld", self._read_log())
+        code, out = self.gate_json()
+        self.assertEqual(code, 1)
+        self.assertEqual(out["verdict"], "fail")
+        self.assertEqual(
+            [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
+
+    def _report(self):
+        sha = self.git_out(["rev-parse", "HEAD"])
+        with open(os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")) as f:
+            return json.load(f)
+
+    def test_captured_status_follows_exit_code_for_every_record(self):
+        """v2.12.2 (Codex r1 P2): codex, glm and mutation alike — a failed run
+        saves "fail" and attest exits 1; a successful run keeps the stated
+        "pass". mutation keeps its guard count either way."""
+        self.init_project()
+        for name in ("codex", "glm", "mutation"):
+            guards = ["--mutation-guards", "2"] if name == "mutation" else []
+            for cmd, rc, status in (("echo boom; exit 1", 1, "fail"),
+                                    ("echo real review", 0, "pass")):
+                with self.subTest(record=name, cmd=cmd):
+                    r = run(["attest", "--tier", "L3", f"--{name}", "pass",
+                             f"--{name}-run", cmd] + guards, self.repo)
+                    self.assertEqual(r.returncode, rc, r.stderr)
+                    e = self._report()[name]
+                    self.assertEqual(e["status"], status)
+                    self.assertEqual(e["exit_code"], rc)
+                    if name == "mutation":
+                        self.assertEqual(e["guards_broken"], 2)
+
+    def test_legacy_failed_capture_is_not_laundered_by_inheritance(self):
+        """v2.12.2 (Codex r1 P1): a pre-v2.12.2 failed capture (status "pass"
+        next to exit_code 7) was dropped to self-attested on inheritance across
+        an evidence-only commit, KEEPING "pass" — and the default gate accepts
+        a self-attested pass. It must be inherited as a fail."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--tests"], self.repo)
+        run(["attest", "--codex", "pass", "--codex-run", "echo boom; exit 7"], self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        path = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = self._report()
+        rep["codex"]["status"] = "pass"  # what every version before v2.12.2 wrote
+        with open(path, "w") as f:
+            json.dump(rep, f)
+        code, _ = self.gate_json()
+        self.assertEqual(code, 1)  # rejected at its own commit, as before
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)  # any later attest inherits it
+        codex = self._report()["codex"]
+        self.assertEqual(codex["source"], "self-attested")
+        self.assertEqual(codex["status"], "fail")
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(
+            [c["status"] for c in out["checks"] if c["check"] == "codex"], ["FAIL"])
+
+    def _assert_already_inherited_failed_run_rejected(self, name, tier, extra=()):
+        """v2.12.2 (Codex r2 P1): an earlier version may ALREADY have carried a
+        failed capture forward as {source: self-attested, status: pass,
+        exit_code: 7}. The gate accepted that shape; it must reject any record
+        carrying a non-zero exit_code, and a further inheritance saves "fail"."""
+        self.init_project()
+        run(["attest", "--tier", tier, "--tests"], self.repo)
+        run(["attest", f"--{name}", "pass", f"--{name}-run",
+             "echo boom; exit 7"] + list(extra), self.repo)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        path = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        rep = self._report()
+        rep[name].update(status="pass", source="self-attested")  # legacy shape
+        rep[name].pop("output_file")
+        rep[name].pop("output_sha256")
+        with open(path, "w") as f:
+            json.dump(rep, f)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        failing = [c["check"] for c in out["checks"] if c["status"] != "pass"]
+        self.assertIn(name, failing)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "evidence"], self.repo)
+        run(["attest", "--tests"], self.repo)
+        self.assertEqual(self._report()[name]["status"], "fail")
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+
+    def test_already_inherited_failed_codex_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected("codex", "L2")
+
+    def test_already_inherited_failed_mutation_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected(
+            "mutation", "L3", ["--mutation-guards", "2"])
+
     def test_pii_is_redacted_in_committed_transcripts(self):
         """v2.7.2: home-dir usernames, emails, and UUID session ids never
         reach a committed transcript (a live transcript had committed a real
@@ -1377,6 +1489,89 @@ class GateTestCase(unittest.TestCase):
             json.dump(rep, _fh)
         self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 1)
         self.assertEqual(run(["gate"], self.repo).returncode, 1)
+
+    # ---- v2.12.3: exit_code must be a real int (Codex v2.12.2 review P2) ----
+    def _captured_all_records(self):
+        """L2 report with a successful CAPTURED run on codex, glm and mutation."""
+        self.init_project()
+        r = run(["attest", "--tier", "L2", "--tests",
+                 "--codex", "pass", "--codex-run", "echo verified app.py:1 CLEAN",
+                 "--glm", "pass", "--glm-run", "echo red-team app.py:1 CLEAN",
+                 "--mutation", "pass", "--mutation-guards", "1",
+                 "--mutation-run", "echo broke guard app.py:1, test caught it"],
+                self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        return os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+
+    def _set_exit_code(self, p, rname, value):
+        with open(p, encoding="utf-8") as _fh:
+            rep = json.load(_fh)
+        rep[rname]["exit_code"] = value
+        with open(p, "w", encoding="utf-8") as _fh:
+            json.dump(rep, _fh)
+
+    def test_v2123_non_int_exit_code_is_malformed(self):
+        """false == 0 and 0.0 == 0 in Python, so `exit_code: false` passed even
+        --require-executed. A present exit_code that is not a real non-boolean
+        int (false, null, 0.0, "0") must reject the report as malformed, on
+        every evidence record."""
+        p = self._captured_all_records()
+        with open(p, encoding="utf-8") as _fh:
+            original = _fh.read()
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 0)
+        for rname in ("codex", "glm", "mutation"):
+            for bad in (False, None, 0.0, "0"):
+                with self.subTest(record=rname, exit_code=bad):
+                    with open(p, "w", encoding="utf-8") as _fh:
+                        _fh.write(original)
+                    self._set_exit_code(p, rname, bad)
+                    for extra in ([], ["--require-executed"]):
+                        code, out = self.gate_json(extra)
+                        self.assertEqual(code, 1, out)
+                        self.assertIn(f"{rname}.exit_code must be an integer",
+                                      json.dumps(out))
+
+    def test_v2123_int_zero_exit_code_still_passes(self):
+        p = self._captured_all_records()
+        for rname in ("codex", "glm", "mutation"):
+            self._set_exit_code(p, rname, 0)
+        self.assertEqual(run(["gate", "--require-executed"], self.repo).returncode, 0)
+        self.assertEqual(run(["gate"], self.repo).returncode, 0)
+
+    def test_v2123_negative_int_exit_code_still_fails(self):
+        """A signal-killed run (negative returncode) is a well-formed int, so it
+        is not 'malformed' — it is a FAILED run, and the gate rejects it where
+        the record gates (codex at L2, mutation at L3; glm is advisory)."""
+        p = self._captured_all_records()
+        with open(p, encoding="utf-8") as _fh:
+            original = _fh.read()
+        for rname in ("codex", "glm"):
+            with self.subTest(record=rname):
+                with open(p, "w", encoding="utf-8") as _fh:
+                    _fh.write(original)
+                self._set_exit_code(p, rname, -9)
+                code, out = self.gate_json(["--require-executed"])
+                self.assertNotIn("must be an integer", json.dumps(out))
+                detail = self._checks(out)[rname]["detail"]
+                if rname == "codex":
+                    self.assertEqual(code, 1, out)
+                    self.assertIn("transcript is invalid", detail)
+                    self.assertEqual(self.gate_json()[0], 1)
+                else:
+                    self.assertIn("transcript invalid", detail)  # advisory, flagged
+
+    def test_v2123_negative_int_mutation_exit_code_fails_l3(self):
+        self._l3_base(mutation=("--mutation", "pass", "--mutation-guards", "1",
+                                "--mutation-run", "echo broke guard app.py:1, caught"))
+        self.assertEqual(self.gate_json()[0], 0)
+        sha = self.git_out(["rev-parse", "HEAD"])
+        p = os.path.join(self.repo, ".coverloop", "reports", f"{sha}.json")
+        self._set_exit_code(p, "mutation", -9)
+        code, out = self.gate_json()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("must be an integer", json.dumps(out))
+        self.assertEqual(self._checks(out)["mutation"]["status"], "FAIL")
 
     def test_secret_filter_catches_bare_KEY_family(self):
         """P1: AWS_SECRET_ACCESS_KEY / SECRET_KEY / ENCRYPTION_KEY etc. must be
