@@ -9,6 +9,7 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parent.parent
 CASES=[
+ ('trust-project-scope', 'init-project.sh', 'if [ "$TRUST" = 1 ] && [ "$PROJ_PHYSICAL" != "$PROJ_REAL" ]; then', 'if false; then', 'test_subdirectory_trust_refused_before_writes'),
  ('installer-parent-traversal', 'tools/install_local.py', 'if ".." in path.parts or not path.is_absolute()', 'if not path.is_absolute()', 'test_custom_bin_dir_parent_traversal_refused'),
  ('metadata-enum', 'hooks/capture_failure.py', 'if isinstance(event.get("tool_name"), str) and event["tool_name"] in TOOLS:', 'if isinstance(event.get("tool_name"), str):', 'test_untrusted_enum_fields_and_bool'),
  ('private-log-hardlinks', 'hooks/capture_failure.py', 'or st.st_nlink != 1', 'or False', 'test_hardlink_log_refused'),

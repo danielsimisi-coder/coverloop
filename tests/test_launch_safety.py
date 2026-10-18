@@ -189,6 +189,43 @@ class LaunchSafety(unittest.TestCase):
         self.assertNotEqual(self.run_cmd(['bash',ROOT/'init-project.sh']).returncode,0)
         self.assertEqual(target.read_text(),'keep')
 
+    def test_subdirectory_trust_refused_before_writes(self):
+        (self.repo/'.claude').mkdir()
+        marker=self.root/'unreviewed-command'
+        config=self.repo/'.claude/loop.conf'
+        config.write_text('TEST_CMD="touch '+str(marker)+'"\n')
+        before=config.read_bytes()
+        child=self.repo/'child';child.mkdir()
+        r=self.run_cmd(['bash',ROOT/'init-project.sh','--trust'],cwd=child)
+        self.assertNotEqual(r.returncode,0)
+        self.assertIn('repository root',r.stderr)
+        self.assertEqual(list(child.iterdir()),[])
+        self.assertFalse((self.home/'.config/coverloop/trusted-repos').exists())
+        self.assertFalse(marker.exists())
+        self.assertEqual(config.read_bytes(),before)
+        hook=self.run_cmd(['bash',ROOT/'hooks/loop-stop-check.sh'])
+        self.assertEqual(hook.returncode,0,hook.stderr)
+        self.assertIn('NOT running',hook.stderr)
+        self.assertFalse(marker.exists())
+        scaffold=self.run_cmd(['bash',ROOT/'init-project.sh'],cwd=child)
+        self.assertEqual(scaffold.returncode,0,scaffold.stderr)
+        self.assertTrue((child/'.claude/loop.conf').exists())
+        self.assertFalse((self.home/'.config/coverloop/trusted-repos').exists())
+
+    def test_trust_accepts_worktree_root_and_physical_alias(self):
+        r=self.run_cmd(['git','-c','user.name=Synthetic fixture',
+                        '-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Baseline'])
+        self.assertEqual(r.returncode,0,r.stderr)
+        tree=self.root/'worktree'
+        r=self.run_cmd(['git','worktree','add','--detach',tree,'HEAD'])
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertTrue((tree/'.git').is_file())
+        alias=self.root/'alias';alias.symlink_to(tree,target_is_directory=True)
+        for cwd in (tree,alias):
+            r=self.run_cmd(['bash',ROOT/'init-project.sh','--trust'],cwd=cwd)
+            self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual((self.home/'.config/coverloop/trusted-repos').read_text().splitlines(),[str(tree)])
+
     def test_trust_rejects_newline_path_injection(self):
         victim=self.root/"victim"; victim.mkdir()
         weird=Path(str(self.root/"trusted")+"\n"+str(victim));weird.mkdir(parents=True)

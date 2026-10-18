@@ -14,6 +14,15 @@ case "${1:-}" in
   --help|-h) echo 'usage: init-project.sh [--trust] — scaffold; --trust explicitly authorizes running the reviewed TEST_CMD'; exit 0 ;;
   *) echo 'unknown argument' >&2; exit 2 ;;
 esac
+# --trust must authorize the same directory whose configuration is inspected.
+# Reject before scaffolding rather than silently trusting an enclosing project.
+PROJ_PHYSICAL="$(pwd -P)"
+PROJ_REAL="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PROJ_PHYSICAL")"
+PROJ_REAL="$(cd -- "$PROJ_REAL" && pwd -P)"
+if [ "$TRUST" = 1 ] && [ "$PROJ_PHYSICAL" != "$PROJ_REAL" ]; then
+  echo 'Trust setup refused: run --trust from the repository root after reviewing its .claude/loop.conf.' >&2
+  exit 2
+fi
 # Refuse symlinked destinations before writing any project configuration.
 python3 - "$PROJ" <<'CHECK'
 import os, pathlib, stat, sys
@@ -98,11 +107,7 @@ case "${XDG_CONFIG_HOME:-}" in
   *)  _xdg="$HOME/.config" ;;
 esac
 TRUST_FILE="$_xdg/coverloop/trusted-repos"
-# Record the SAME path the Stop hook resolves (git top-level via pwd -P), not
-# raw CWD: running init from a subdir would otherwise record the subdir while
-# the hook checks the git root — a permanent trust mismatch (M3 R2). Falls back
-# to the resolved CWD when the project isn't a git repo.
-PROJ_REAL="$(cd "$PROJ" && cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" 2>/dev/null && pwd -P)"
+# PROJ_REAL was resolved and trust scope validated before any scaffold writes.
 if [ "$TRUST" = 1 ]; then
   python3 - "$TRUST_FILE" "$PROJ_REAL" <<'TRUSTCHECK'
 import os, pathlib, stat, sys
