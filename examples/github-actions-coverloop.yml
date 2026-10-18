@@ -27,8 +27,8 @@ jobs:
           #   COVERLOOP_SHA256 = shasum -a 256 bin/coverloop  at that commit
           # Verifying the checksum means a moved tag or a tampered CDN response
           # can't slip modified gate code into your CI.
-          COVERLOOP_SHA: 4f5912bcadb679644a85ba0e76989dfe8b0becfe # 2.12.4 candidate; must be published before use
-          COVERLOOP_SHA256: 327b2842fe0323dd2b0d27f56ec3a60b66c3460a8ebf7c20a1f34b0616067a7b
+          COVERLOOP_SHA: ebc25a69f79662b871e6d31988fba90c9a4d1b00 # 2.12.4 candidate; must be published before use
+          COVERLOOP_SHA256: 8aca6382037059d623c4b29f68122254d147873793c56e9679891889e9cb2f24
           # base_ref via env, NEVER interpolated straight into the shell — a ref
           # name can carry shell metacharacters; ${{ }} inline would let it run.
           BASE_REF: ${{ github.base_ref }}
