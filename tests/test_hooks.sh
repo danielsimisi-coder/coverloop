@@ -181,6 +181,34 @@ case "$out" in *"WARN"*"has no hooks/session-contract.sh"*)
     ok "clone without the reference hook: WARN" ;;
   *) bad "clone without the reference hook: not reported" ;; esac
 
+echo "== protocol-selftest: loop.conf full-suite heuristic =="
+# Found 2026-10 on astro-lab: TEST_CMD="uv run pytest -q" (2,263 tests) passed as "verify it's cheap" because only
+# npm test/vitest/jest were recognised, so the Stop hook ran the whole suite on every code-change stop.
+sproj="$(mktemp -d)"; shome="$(mktemp -d)"
+( cd "$sproj" && git init -q . && mkdir -p .claude docs && : > docs/MEMORY.md \
+  && printf '# CLAUDE.md\n<!-- OPERATING CONTRACT (v2.10) -->\n## Operating Contract\n' > CLAUDE.md ) >/dev/null 2>&1
+selftest_conf_line() {  # $1 = TEST_CMD (no double quotes) -> the loop.conf verdict line
+  printf 'TEST_CMD="%s"\n' "$1" > "$sproj/.claude/loop.conf"
+  ( cd "$sproj" && HOME="$shome" bash "$ST" 2>&1 ) | grep -m1 'loop.conf'
+}
+for tc in 'uv run pytest -q' 'pytest' 'go test ./...' 'cargo test' 'npm test --silent' 'pnpm test' 'jest' 'python -m unittest'; do
+  case "$(selftest_conf_line "$tc")" in WARN*"FULL test suite"*) ok "full suite flagged: $tc" ;;
+    *) bad "full suite NOT flagged: $tc" ;; esac
+done
+for tc in 'pytest -q -m fast' 'pytest --lf -q' 'jest --onlyChanged' 'pytest -kfast' 'pytest tests/test_smoke.py::test_one'; do
+  case "$(selftest_conf_line "$tc")" in PASS*"narrowed run"*) ok "narrowed run accepted: $tc" ;;
+    *) bad "narrowed run not accepted: $tc" ;; esac
+done
+for tc in 'pytest --lfnf=all' 'pytest -m fast && cargo test' 'pytest -m fast; go test ./...'; do
+  case "$(selftest_conf_line "$tc")" in WARN*)  ok "not mis-accepted as narrowed: $tc" ;;
+    *) bad "mis-accepted as narrowed: $tc" ;; esac
+done
+for tc in 'pnpm typecheck' 'npx tsc --noEmit'; do
+  case "$(selftest_conf_line "$tc")" in PASS*"cheap"*) ok "cheap gate accepted: $tc" ;;
+    *) bad "cheap gate not accepted: $tc" ;; esac
+done
+rm -rf "$sproj" "$shome"
+
 echo "== python suite entry point =="
 TP="$HERE/tests/test_properties.py"
 # Checked from a DIFFERENT runner on purpose: a guard written inside

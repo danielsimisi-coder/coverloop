@@ -2,6 +2,20 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-10-27 — protocol-selftest flags a full-suite `TEST_CMD` for pytest, go, cargo, pnpm/yarn and more (tooling only; PROTOCOL v2.12.1 unchanged)
+
+- The Stop hook runs `TEST_CMD` on every code-change stop with no timeout, and `protocol-selftest` warned about that
+  only for `npm test`, `vitest` and `jest`. A project whose `loop.conf` said `uv run pytest -q` (astro-lab, 2,263 tests)
+  therefore passed the check as "verify it's cheap" and paid a full run per stop.
+- The warning now also covers pytest, `go test`, `cargo test`, `npm/pnpm/yarn test`, mocha, phpunit, rspec,
+  `manage.py test` and unittest. A runner that is already narrowed is accepted: `pytest -m/-k/--lf/--testmon`,
+  `jest --onlyChanged/--changedSince`, `vitest --changed`. Warning only: nothing is blocked, and `loop.conf` is a
+  convenience gate, not the Coverloop gate (`.coverloop/config.json` is unchanged and still decides the evidence).
+- A chained command (`a && b`, `a; b`, `a | b`) is judged as a whole, flags match as whole tokens (`--lfnf` is not `--lf`),
+  and `-kexpr` / pytest node ids count as explicit selections. Found by the Codex round on this change (3 × P2).
+- Tests: `tests/test_hooks.sh` pins 8 flagged, 5 narrowed, 3 not-mis-accepted and 2 cheap commands (guard-break: removing
+  the pytest pattern fails 4 of them).
+
 ## 2026-09-23 — a guard-break pass must say how many guards it broke; plan reviewer → Kimi K3 (PROTOCOL v2.12.1)
 
 - **`attest --mutation pass` requires `--mutation-guards N` (N ≥ 1)**, recorded as

@@ -120,7 +120,17 @@ if [ -f "$PROJ/CLAUDE.md" ] && [ "$PROJ" != "$SRC" ]; then
     TC=$(grep -om1 'TEST_CMD="[^"]*"' "$PROJ/.claude/loop.conf" | cut -d'"' -f2)
     case "$TC" in
       *"tsc --noEmit"*|*typecheck*|*lint*) ok "loop.conf gate is cheap: $TC" ;;
-      *"npm test"*|*"vitest run"*|*"jest"*) warn "loop.conf runs a FULL suite per stop ($TC) — switch to a cheap typecheck" ;;
+      # A bare full-suite runner is too slow for a hook that fires on every code-change stop (astro-lab 2026-10: pytest on
+      # 2,263 tests). A runner that is already narrowed (-m/-k/--lf/--testmon) is let through to the generic "verify" line.
+      *pytest*|*"go test"*|*"cargo test"*|*"npm test"*|*"npm run test"*|*"pnpm test"*|*"pnpm run test"*|*"yarn test"*|*"vitest"*|*"jest"*|*mocha*|*phpunit*|*rspec*|*"manage.py test"*|*unittest*)
+        case "$TC" in
+          # A compound command ("a && b", "a; b", "a | b") is judged as a whole: one narrowed part must not excuse another
+          # unrestricted runner, so it never reaches the "narrowed" branch. Flags are matched as whole tokens (no prefixes);
+          # "-kexpr" / "-mexpr" and pytest node ids ("file::test") are explicit selections too.
+          *"&&"*|*";"*|*"|"*) warn "loop.conf chains several commands ($TC) — each one runs on every code-change stop; keep every part cheap (typecheck/lint/a narrowed run)" ;;
+          *pytest*" -m"*|*pytest*" -k"*|*pytest*"::"*|*pytest*" --lf"|*pytest*" --lf "*|*pytest*" --testmon"|*pytest*" --testmon "*|*jest*" --onlyChanged"|*jest*" --onlyChanged "*|*jest*" --changedSince"*|*vitest*" --changed"|*vitest*" --changed "*) ok "loop.conf gate is a narrowed run: $TC (verify it stays fast)" ;;
+          *) warn "loop.conf runs a FULL test suite on every code-change stop ($TC) — use a cheap check here (typecheck/lint/a fast marker subset) and keep the full suite for the gate (coverloop attest --tests)" ;;
+        esac ;;
       "") warn "loop.conf present but TEST_CMD empty" ;;
       *) ok "loop.conf gate: $TC (verify it's cheap)" ;;
     esac
