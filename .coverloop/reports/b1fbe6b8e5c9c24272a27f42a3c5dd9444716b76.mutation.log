@@ -1,0 +1,9 @@
+=== CONTROL (no mutation): unittest exit 0: OK; hooks exit 0: == 42 passed, 0 failed ==
+=== G1 v2.12.4: any tier anchors (not only L3): CAUGHT (unittest exit 1: FAILED (failures=12); hooks exit 0: == 42 passed, 0 failed ==)
+=== G2 v2.12.4: the anchor need not pass its own evaluation: CAUGHT (unittest exit 1: FAILED (failures=3); hooks exit 0: == 42 passed, 0 failed ==)
+=== G3 v2.12.2: a failed captured run keeps the caller's pass: CAUGHT (unittest exit 1: FAILED (failures=5); hooks exit 0: == 42 passed, 0 failed ==)
+=== G4 v2.12.2: an inherited failed run is not normalized to fail: CAUGHT (unittest exit 1: FAILED (failures=3); hooks exit 0: == 42 passed, 0 failed ==)
+=== G5 v2.12.2: the gate accepts a record with a non-zero exit_code: CAUGHT (unittest exit 1: FAILED (failures=2); hooks exit 0: == 42 passed, 0 failed ==)
+=== G6 v2.12.3: a non-integer exit_code is accepted: CAUGHT (unittest exit 1: FAILED (failures=12); hooks exit 0: == 42 passed, 0 failed ==)
+=== G7 selftest: a bare pytest TEST_CMD is not flagged: CAUGHT (unittest exit 0: OK; hooks exit 1: == 35 passed, 7 failed ==)
+guard-break: 7/7 caught
