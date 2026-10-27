@@ -4,7 +4,9 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
 
 ## 2026-10-27 — protocol-selftest flags a full-suite `TEST_CMD` for pytest, go, cargo, pnpm/yarn and more (tooling only; PROTOCOL v2.12.1 unchanged)
 
-- The Stop hook runs `TEST_CMD` on every code-change stop with no timeout, and `protocol-selftest` warned about that
+- The Stop hook runs `TEST_CMD` on every code-change stop. The hook sets no time limit of its own; only Claude Code's
+  hook timeout stops it (runs were cut at 600 s on astro-lab), so a slow suite can cost up to that on every stop.
+  `protocol-selftest` warned about that
   only for `npm test`, `vitest` and `jest`. A project whose `loop.conf` said `uv run pytest -q` (astro-lab, 2,263 tests)
   therefore passed the check as "verify it's cheap" and paid a full run per stop.
 - The warning now also covers pytest, `go test`, `cargo test`, `npm/pnpm/yarn test`, mocha, phpunit, rspec,
