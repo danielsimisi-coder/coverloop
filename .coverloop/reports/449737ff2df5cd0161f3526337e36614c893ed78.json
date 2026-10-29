@@ -1,0 +1,11 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "449737ff2df5cd0161f3526337e36614c893ed78",
+  "risk_tier": "L0",
+  "created_at": "2026-10-29T06:04:10Z",
+  "tests": null,
+  "codex": null,
+  "glm": null,
+  "mutation": null,
+  "human_gate": null
+}
