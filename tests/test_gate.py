@@ -1392,6 +1392,92 @@ class GateTestCase(unittest.TestCase):
         self.assertNotIn("a" * 40, out)
         self.assertEqual(out, "/Users/[REDACTED:user]/p")
 
+    def test_pii_bare_username_outside_paths(self):
+        """2026-10-27: an `ls -la` owner column carried the login into a public transcript while every path occurrence
+        was redacted. A username learned from a path in the same text is redacted as a bare word too."""
+        import glm_secret_filter as f
+        text = ("cd /Users/alicedev/proj\n"
+                "lrwxr-xr-x  1 alicedev  admin  28 Aug  6 2025 /opt/homebrew/bin/x\n"
+                "-rw-r--r--@ 1 alicedev  staff   9 Oct 27 13:15 AGENTS.md\n"
+                "whoami: alicedev\n")
+        out = f.redact(text)
+        self.assertNotIn("alicedev", out)
+        self.assertEqual(out.count("[REDACTED:user]"), 4)
+        self.assertIn("admin  28", out)            # generic group names stay readable
+        self.assertIn(" staff ", out)
+
+    def test_pii_bare_username_boundaries(self):
+        """Whole words only: a learned name is not cut out of a longer identifier, a dotted or dashed name, or an email
+        (emails are replaced whole first); short and generic account names are not redacted as bare words."""
+        import glm_secret_filter as f
+        out = f.redact("/home/alicedev/x alicedevtools alicedev_bot x.alicedev alicedev-ci alicedev@example.com alicedev.")
+        self.assertIn("alicedevtools", out)
+        self.assertIn("alicedev_bot", out)
+        self.assertIn("x.alicedev", out)
+        self.assertIn("alicedev-ci", out)
+        self.assertNotIn("@example.com", out)
+        self.assertTrue(out.endswith("[REDACTED:user]."), out)
+        self.assertEqual(f.redact("/home/bob/x by bob"), "/home/[REDACTED:user]/x by bob")      # < 4 chars: path only
+        self.assertEqual(f.redact("/home/runner/x the runner"), "/home/[REDACTED:user]/x the runner")
+
+    def test_pii_bare_username_learned_despite_quotes_and_secrets(self):
+        """Codex r1: a quote or `;` after the path, or a secret assignment around it, must not hide the name."""
+        import glm_secret_filter as f
+        self.assertNotIn("alicedev", f.redact('"/home/alicedev" owner alicedev'))
+        self.assertNotIn("alicedev", f.redact("cd /home/alicedev; ls -l alicedev"))
+        self.assertNotIn("alicedev", f.redact('PASSWORD="/home/alicedev/x" owner alicedev'))
+        self.assertNotIn("alicedev", f.redact("-Users-alicedev-proj then alicedev"))
+
+    def test_pii_bare_username_markers_and_literals_are_safe(self):
+        """Codex r1: [REDACTED:*] markers are opaque, redaction is idempotent, JSON/number literals are not names."""
+        import glm_secret_filter as f
+        from unittest import mock
+        out = f.redact("/home/email/x a@example.com")
+        self.assertIn("[REDACTED:email]", out); self.assertNotIn("[REDACTED:[", out)
+        for login in ("REDACTED", "secret-value", "email", "user"):
+            with mock.patch.object(f, "_local_logins", return_value={login}):
+                once = f.redact("owner %s and PASSWORD=hunter2hunter2 a@example.com" % login)
+                self.assertEqual(f.redact(once), once, login)
+                self.assertNotIn("[REDACTED:[", once)
+        self.assertIn('{"enabled": true}', f.redact('/home/true/x {"enabled": true}'))
+        self.assertIn('{"count": 1234}', f.redact('/home/1234/x {"count": 1234}'))
+
+    def test_pii_bare_username_many_names_is_linear(self):
+        """Codex r1: thousands of distinct names must not go quadratic (egress redacts before its size check)."""
+        import glm_secret_filter as f, time
+        def t(n):
+            text = " ".join("/home/person%06d/x" % i for i in range(n)) + " person000001"
+            t0 = time.perf_counter(); out = f.redact(text); dt = time.perf_counter() - t0
+            self.assertNotIn("person000001", out); return dt
+        small, big = t(1000), t(8000)
+        self.assertLess(big, max(small, 0.01) * 20, f"1000 names {small:.3f}s vs 8000 names {big:.3f}s")
+        self.assertLess(big, 3.0)
+
+    def test_pii_bare_username_exact_shapes(self):
+        """Codex r2: dotted names in slugs, a trailing '-' or '.' that is part of the name, numeric and non-ASCII logins."""
+        import glm_secret_filter as f
+        from unittest import mock
+        with mock.patch.object(f, "_local_logins", return_value={"otherlogin"}):
+            self.assertNotIn("alice.dev", f.redact("-Users-alice.dev-proj owner alice.dev"))
+            self.assertNotIn("owner alice-", f.redact("/home/alice-/x owner alice-"))
+        with mock.patch.object(f, "_local_logins", return_value={"alice."}):
+            self.assertEqual(f.redact("owner alice."), "owner [REDACTED:user]")
+        for num in ("1e10", "12.5", "1234"):
+            with mock.patch.object(f, "_local_logins", return_value={num}):
+                self.assertEqual(f.redact('{"count": %s}' % num), '{"count": %s}' % num)
+        with mock.patch.object(f, "_local_logins", return_value={"josé", "Alice Smith"}):
+            self.assertEqual(f.redact("owner josé"), "owner josé")      # documented: bare coverage is ASCII-shaped
+        self.assertEqual(f.FILTER_VERSION, "2026-10-29a")
+
+    def test_pii_bare_local_login(self):
+        """This machine's own login is redacted even when no path in the text names it."""
+        import glm_secret_filter as f
+        from unittest import mock
+        with mock.patch.object(f, "_local_logins", return_value={"localperson"}):
+            self.assertEqual(f.redact("owner localperson  staff"), "owner [REDACTED:user]  staff")
+        with mock.patch.object(f, "_local_logins", return_value={"dev"}):
+            self.assertEqual(f.redact("the dev server"), "the dev server")
+
     def test_require_transcript_and_deprecated_alias_agree(self):
         self.init_project()
         run(["attest", "--tier", "L2", "--tests", "--codex", "pass"], self.repo)

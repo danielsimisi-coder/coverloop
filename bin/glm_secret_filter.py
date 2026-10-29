@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
 """
 import re
 
-FILTER_VERSION = "2026-08-22c"
+FILTER_VERSION = "2026-10-29a"
 
 # Literal substrings that flag "this text likely references a secret" — used by
 # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
@@ -130,6 +130,72 @@ PII_PATTERNS = [
     ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
 ]
+
+# A username also appears OUTSIDE paths: the owner/group columns of `ls -l`, `whoami`, `id`, ps output. The path
+# patterns above only see it after /Users/ or /home/, so a release transcript on 2026-10-27 carried the maintainer's
+# login twice in `ls -la` lines while all 31 path occurrences were redacted. Bare whole-word occurrences of (a) every
+# username named by a home path in the ORIGINAL text and (b) this machine's own login are therefore redacted too.
+# - Names are learned with a strict username shape before any other pass rewrites the text, so a quote, a `;` or a
+#   secret assignment around the path neither corrupts the name nor hides it.
+# - One linear pass over word tokens with a set lookup (no per-name rescan: many distinct names must not go quadratic
+#   on the egress path, which redacts BEFORE its size check). Existing [REDACTED:*] markers are opaque.
+# - Not redacted as bare words: names shorter than 4 characters, generic account words, and JSON/number literals —
+#   they collide with prose and structured evidence ("dev", "root", "true", "1234"). They stay redacted inside paths.
+_BARE_NAME_MIN = 4
+_BARE_NAME_SKIP = frozenset({"root", "runner", "shared", "admin", "staff", "user", "users", "home", "guest", "public",
+                             "ubuntu", "nobody", "daemon", "wheel", "everyone", "redacted", "true", "false", "null",
+                             "none", "nan", "infinity"})
+_LEARN_USER_RES = (re.compile(r"(?<![A-Za-z0-9_])/(?:Users|home)/([A-Za-z_][A-Za-z0-9_.-]*)"),
+                   re.compile(r"(?<![A-Za-z0-9_])-(?:Users|home)-([A-Za-z_][A-Za-z0-9_.]*)"))
+_NAME_SHAPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
+_BARE_TOKEN_RE = re.compile(r"\[REDACTED:[a-z-]+\]|(?<![A-Za-z0-9_.-])[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def _local_logins():
+    names = set()
+    try:
+        import getpass
+        names.add(getpass.getuser())
+    except Exception:
+        pass
+    try:
+        import os, pwd
+        names.add(pwd.getpwuid(os.getuid()).pw_name)
+    except Exception:
+        pass
+    return {n for n in names if n}
+
+
+def _is_number(n):
+    try:
+        float(n)
+        return True
+    except ValueError:
+        return False
+
+
+def _bare_candidates(text):
+    # Coverage is ASCII usernames of the shape below (what the token matcher can see); a local login outside it
+    # (non-ASCII, spaces) is still redacted inside paths but not as a bare word.
+    names = {n for n in _local_logins() if _NAME_SHAPE_RE.fullmatch(n)}
+    for rx in _LEARN_USER_RES:
+        names.update(m.group(1) for m in rx.finditer(text))
+    return {n for n in names
+            if len(n) >= _BARE_NAME_MIN and n.lower() not in _BARE_NAME_SKIP and not _is_number(n)}
+
+
+def _redact_bare_names(text, names):
+    if not names:
+        return text
+    def sub(m):
+        tok = m.group(0)
+        if tok.startswith("[REDACTED:"):
+            return tok
+        if tok in names:
+            return "[REDACTED:user]"
+        core = tok.rstrip(".")                       # sentence punctuation after a name
+        return "[REDACTED:user]" + tok[len(core):] if core in names else tok
+    return _BARE_TOKEN_RE.sub(sub, text)
 
 # ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15i, operator-directed) ----
 # ASSIGN_RE's name family (...TOKEN/...SECRET/...PASSWORD/...KEY) also matches everyday AUTH-CODE
@@ -392,6 +458,7 @@ def redact(text):
     assignment is removed regardless of shape (keeping the name). Legitimate
     prose survives — only values are touched, never bare name mentions."""
     out = text
+    names = _bare_candidates(text or "")
     for label, rx, guard in VALUE_PATTERNS:
         if guard and guard not in out:
             continue
@@ -413,4 +480,5 @@ def redact(text):
         out = _rx.sub("[REDACTED:email]", out)
     for _rx in _pii.get("pii-uuid", []):
         out = _rx.sub("[REDACTED:uuid]", out)
-    return out
+    # Bare usernames last (an email or uuid is replaced whole first), learned from the ORIGINAL text.
+    return _redact_bare_names(out, names)

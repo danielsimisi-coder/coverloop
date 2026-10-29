@@ -2,6 +2,22 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-10-29 — the transcript privacy filter also redacts bare usernames (filter 2026-10-29a; no protocol change)
+
+- **The leak:** a username outside a path — the owner column of `ls -l`, `whoami`, `id` — reached a release
+  transcript on 2026-10-27, although all 31 path occurrences were redacted. It was caught by a manual grep before the
+  push to this public repo.
+- **Now redacted as whole words:** every username that a `/Users/<name>` or `/home/<name>` path (or its dash-encoded
+  slug) names in the same text, plus this machine's own login.
+  - Names are learned from the ORIGINAL text, so a quote, a `;` or a secret assignment around the path cannot hide them.
+  - One linear token pass handles them (no per-name rescan on the egress path), and `[REDACTED:*]` markers are opaque.
+- **Not redacted as bare words**, to keep prose and structured evidence intact: names shorter than 4 characters,
+  generic account words (`root`, `runner`, `admin`, …), JSON literals and numbers, and non-ASCII logins. These are
+  still redacted inside paths.
+- **Tests:** 9 PII cases, including quotes and secrets around paths, marker idempotence, JSON literals, 8,000 distinct
+  names in linear time, and dotted/trailing-character names. Full suite 267/267, hooks 42/42.
+- **Review:** three Codex rounds (gpt-6-astra, high): R1 FAIL (3×P1), R2 FAIL (2×P1), and a focused R3 PASS.
+
 ## 2026-10-27 — protocol-selftest flags a full-suite `TEST_CMD` for pytest, go, cargo, pnpm/yarn and more (tooling only; no protocol change)
 
 - The Stop hook runs `TEST_CMD` on every code-change stop. The hook sets no time limit of its own; only Claude Code's
