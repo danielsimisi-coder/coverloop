@@ -1,0 +1,1109 @@
+codex-floor: review model (default) → gpt-6-astra (effort high)
+OpenAI Codex v0.162.1
+--------
+workdir: /Users/[REDACTED:user]/code/coverloop-redact
+model: gpt-6-astra
+provider: openai
+approval: on-request
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: [REDACTED:uuid]
+--------
+user
+FOCUSED final check of the UNCOMMITTED change in this repo (`git diff`; do not modify files): bare-username redaction in
+bin/glm_secret_filter.py. Round-2 findings that this last revision must close:
+Round-1 closure: **#1 CLOSED; #2 CLOSED; #3 CLOSED** for quadratic processing (raw-input size checking remains after redaction); **#4 CLOSED**, including synthetic audit-hash checks; **#5 PARTIALLY CLOSED**—original examples pass, but numeric local logins still corrupt JSON. All 8 PII tests and 3 focused property/egress tests passed. No files modified.
+
+FINDING [P1] Dash-slug discovery truncates dotted usernames | bin/glm_secret_filter.py:149 | With local login mocked to `otherlogin`, `-Users-[REDACTED:user]-proj owner [REDACTED:user]` becomes `-Users-[REDACTED:user]-proj owner [REDACTED:user]`. Discovery learns `[REDACTED:user]`, leaving the actual bare username exposed and incorrectly redacting unrelated occurrences of `[REDACTED:user]`. | Align candidate extraction with the supported path component; add dotted-slug regressions.
+
+FINDING [P1] Trailing punctuation normalization discards valid username characters | bin/glm_secret_filter.py:171,183 | `/home/[REDACTED:user]/x owner [REDACTED:user]` becomes `/home/[REDACTED:user]/x owner [REDACTED:user]`: discovery strips the trailing hyphen although the declared username shape permits it. Separately, with local login `[REDACTED:user].`, `owner [REDACTED:user].` remains unchanged because matching strips the dot before comparing against the unnormalized local candidate. | Preserve exact usernames; distinguish sentence punctuation from username characters.
+
+FINDING [P2] Local-login discovery accepts names the replacement matcher cannot match | bin/glm_secret_filter.py:150,169 | With `_local_logins()` mocked to `{"josé"}`, `owner josé` remains unchanged. The same happens for `Alice Smith`. These candidates pass filtering, but the ASCII token matcher cannot consume them. | Support complete local-login strings or explicitly constrain the coverage claim and handle unsupported names.
+
+FINDING [P2] Numeric local logins still invalidate structured evidence | bin/glm_secret_filter.py:172-173 | With local login `1e10`, valid JSON `{"count": 1e10}` becomes `{"count": [REDACTED:user]}`. `isdigit()` excludes integer strings only; local candidates bypass the path extractor’s alphabetic-first restriction. | Exclude complete numeric-literal forms or preserve numeric values contextually; round-1 finding #5 remains partially open.
+
+FINDING [P2] Changed filter retains the previous version identifier | bin/glm_secret_filter.py:8 | `FILTER_VERSION` remains `2026-08-22c`, despite the module’s explicit requirement to bump it on every change. Installed copies with and without bare-username protection consequently report identical filter versions, defeating version-based parity checks and distinguishing audit records. | Bump the filter version.
+
+VERDICT: FAIL
+Answer only: is each round-2 finding closed (dotted slug names; exact trailing '-'/'.'; ASCII-shaped local logins with the
+documented limit; numeric local logins incl. 1e10; FILTER_VERSION bumped), and does this revision introduce any NEW P0/P1?
+Output `FINDING [P0|P1|P2|P3] ...` lines if any, then `VERDICT: PASS` (no P0/P1) or `VERDICT: FAIL`.
+
+2026-10-29T07:30:34.771355Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer scope=\"create delete\", resource_metadata=\"https://mcp.windsor.ai/.well-known/oauth-protected-resource\"" })
+2026-10-29T07:30:35.417014Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_request\", error_description=\"No access token was provided in this request\", resource_metadata=\"https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/\"" })
+codex
+I’ll inspect the uncommitted diff and run focused, read-only checks for the five findings and any new P0/P1 regressions.
+
+exec
+/bin/zsh -lc 'git diff -- bin/glm_secret_filter.py' in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 5641ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-y872yWGn' (errno=Operation not permitted)
+2026-10-29 13:00:45.182 xcodebuild[95359:2232872]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:00:45.864 xcodebuild[95359:2232870] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-r2BvDfYy' (errno=Operation not permitted)
+2026-10-29 13:00:47.295 xcodebuild[95364:2232940]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:00:47.562 xcodebuild[95364:2232939] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+diff --git a/bin/glm_secret_filter.py b/bin/glm_secret_filter.py
+index ee2b448..96d29fb 100755
+--- a/bin/glm_secret_filter.py
++++ b/bin/glm_secret_filter.py
+@@ -5,7 +5,7 @@ Bump FILTER_VERSION on any change; Mac and VPS copies must match (verify via --v
+ """
+ import re
+ 
+-FILTER_VERSION = "2026-08-22c"
++FILTER_VERSION = "2026-10-29a"
+ 
+ # Literal substrings that flag "this text likely references a secret" — used by
+ # scan() as a heuristic egress tripwire. NOT redacted (they are variable names,
+@@ -131,6 +131,72 @@ PII_PATTERNS = [
+                              r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
+ ]
+ 
++# A username also appears OUTSIDE paths: the owner/group columns of `ls -l`, `whoami`, `id`, ps output. The path
++# patterns above only see it after /Users/ or /home/[REDACTED:user] so a release transcript on 2026-10-27 carried the maintainer's
++# login twice in `ls -la` lines while all 31 path occurrences were redacted. Bare whole-word occurrences of (a) every
++# username named by a home path in the ORIGINAL text and (b) this machine's own login are therefore redacted too.
++# - Names are learned with a strict username shape before any other pass rewrites the text, so a quote, a `;` or a
++#   secret assignment around the path neither corrupts the name nor hides it.
++# - One linear pass over word tokens with a set lookup (no per-name rescan: many distinct names must not go quadratic
++#   on the egress path, which redacts BEFORE its size check). Existing [REDACTED:*] markers are opaque.
++# - Not redacted as bare words: names shorter than 4 characters, generic account words, and JSON/number literals —
++#   they collide with prose and structured evidence ("dev", "root", "true", "1234"). They stay redacted inside paths.
++_BARE_NAME_MIN = 4
++_BARE_NAME_SKIP = frozenset({"root", "runner", "shared", "admin", "staff", "user", "users", "home", "guest", "public",
++                             "ubuntu", "nobody", "daemon", "wheel", "everyone", "redacted", "true", "false", "null",
++                             "none", "nan", "infinity"})
++_LEARN_USER_RES = (re.compile(r"(?<![A-Za-z0-9_])/(?:Users|home)/([A-Za-z_][A-Za-z0-9_.-]*)"),
++                   re.compile(r"(?<![A-Za-z0-9_])-(?:Users|home)-([A-Za-z_][A-Za-z0-9_.]*)"))
++_NAME_SHAPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
++_BARE_TOKEN_RE = re.compile(r"\[REDACTED:[a-z-]+\]|(?<![A-Za-z0-9_.-])[A-Za-z0-9_][A-Za-z0-9_.-]*")
++
++
++def _local_logins():
++    names = set()
++    try:
++        import getpass
++        names.add(getpass.getuser())
++    except Exception:
++        pass
++    try:
++        import os, pwd
++        names.add(pwd.getpwuid(os.getuid()).pw_name)
++    except Exception:
++        pass
++    return {n for n in names if n}
++
++
++def _is_number(n):
++    try:
++        float(n)
++        return True
++    except ValueError:
++        return False
++
++
++def _bare_candidates(text):
++    # Coverage is ASCII usernames of the shape below (what the token matcher can see); a local login outside it
++    # (non-ASCII, spaces) is still redacted inside paths but not as a bare word.
++    names = {n for n in _local_logins() if _NAME_SHAPE_RE.fullmatch(n)}
++    for rx in _LEARN_USER_RES:
++        names.update(m.group(1) for m in rx.finditer(text))
++    return {n for n in names
++            if len(n) >= _BARE_NAME_MIN and n.lower() not in _BARE_NAME_SKIP and not _is_number(n)}
++
++
++def _redact_bare_names(text, names):
++    if not names:
++        return text
++    def sub(m):
++        tok = m.group(0)
++        if tok.startswith("[REDACTED:"):
++            return tok
++        if tok in names:
++            return "[REDACTED:user]"
++        core = tok.rstrip(".")                       # sentence punctuation after a name
++        return "[REDACTED:user]" + tok[len(core):] if core in names else tok
++    return _BARE_TOKEN_RE.sub(sub, text)
++
+ # ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15i, operator-directed) ----
+ # ASSIGN_RE's name family (...TOKEN/...SECRET/...PASSWORD/...KEY) also matches everyday AUTH-CODE
+ # idioms: `autoRefreshToken: [REDACTED:secret-value] test fixtures like `access_token: '[REDACTED:secret-value]'`, code references like
+@@ -392,6 +458,7 @@ def redact(text):
+     assignment is removed regardless of shape (keeping the name). Legitimate
+     prose survives — only values are touched, never bare name mentions."""
+     out = text
++    names = _bare_candidates(text or "")
+     for label, rx, guard in VALUE_PATTERNS:
+         if guard and guard not in out:
+             continue
+@@ -413,4 +480,5 @@ def redact(text):
+         out = _rx.sub("[REDACTED:email]", out)
+     for _rx in _pii.get("pii-uuid", []):
+         out = _rx.sub("[REDACTED:uuid]", out)
+-    return out
++    # Bare usernames last (an [REDACTED:user] or uuid is replaced whole first), learned from the ORIGINAL text.
++    return _redact_bare_names(out, names)
+
+exec
+/bin/zsh -lc 'git status --short; pwd' in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 3441ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-jHxV47oM' (errno=Operation not permitted)
+2026-10-29 13:00:49.702 xcodebuild[95372:2232988]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:00:49.984 xcodebuild[95372:2232987] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-unng2MAs' (errno=Operation not permitted)
+2026-10-29 13:00:50.886 xcodebuild[95375:2233041]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:00:51.160 xcodebuild[95375:2233040] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+ M bin/glm_secret_filter.py
+ M tests/test_gate.py
+/Users/[REDACTED:user]/code/coverloop-redact
+
+exec
+/bin/zsh -lc 'cat /Users/[REDACTED:user]/.agents/skills/coverloop-contract/SKILL.md' in /Users/[REDACTED:user]/code/coverloop-redact
+exec
+/bin/zsh -lc "rg -n 'coverloop|redact|secret.filter' /Users/[REDACTED:user]/.codex/memories/MEMORY.md" in /Users/[REDACTED:user]/code/coverloop-redact
+exec
+/bin/zsh -lc "rg --files -g '*MEMORY*' -g '*RISK*' -g '*LEDGER*' -g '*CLAUDE*'; git diff -- tests/test_gate.py; sed -n '80,140p' bin/glm_secret_filter.py; ls bin" in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 4ms:
+---
+name: coverloop-contract
+description: The Coverloop operating contract — how much verification a change must earn before it ships. Load this BEFORE writing or reviewing code in a repo that uses Coverloop (has a .coverloop/ directory or a AGENTS.md carrying PROTOCOL_VERSION), and whenever deciding a risk tier, choosing reviewers, or about to push/merge/migrate/deploy.
+---
+
+# The Coverloop contract
+
+**One model reviewing its own work is a model grading its own exam.** This contract says how much independent verification a change has to earn before it ships — scaled to what the change can actually break.
+
+Two rules override everything below:
+
+1. **No model is an authority.** Every finding — yours or a reviewer's — is a *claim* to be checked against real code, tests, and runtime. When a test can settle it, run the test instead of adding another opinion.
+2. **Never send secrets or PII to any model.** No `.env`, keys, tokens, credentials, customer data. Reading your own DB is PII-bound: select non-PII columns only.
+
+## 1. Classify first — the tier is derived, not declared
+
+```bash
+coverloop classify          # explains the floor and why
+```
+
+Take the **MAX** of what it reports and your own judgement. It reads the paths that actually changed:
+
+| Change touches | Floor |
+|---|---|
+| migrations · `.sql` · schema · auth/RLS · billing/payments · secrets/`.env` · CI-deploy config · workers/cron | **L3** |
+| API routes · handlers · middleware · shared state · dependency manifests | **L2** |
+| docs · stylesheets · repo metadata | **L0** |
+| **anything unrecognised** | **L1 — never L0** |
+| 10+ files changed | **at least L2** |
+
+You may **raise** a tier. **You may never lower a deterministic floor** — not to save tokens, not because it "looks fine". Unsure between two tiers? Take the heavier one.
+
+## 2. What each tier must earn
+
+| | Build | Tests (the deciding vote) | Independent diff gate | GLM red-team | Human gate |
+|---|---|---|---|---|---|
+| **L0** | direct | quick check | – | – | – |
+| **L1** | focused | relevant tests + typecheck + lint + build | if behaviour changed | – | – |
+| **L2** | plan first | + acceptance tests | **required** | if subtle or the gate flags | if launch-critical |
+| **L3** | design first | full suite + the right *kind* of test | **required** (before *and* after fixes) | **required** | **required** before merge/apply/deploy |
+
+**Execution is the primary correctness gate. Model review is secondary.** A reviewer's "looks good" never outranks a failing test.
+
+## 3. Review must be off-policy
+
+The reviewer sees the change as a **cold artifact** — a diff/files packet in a **fresh** session — never "review what you just wrote" inside the builder's own conversation. Fresh context removes most self-review bias; a **different model lineage** adds a second, smaller layer.
+
+- **Diff gate:** the Codex CLI in a fresh session (`codex exec -m gpt-5.6-sol --sandbox read-only`), with reasoning effort set explicitly — high for L2, xhigh for L3. It defaults to low on its own; a lazy judge is worse than none.
+- **Red-team / consistency audit:** `glm-redteam` / `glm-audit` (full ZDR).
+- Demand **file:line** evidence. A bare verdict is noise.
+
+**Privacy differs by reviewer, and it matters:** GLM is the only reviewer here on a strict zero-data-retention endpoint. M3 routes under `data_collection: deny` — a weaker promise — which is why it is optional and L3-only. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter.
+
+## 4. Record evidence, then let the gate decide
+
+```bash
+coverloop attest --tier L2 --tests            # run + record the tests
+coverloop attest --codex-log review.txt       # attach the review you already ran
+coverloop gate --min-tier "$(coverloop classify --quiet)"
+```
+
+- Evidence is bound to the **commit**. Any code change after attesting invalidates it — **re-attest at HEAD**, never push stale evidence.
+- Attach the real transcript (`--codex-log` / `--glm-log`). A bare self-attested verdict is the weak path and the gate labels it as such.
+- **L3 `--approve` only when the operator named THIS action.** A generic "go ahead" is not an approval — ask for the named gate.
+
+## 5. Stop conditions
+
+- **Converged** when: tests green · zero unresolved P0/P1 · every finding classified · the last review pass found nothing new. Then stop — remaining P2s become follow-ups.
+- **Round cap:** 2 gate rounds and 2 red-team rounds per task. Repeated *real* findings past the cap means the change is **too big to review well** — split it, don't grind a fifth round.
+- The cap **never** converts an open P0/P1 into a pass. Cap reached with a blocker = **STOP and escalate to the operator**.
+
+## 6. Close the loop
+
+End a meaningful task with a short report: what changed, what did **not**, tests run, reviewer verdicts, what's still risky, what gate is still required, and whether it is safe to pause. Never leave the reader thinking something is live when it is only merged.
+
+**If the reply ends with a next task, close with one line:** `▸ Next: <task> → <model> · <effort> effort — <why>`. L0 → Haiku/low · L1 → Sonnet/medium · L2 → Sonnet/high · L3 → Opus/high–xhigh. Classify the risk first, then read the model off the tier.
+
+---
+
+**Depth:** the full contract (roster detail, deployment/migration safety, environment parity, token discipline, hard boundaries) lives in this plugin's `AGENTS.md`, and the gate's threat model in `docs/GATE.md`. Read them when a decision actually turns on the detail — this page is what governs day to day.
+
+**Honest limit:** Coverloop does not make AI coding safe. It makes unsafe assumptions harder to ship unnoticed. Every reviewer here misses things; what changes is how many independent checks a bug must defeat, and whether the evidence that it was checked is still true at the commit you ship.
+
+ succeeded in 15ms:
+198:- Focused tests and reviewer passes do not establish merge readiness; `coverloop gate` initially failed without a commit-bound report. Full Studio debug/release/Python/export/real-recording validation and current exact-HEAD L3 evidence remain required. [Task 1]
+314:- An incomplete GLM response is no verdict -> rebuild a focused packet with relevant helpers, numbered lines, secret filtering, and enough output allowance. [Task 2]
+384:applies_to: cwd=/Users/[REDACTED:user]/Documents/Codex/2026-10-18/coverloop-agensi-io-1-skills-2 and /Users/[REDACTED:user]/code/coverloop; reuse_rule=Agensi terms, account state, and package hashes are time-specific; local qualification and no-publication gates are reusable.
+390:- rollout_summaries/2026-10-18T08-34-02-keJI-coverloop_agensi_preview_packaging_and_local_qualification.md (cwd=/Users/[REDACTED:user]/Documents/Codex/2026-10-18/coverloop-agensi-io-1-skills-2, rollout_path=/Users/[REDACTED:user]/.codex/sessions/2026/10/18/rollout-2026-10-18T14-04-02-[REDACTED:uuid].jsonl, updated_at=2026-10-18T19:08:25+00:00, thread_id=[REDACTED:uuid], local qualification only)
+405:- The real Coverloop repo is `/Users/[REDACTED:user]/code/coverloop`, v2.12.3. Its value is the local CLI/evidence gate (risk classification, exact-commit attestations, fail-closed gates, hooks, tests), not a standalone Markdown instruction file. [Task 1]
+408:- Related contract: `/Users/[REDACTED:user]/code/coverloop` requires no secrets/PII to models, SHA-bound evidence, tests as primary correctness evidence, and human approval for dangerous actions. [Task 1]
+836:- PR #117, PR #120, astro-ops, coverloop gate, M1, walk-forward, holdout, data-snooping, STATISTICAL_RESEARCH_PROTOCOL, GPT-6 Astra
+845:- PRs #115/#116 were merged at recorded `main=fe72bf52c366587b21b84ba82f866dc2ba49885a`; PR #117 stayed draft because `coverloop gate --base origin/main --require-transcript --json` was stale after the head changed. Re-attest final HEAD; earlier evidence does not remain valid after non-evidence changes. [Task 1]
+
+ succeeded in 3943ms:
+CLAUDE.md
+docs/REVIEW_LEDGER.md
+docs/RISK_MAP.example.md
+docs/MEMORY.example.md
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-eXA6zdID' (errno=Operation not permitted)
+2026-10-29 13:01:01.688 xcodebuild[95394:2233449]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:01:01.970 xcodebuild[95394:2233448] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-bICDXRht' (errno=Operation not permitted)
+2026-10-29 13:01:03.163 xcodebuild[95396:2233467]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-10-29 13:01:03.454 xcodebuild[95396:2233466] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+diff --git a/tests/test_gate.py b/tests/test_gate.py
+index 13d97cc..64802b9 100644
+--- a/tests/test_gate.py
++++ b/tests/test_gate.py
+@@ -1392,6 +1392,92 @@ class GateTestCase(unittest.TestCase):
+         self.assertNotIn("a" * 40, out)
+         self.assertEqual(out, "/Users/[REDACTED:user]/p")
+ 
++    def test_pii_bare_username_outside_paths(self):
++        """2026-10-27: an `ls -la` owner column carried the login into a public transcript while every path occurrence
++        was redacted. A username learned from a path in the same text is redacted as a bare word too."""
++        import glm_secret_filter as f
++        text = ("cd /Users/[REDACTED:user]/proj\n"
++                "lrwxr-xr-x  1 [REDACTED:user]  admin  28 Aug  6 2025 /opt/homebrew/bin/x\n"
++                "-rw-r--r--@ 1 [REDACTED:user]  staff   9 Oct 27 13:15 AGENTS.md\n"
++                "whoami: [REDACTED:user]\n")
++        out = f.redact(text)
++        self.assertNotIn("[REDACTED:user]", out)
++        self.assertEqual(out.count("[REDACTED:user]"), 4)
++        self.assertIn("admin  28", out)            # generic group names stay readable
++        self.assertIn(" staff ", out)
++
++    def test_pii_bare_username_boundaries(self):
++        """Whole words only: a learned name is not cut out of a longer identifier, a dotted or dashed name, or an [REDACTED:user]
++        (emails are replaced whole first); short and generic account names are not redacted as bare words."""
++        import glm_secret_filter as f
++        out = f.redact("/home/[REDACTED:user]/x alicedevtools alicedev_bot x.alicedev alicedev-ci [REDACTED:email] [REDACTED:user].")
++        self.assertIn("alicedevtools", out)
++        self.assertIn("alicedev_bot", out)
++        self.assertIn("x.alicedev", out)
++        self.assertIn("alicedev-ci", out)
++        self.assertNotIn("@example.com", out)
++        self.assertTrue(out.endswith("[REDACTED:user]."), out)
++        self.assertEqual(f.redact("/home/[REDACTED:user]/x by bob"), "/home/[REDACTED:user]/x by bob")      # < 4 chars: path only
++        self.assertEqual(f.redact("/home/[REDACTED:user]/x the runner"), "/home/[REDACTED:user]/x the runner")
++
++    def test_pii_bare_username_learned_despite_quotes_and_secrets(self):
++        """Codex r1: a quote or `;` after the path, or a secret assignment around it, must not hide the name."""
++        import glm_secret_filter as f
++        self.assertNotIn("[REDACTED:user]", f.redact('"/home/[REDACTED:user] owner [REDACTED:user]'))
++        self.assertNotIn("[REDACTED:user]", f.redact("cd /home/[REDACTED:user] ls -l [REDACTED:user]"))
++        self.assertNotIn("[REDACTED:user]", f.redact('PASSWORD="[REDACTED:secret-value]" owner [REDACTED:user]'))
++        self.assertNotIn("[REDACTED:user]", f.redact("-Users-[REDACTED:user]-proj then [REDACTED:user]"))
++
++    def test_pii_bare_username_markers_and_literals_are_safe(self):
++        """Codex r1: [REDACTED:*] markers are opaque, redaction is idempotent, JSON/number literals are not names."""
++        import glm_secret_filter as f
++        from unittest import mock
++        out = f.redact("/home/[REDACTED:user]/x [REDACTED:email]")
++        self.assertIn("[REDACTED:email]", out); self.assertNotIn("[REDACTED:[", out)
++        for login in ("REDACTED", "secret-value", "[REDACTED:user]", "user"):
++            with mock.patch.object(f, "_local_logins", return_value={login}):
++                once = f.redact("owner %s and PASSWORD=[REDACTED:secret-value] [REDACTED:email]" % login)
++                self.assertEqual(f.redact(once), once, login)
++                self.assertNotIn("[REDACTED:[", once)
++        self.assertIn('{"enabled": true}', f.redact('/home/[REDACTED:user]/x {"enabled": true}'))
++        self.assertIn('{"count": 1234}', f.redact('/home/[REDACTED:user]/x {"count": 1234}'))
++
++    def test_pii_bare_username_many_names_is_linear(self):
++        """Codex r1: thousands of distinct names must not go quadratic (egress redacts before its size check)."""
++        import glm_secret_filter as f, time
++        def t(n):
++            text = " ".join("/home/[REDACTED:user]/x" % i for i in range(n)) + " person000001"
++            t0 = time.perf_counter(); out = f.redact(text); dt = time.perf_counter() - t0
++            self.assertNotIn("person000001", out); return dt
++        small, big = t(1000), t(8000)
++        self.assertLess(big, max(small, 0.01) * 20, f"1000 names {small:.3f}s vs 8000 names {big:.3f}s")
++        self.assertLess(big, 3.0)
++
++    def test_pii_bare_username_exact_shapes(self):
++        """Codex r2: dotted names in slugs, a trailing '-' or '.' that is part of the name, numeric and non-ASCII logins."""
++        import glm_secret_filter as f
++        from unittest import mock
++        with mock.patch.object(f, "_local_logins", return_value={"otherlogin"}):
++            self.assertNotIn("[REDACTED:user]", f.redact("-Users-[REDACTED:user]-proj owner [REDACTED:user]"))
++            self.assertNotIn("owner [REDACTED:user]", f.redact("/home/[REDACTED:user]/x owner [REDACTED:user]"))
++        with mock.patch.object(f, "_local_logins", return_value={"[REDACTED:user]."}):
++            self.assertEqual(f.redact("owner [REDACTED:user]."), "owner [REDACTED:user]")
++        for num in ("1e10", "12.5", "1234"):
++            with mock.patch.object(f, "_local_logins", return_value={num}):
++                self.assertEqual(f.redact('{"count": %s}' % num), '{"count": %s}' % num)
++        with mock.patch.object(f, "_local_logins", return_value={"josé", "Alice Smith"}):
++            self.assertEqual(f.redact("owner josé"), "owner josé")      # documented: bare coverage is ASCII-shaped
++        self.assertEqual(f.FILTER_VERSION, "2026-10-29a")
++
++    def test_pii_bare_local_login(self):
++        """This machine's own login is redacted even when no path in the text names it."""
++        import glm_secret_filter as f
++        from unittest import mock
++        with mock.patch.object(f, "_local_logins", return_value={"localperson"}):
++            self.assertEqual(f.redact("owner localperson  staff"), "owner [REDACTED:user]  staff")
++        with mock.patch.object(f, "_local_logins", return_value={"dev"}):
++            self.assertEqual(f.redact("the dev server"), "the dev server")
++
+     def test_require_transcript_and_deprecated_alias_agree(self):
+         self.init_project()
+         run(["attest", "--tier", "L2", "--tests", "--codex", "pass"], self.repo)
+    # An ESCAPED quote inside the value used to be read as the closing quote,
+    # so `PASSWORD="[REDACTED:secret-value]"` redacted only `a\` and left ` b"` in the packet —
+    # and the leaked tail then scanned CLEAN, i.e. it would have been sent.
+    # `\\.` consumes an escaped pair as a unit; the alternative branch excludes
+    # backslash so the two branches are DISJOINT and the match stays linear
+    # (an ambiguous alternation here is a ReDoS on the egress path).
+    # A QUOTED value may span lines. It could not before: the branch excluded
+    # \r\n, so `PASSWORD="[REDACTED:secret-value]"` redacted the first line and left the
+    # rest — and the leaked tail scanned CLEAN, i.e. it would have been sent.
+    # The span is capped at 4096 characters so a stray opening quote cannot
+    # swallow a whole document. The cap NEEDS the `[^\r\n]*` fallback beside
+    # it: without one, a 4097-character quoted value failed the whole match, so
+    # redact() replaced NOTHING and scan() saw no assignment — the entire secret
+    # went out, strictly worse than the tail-leak the cap was added to fix. The
+    # fallback degrades to line-scoped redaction instead of to silence.
+    # Over-redaction costs a reviewer some context; that is the cheap side.
+    r"\s*[=:]\s*)(?P<q>['\"])?"
+    r"(?P<val>(?(q)(?:(?:\\[\s\S]|[^\\]){0,4096}?(?=(?P=q)|$)|[^\r\n]*)|[^\s'\"]+))")
+
+# PII shapes (v2.7.2) — redacted from transcripts before they are COMMITTED to
+# git (redact() only). Deliberately NOT part of scan(): scan() is the egress
+# tripwire for secrets, and blocking every [REDACTED:user]/path-shaped string would break
+# legitimate review packets. This is targeted transcript hygiene — home-dir
+# usernames, emails, UUID-shaped session ids — a tripwire, NOT a full DLP pass.
+PII_PATTERNS = [
+    # Match the WHOLE path component after /Users// /home/ (up to the next
+    # slash or whitespace), so single-char and underscore-leading usernames are
+    # caught and a long name can't leak its tail past a fixed length cap
+    # (Sol v2.7.2 review #2). Slightly over-redacts real dir names like
+    # /Users/[REDACTED:user] — acceptable for transcript hygiene (drop a dir, never leak
+    # a username).
+    ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(/(?:Users|home)/)([^/\s]+)")),
+    # Same username, dash-encoded. Claude Code slugifies a project path into a
+    # directory name (/Users/[REDACTED:user]/x -> -Users-[REDACTED:user]-x), and that slug shows up
+    # verbatim in scratch paths inside captured transcripts. The slash pattern
+    # above does not match it, so the username shipped to a PUBLIC repo in
+    # committed evidence — found by an adversarial audit of this repo, 16
+    # occurrences of the maintainer's own name. A privacy tool leaking the one
+    # identifier it advertises removing is the worst kind of miss: it was
+    # invisible precisely because the shape looked nothing like a path.
+    ("pii-user",  re.compile(r"(?<![A-Za-z0-9_])(-(?:Users|home)-)([^-\s/]+)")),
+    # The local part is POSSESSIVE (`++`). It was an ordinary `+`, which
+    # re-expands and re-contracts at every word boundary when no `@` follows —
+    # quadratic, measured at 4x per input doubling (51 KB of "a." took 1.9s and
+    # a larger probe exceeded ten seconds). That is a ReDoS on the EGRESS path,
+    # and the packet size limit does not bound it because redaction runs BEFORE
+    # the size check. A local part never contains `@`, so giving up backtracking
+    # here costs nothing. The domain half stays backtrackable: it only runs once
+    # an `@` has actually been found, and it needs to give back the final dot.
+    ("pii-email", re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b")),
+    ("pii-uuid",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                             r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
+]
+
+# A username also appears OUTSIDE paths: the owner/group columns of `ls -l`, `whoami`, `id`, ps output. The path
+# patterns above only see it after /Users/ or /home/[REDACTED:user] so a release transcript on 2026-10-27 carried the maintainer's
+# login twice in `ls -la` lines while all 31 path occurrences were redacted. Bare whole-word occurrences of (a) every
+# username named by a home path in the ORIGINAL text and (b) this machine's own login are therefore redacted too.
+# - Names are learned with a strict username shape before any other pass rewrites the text, so a quote, a `;` or a
+#   secret assignment around the path neither corrupts the name nor hides it.
+# - One linear pass over word tokens with a set lookup (no per-name rescan: many distinct names must not go quadratic
+__pycache__
+coverloop
+coverloop_report_v2.py
+dep-check
+egress_cap.py
+glm-ask
+glm-audit
+glm-audit-xhigh
+glm-code
+glm-code-xhigh
+glm-redteam
+glm-redteam-xhigh
+glm-review
+glm-scout
+glm-tests
+glm_secret_filter.py
+m3-ask
+m3-audit
+m3-deploy-audit
+m3-review
+protocol-selftest
+
+codex
+I’m applying the Coverloop contract to this read-only review. The five fixes are present in the diff; I’m checking their behavior with synthetic inputs and the existing PII regressions.
+
+exec
+/bin/zsh -lc "sed -n '1,90p' tests/test_gate.py; sed -n '1,100p' docs/REVIEW_LEDGER.md; rg -n 'def test_.*(pii|property|egress)|def setUp|def tearDown|PROTOCOL_VERSION' tests/test_gate.py CLAUDE.md; command -v python3 coverloop glm-review glm-redteam-xhigh m3-review; rg --files .agent .coverloop 2>/dev/null" in /Users/[REDACTED:user]/code/coverloop-redact
+ exited 2 in 38ms:
+#!/usr/bin/env python3
+"""Tests for `coverloop` (init/attest/gate) against real temporary git repos.
+
+Run from the repo root:  python3 -m unittest discover -s tests -v
+No third-party dependencies.
+"""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin'))
+CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "coverloop")
+
+
+def run(args, cwd):
+    return subprocess.run(
+        [sys.executable, CLI] + args, cwd=cwd, capture_output=True, text=True, timeout=60
+    )
+
+
+def sh(args, cwd):
+    subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True)
+
+
+class GateTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = self.tmp.name
+        sh(["git", "init", "-q", "-b", "main"], self.repo)
+        sh(["git", "config", "user.email", "[REDACTED:email]"], self.repo)
+        sh(["git", "config", "user.name", "tester"], self.repo)
+        self.write("app.py", "print('v1')\n")
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "base"], self.repo)
+        self.base_sha = self.git_out(["rev-parse", "HEAD"])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # helpers -------------------------------------------------------
+    def write(self, rel, content):
+        path = os.path.join(self.repo, rel)
+        os.makedirs(os.path.dirname(path) or self.repo, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _symlink(self, src, dst):
+        """os.symlink, but skip the test where symlinks aren't permitted —
+        Windows needs admin/Developer-Mode, so a symlink-refusal test can't run
+        there (the POSIX dir-fd/O_NOFOLLOW guard it exercises is POSIX-only)."""
+        try:
+            os.symlink(src, dst)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest("symlinks not permitted on this platform: %s" % e)
+
+    def commit(self, rel, content, msg="change"):
+        self.write(rel, content)
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", msg], self.repo)
+        return self.git_out(["rev-parse", "HEAD"])
+
+    def git_out(self, args):
+        return subprocess.run(
+            ["git"] + args, cwd=self.repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def init_project(self, test_command="true"):
+        r = run(["init", "--test-command", test_command], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # Commit the scaffolding on its own, then move base past it, so later
+        # "docs-only" assertions aren't polluted by .coverloop/config.json
+        # (config changes are deliberately never waivable).
+        sh(["git", "add", "-A"], self.repo)
+        sh(["git", "commit", "-qm", "coverloop scaffolding"], self.repo)
+        self.base_sha = self.git_out(["rev-parse", "HEAD"])
+
+    def gate_json(self, extra=None):
+        r = run(["gate", "--json"] + (extra or []), self.repo)
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except json.JSONDecodeError:
+            self.fail(f"gate --json emitted non-JSON:\nstdout={r.stdout}\nstderr={r.stderr}")
+
+    # fail-closed basics --------------------------------------------
+    def test_gate_outside_git_repo_is_usage_error(self):
+        with tempfile.TemporaryDirectory() as empty:
+# Review Ledger — decided findings (false-positive suppression)
+
+Record Codex/GLM/M3 findings you've DECIDED on, so auditors stop re-raising them.
+Inject this at session start; auditors MUST check it before raising findings and skip anything here marked `rejected`/`wontfix`.
+
+| date | finding (file:line) | source | verdict | reason |
+|------|---------------------|--------|---------|--------|
+| 2026-06-28 | _example_ src/foo.ts:42 "unguarded null" | GLM | rejected | guarded by caller; verified by test bar_test.ts |
+
+## Review log (v2.5 — one line per multi-model review; feeds the quarterly right-size read, §10c)
+
+| date | tier | reviewers | raised | verdicts (accepted/rejected/needs-test) |
+|------|------|-----------|--------|------------------------------------------|
+| 2026-07-02 | _example_ L2 | Codex+GLM | 3 | 1/2/0 |
+| 2026-08-24 | L3 | Codex (9 rounds) + GLM | 45+ | all accepted after verification |
+| 2026-08-24 | L3 | GLM (final pass) | 4 | 0/2 rejected/2 already-covered |
+
+---
+
+## The self-audit of 2026-08-24 — nine rounds, and what the numbers mean
+
+Coverloop reviewed its own v2.10 release under its own protocol: a cold diff, a
+fresh session each round, a reviewer with no stake in the answer.
+
+| | count |
+|---|---:|
+| Rounds run before a PASS | **9** |
+| Defects found and fixed | **45+** |
+| Defects introduced BY the fixes and caught in a later round | **at least 6** |
+| Rounds that raised zero findings | **1** (the ninth) |
+
+Two things in that table are worth more than the headline. Roughly one defect in
+seven was created by the previous round's fix — including a length cap meant to
+stop a secret leak that instead made long secrets leak *completely*. And the
+final GLM pass raised four findings of which **two were false positives** that a
+five-minute check against the code disproved (it asked whether `--no-renames`
+was still applied; it was, injected one layer down where the diff did not show
+it). Both numbers argue the same thing: no reviewer is an authority, the author
+least of all, and every finding gets verified against the real code before
+anyone acts on it.
+
+## What a real ledger looks like after a few weeks
+
+Not a template — measured from a **live client project** run under this protocol: a production call platform with billing, auth, a worker, and real customers. Anonymised (no schema, no business logic); the shape is the point.
+
+| | count |
+|---|---:|
+| Findings the reviewers raised | **18** |
+| Did **not** survive verification against the code | **12** |
+| Already fixed / won't-fix / a process gate rather than a code bug | **5** |
+| Real bugs found that no other reviewer caught | **1** |
+
+**Two-thirds of what the reviewers called P0/P1 was wrong.** Treat that as the normal case rather than a scandal — it is precisely why this protocol refuses to let a model be an authority, and why `file:line` evidence is mandatory. A loop that acts on unverified findings burns your week chasing ghosts, and a reviewer you have learned to ignore is worse than no reviewer at all.
+
+The one that survived is instructive. The **fourth-lineage auditor** — the optional second opinion, the one most often accused of not earning its keep — noticed that a status label mapped one failure reason but not another, so three separate views would show customers and staff the wrong outcome. Tests were green. The other reviewers missed it.
+
+That is the honest trade: **twelve false positives bought one real catch nothing else would have found.** Whether that trade is worth it *on your project* is exactly what this file is for. Log every review. When a reviewer's row shows noise and no unique catches over a real sample, **remove it** — "subtract, don't add" is meant to be a decision backed by this table, not a slogan.
+tests/test_gate.py:30:    def setUp(self):
+tests/test_gate.py:41:    def tearDown(self):
+tests/test_gate.py:1368:    def test_pii_is_redacted_in_committed_transcripts(self):
+tests/test_gate.py:1384:    def test_pii_user_edge_cases(self):
+tests/test_gate.py:1395:    def test_pii_bare_username_outside_paths(self):
+tests/test_gate.py:1409:    def test_pii_bare_username_boundaries(self):
+tests/test_gate.py:1423:    def test_pii_bare_username_learned_despite_quotes_and_secrets(self):
+tests/test_gate.py:1431:    def test_pii_bare_username_markers_and_literals_are_safe(self):
+tests/test_gate.py:1445:    def test_pii_bare_username_many_names_is_linear(self):
+tests/test_gate.py:1456:    def test_pii_bare_username_exact_shapes(self):
+tests/test_gate.py:1472:    def test_pii_bare_local_login(self):
+CLAUDE.md:3:> **PROTOCOL_VERSION: v2.12.4** (the floor's baseline walk has no 100-report cap — it stops at the newest valid L3 anchor; v2.12.3: a recorded exit_code must be a real integer; v2.12.2: a failed reviewer run is never a pass — saved, inherited or gated; v2.12.1: guard-break pass must state its guard count, plan reviewer → Kimi K3) · **CONTRACT_VERSION: v2.10** (the Operating Contract block inlined in each project's `CLAUDE.md`; bumps only when the contract's CONTENT changes — see §13. **v2.10: the plan reviewer is Kimi K3 and a guard-break pass states its guard count. v2.9: guard-break evidence is mandatory at L3, GLM moves to reviewing the plan before L3 code, execute before review, and the two-round rule.** v2.5 made it version-agnostic; v2.6 added GPT-5.6 Sol + per-tier effort routing and the off-policy review rule; v2.7 added §9b (next-task model + effort recommendation); **v2.8 adds §2a — the risk tier is no longer self-declared: `coverloop classify` derives a deterministic floor from the changed paths and the gate takes the MAX**, so it triggers a one-time fleet contract resync). History: [`CHANGELOG.md`](CHANGELOG.md).
+CLAUDE.md:32:1. **Confirm the protocol is active.** State `PROTOCOL_VERSION` and the roster (below). If the auto-loaded `CLAUDE.md`/`AGENTS.md` does NOT carry this contract (pointer-only, or a roster without GLM/M3), that is a **WIRING BUG** — flag it to the human operator, treat this protocol as authoritative for code review, and inline the contract into the project file.
+CLAUDE.md:427:**Two versions, decoupled (v2.5).** `PROTOCOL_VERSION` (this doc + tooling) bumps freely; **`CONTRACT_VERSION`** (the Operating Contract block inlined in every project's `CLAUDE.md` — this doc's header declares **v2.10**, while the distributable template `docs/OPERATING_CONTRACT.md`, which `init-project.sh` copies into new projects, is a **v2.6 base carrying the v2.9–v2.10 L3 evidence and roster rows** (guard-break, GLM plan review, execute-before-review, two-round rule) and still lacking the v2.7–v2.8 content (§9b model line, §2a derived floor); resyncing it is a separate change) bumps ONLY when the contract's content changes. Why: the contract is the *expensive-to-sync* artifact (a PR per project), while machines resync with one `git pull && ./install.sh`. So a docs/tooling release costs the fleet nothing; only a genuine contract change triggers per-project resyncs. `protocol-selftest` cross-checks all of it (the installed hook file vs the repo's = must match — the shortened hook prints no version banner to compare; project contract vs `CONTRACT_VERSION` = warn on drift). Each CLI prints `FILTER_VERSION`/`CLI_VERSION` on `--version`; copies are installed FROM the repo, never edited in place; a filter-version mismatch between machines is a STOP for cross-machine work. When the protocol changes, bump the right version and update `CHANGELOG.md` in the same commit.
+/Library/Frameworks/Python.framework/Versions/3.13/bin/python3
+/Users/[REDACTED:user]/bin/coverloop
+/Users/[REDACTED:user]/bin/glm-review
+/Users/[REDACTED:user]/bin/glm-redteam-xhigh
+/Users/[REDACTED:user]/bin/m3-review
+.coverloop/reports/c191ba502b28043b629feb9780408f41085bd05c.json
+.coverloop/reports/98c013dbfd246e21b0b47a21dba61c779c7cb89e.json
+.coverloop/reports/db56a13cee2505dfcac072e5fe4470f6b20113a9.codex.log
+.coverloop/reports/f14e98f8d0bc60203d58cf7a5c6c9a3c677c096b.codex.log
+.coverloop/reports/480884369bedf2b49d5051cd33c9bb50e3d5d5fc.codex.log
+.coverloop/reports/b1fbe6b8e5c9c24272a27f42a3c5dd9444716b76.mutation.log
+.coverloop/reports/b1fbe6b8e5c9c24272a27f42a3c5dd9444716b76.codex.log
+.coverloop/reports/49268679728fcab83bba6624877cc7a2a7e1bbd9.codex.log
+.coverloop/reports/f14e98f8d0bc60203d58cf7a5c6c9a3c677c096b.json
+.coverloop/reports/a7dc72743c063b2d3f46521edb57accf53652d51.codex.log
+.coverloop/reports/694e9cb1d5892d133df1376dc4a5ae7a1f6c9e49.codex.log
+.coverloop/reports/605f340d75088839a0dff96b0237d6303536838d.json
+.coverloop/reports/06b4d4b2883015370d97f917d3bf63b63b93ace8.json
+.coverloop/reports/605f340d75088839a0dff96b0237d6303536838d.mutation.log
+.coverloop/reports/a7db6d568d30ef2e120662b317c6b87c7c47bb44.mutation.log
+.coverloop/reports/449737ff2df5cd0161f3526337e36614c893ed78.json
+.coverloop/reports/37da1c9d496bec5cab11f85ca1f07fb6805846ca.mutation.log
+.coverloop/reports/98c013dbfd246e21b0b47a21dba61c779c7cb89e.mutation.log
+.coverloop/reports/b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6.json
+.coverloop/reports/694e9cb1d5892d133df1376dc4a5ae7a1f6c9e49.json
+.coverloop/reports/db56a13cee2505dfcac072e5fe4470f6b20113a9.mutation.log
+.coverloop/reports/a7db6d568d30ef2e120662b317c6b87c7c47bb44.codex.log
+.coverloop/reports/a7dc72743c063b2d3f46521edb57accf53652d51.json
+.coverloop/reports/bbdb4811bcb7fb347fc345d29fe20cedff17b2d9.json
+.coverloop/reports/f14e98f8d0bc60203d58cf7a5c6c9a3c677c096b.mutation.log
+.coverloop/reports/b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6.glm.log
+.coverloop/reports/b6a1c56e0655edd4b45d4bde4fcb3a615a2722f6.codex.log
+.coverloop/reports/480884369bedf2b49d5051cd33c9bb50e3d5d5fc.json
+.coverloop/reports/1017bf871e0d1721094d1c169d094536d27d8d16.json
+.coverloop/reports/694e9cb1d5892d133df1376dc4a5ae7a1f6c9e49.glm.log
+.coverloop/reports/49268679728fcab83bba6624877cc7a2a7e1bbd9.glm.log
+.coverloop/reports/49268679728fcab83bba6624877cc7a2a7e1bbd9.json
+.coverloop/reports/db56a13cee2505dfcac072e5fe4470f6b20113a9.json
+.coverloop/reports/a7db6d568d30ef2e120662b317c6b87c7c47bb44.json
+.coverloop/reports/b1fbe6b8e5c9c24272a27f42a3c5dd9444716b76.json
+.coverloop/reports/37da1c9d496bec5cab11f85ca1f07fb6805846ca.json
+.coverloop/reports/98c013dbfd246e21b0b47a21dba61c779c7cb89e.codex.log
+.coverloop/reports/c191ba502b28043b629feb9780408f41085bd05c.codex.log
+.coverloop/reports/605f340d75088839a0dff96b0237d6303536838d.codex.log
+.coverloop/reports/37da1c9d496bec5cab11f85ca1f07fb6805846ca.codex.log
+.coverloop/reports/c191ba502b28043b629feb9780408f41085bd05c.mutation.log
+.coverloop/config.json
+
+exec
+/bin/zsh -lc 'PYTHONDONTWRITEBYTECODE=1 python3 bin/coverloop classify' in /Users/[REDACTED:user]/code/coverloop-redact
+exec
+/bin/zsh -lc "sed -n '1360,1396p' tests/test_gate.py; rg --files tests | rg '(property|egress|filter|secret)'" in /Users/[REDACTED:user]/code/coverloop-redact
+ exited 1 in 47ms:
+
+    def test_already_inherited_failed_codex_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected("codex", "L2")
+
+    def test_already_inherited_failed_mutation_run_is_rejected(self):
+        self._assert_already_inherited_failed_run_rejected(
+            "mutation", "L3", ["--mutation-guards", "2"])
+
+    def test_pii_is_redacted_in_committed_transcripts(self):
+        """v2.7.2: home-dir usernames, emails, and UUID session ids never
+        reach a committed transcript (a live transcript had committed a real
+        home path — Codex parity-assessment finding)."""
+        self.init_project()
+        run(["attest", "--tier", "L2", "--codex", "pass", "--codex-run",
+             "echo review by /Users/[REDACTED:user]/proj mail [REDACTED:email] "
+             "session [REDACTED:uuid]"], self.repo)
+        content = self._read_log()
+        self.assertNotIn("[REDACTED:user]", content)
+        self.assertNotIn("[REDACTED:email]", content)
+        self.assertNotIn("12345678-abcd", content)
+        self.assertIn("[REDACTED:user]", content)
+        self.assertIn("[REDACTED:email]", content)
+        self.assertIn("[REDACTED:uuid]", content)
+
+    def test_pii_user_edge_cases(self):
+        """Sol v2.7.2 review #2: single-char + underscore-leading usernames are
+        caught, and a long username can't leak its tail past a length cap."""
+        import glm_secret_filter as f
+        self.assertEqual(f.redact("/home/[REDACTED:user]/p"), "/home/[REDACTED:user]/p")
+        self.assertEqual(f.redact("/home/[REDACTED:user]/p"), "/home/[REDACTED:user]/p")
+        long = "/Users/[REDACTED:user] + "a" * 60 + "/p"
+        out = f.redact(long)
+        self.assertNotIn("a" * 40, out)
+        self.assertEqual(out, "/Users/[REDACTED:user]/p")
+
+    def test_pii_bare_username_outside_paths(self):
+        """2026-10-27: an `ls -la` owner column carried the login into a public transcript while every path occurrence
+
+ succeeded in 13465ms:
+coverloop classify: L1  (2 file(s), working tree vs HEAD (incl. untracked))
+  - L1: source change (no specific rule matched) (bin/glm_secret_filter.py)
+
+Human stop: not required (below L3)
+
+This is a FLOOR, not a verdict: the gate takes the MAX of this, any other --min-tier, and the report's own tier. It can only raise.
+Wire it:  coverloop gate --min-tier "$(coverloop classify --quiet)"
+
+exec
+/bin/zsh -lc "PYTHONDONTWRITEBYTECODE=1 python3 -B -c 'import sys, unittest
+from unittest import mock
+sys.path[:0] = [\"bin\", \"tests\"]
+import glm_secret_filter as f
+import test_gate
+class ReadOnlyPII(test_gate.GateTestCase):
+    def setUp(self): pass
+    def tearDown(self): pass
+names = [n for n in dir(ReadOnlyPII) if n.startswith(\"test_pii_\") and n "'!= "test_pii_is_redacted_in_committed_transcripts"]
+with mock.patch.object(f, "_local_logins", return_value={"otherlogin"}):
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(ReadOnlyPII(n) for n in names))
+sys.exit(not result.wasSuccessful())'"'" in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 927ms:
+test_pii_bare_local_login (__main__.ReadOnlyPII.test_pii_bare_local_login)
+This machine's own login is redacted even when no path in the text names it. ... ok
+test_pii_bare_username_boundaries (__main__.ReadOnlyPII.test_pii_bare_username_boundaries)
+Whole words only: a learned name is not cut out of a longer identifier, a dotted or dashed name, or an [REDACTED:user] ... ok
+test_pii_bare_username_exact_shapes (__main__.ReadOnlyPII.test_pii_bare_username_exact_shapes)
+Codex r2: dotted names in slugs, a trailing '-' or '.' that is part of the name, numeric and non-ASCII logins. ... ok
+test_pii_bare_username_learned_despite_quotes_and_secrets (__main__.ReadOnlyPII.test_pii_bare_username_learned_despite_quotes_and_secrets)
+Codex r1: a quote or `;` after the path, or a secret assignment around it, must not hide the name. ... ok
+test_pii_bare_username_many_names_is_linear (__main__.ReadOnlyPII.test_pii_bare_username_many_names_is_linear)
+Codex r1: thousands of distinct names must not go quadratic (egress redacts before its size check). ... ok
+test_pii_bare_username_markers_and_literals_are_safe (__main__.ReadOnlyPII.test_pii_bare_username_markers_and_literals_are_safe)
+Codex r1: [REDACTED:*] markers are opaque, redaction is idempotent, JSON/number literals are not names. ... ok
+test_pii_bare_username_outside_paths (__main__.ReadOnlyPII.test_pii_bare_username_outside_paths)
+2026-10-27: an `ls -la` owner column carried the login into a public transcript while every path occurrence ... ok
+test_pii_user_edge_cases (__main__.ReadOnlyPII.test_pii_user_edge_cases)
+Sol v2.7.2 review #2: single-char + underscore-leading usernames are ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.053s
+
+OK
+
+exec
+/bin/zsh -lc "rg -n 'def test_.*(redact|egress|property|hash)' tests; nl -ba bin/glm_secret_filter.py | sed -n '145,205p'" in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 0ms:
+tests/test_gate.py:300:    def test_codex_run_captures_hashed_transcript(self):
+tests/test_gate.py:609:    def test_captured_transcript_is_secret_redacted(self):
+tests/test_gate.py:632:    def test_reviewer_command_string_is_redacted(self):
+tests/test_gate.py:748:    def test_secret_named_assignment_is_redacted(self):
+tests/test_gate.py:1041:    def test_attached_log_is_secret_redacted(self):
+tests/test_gate.py:1368:    def test_pii_is_redacted_in_committed_transcripts(self):
+tests/test_gate.py:1672:    def test_secret_filter_redacts_quoted_multiword_value(self):
+tests/test_gate.py:1864:    def test_assign_redaction_still_correct_after_redos_fix(self):
+tests/test_gate.py:1875:    def test_long_prefix_name_still_redacts(self):
+tests/test_properties.py:174:    def test_redact_is_idempotent(self):
+tests/test_properties.py:182:    def test_secret_value_never_survives_redaction(self):
+tests/test_properties.py:200:    def test_scan_redact_agree_on_values(self):
+tests/test_properties.py:387:    def test_redact_still_covers_allowed_code(self):
+tests/test_properties.py:393:    def test_scan_of_redacted_output_is_clean(self):
+tests/test_properties.py:529:    def test_glm_review_redacts_before_egress(self):
+tests/test_properties.py:532:    def test_m3_review_redacts_before_egress(self):
+tests/test_properties.py:535:    def test_every_captured_request_is_redacted(self):
+tests/test_properties.py:545:    def test_choke_point_redacts_and_fails_closed(self):
+tests/test_properties.py:567:    def test_scan_runs_on_the_redacted_text(self):
+tests/test_properties.py:907:    def test_dash_encoded_home_paths_are_redacted(self):
+tests/test_properties.py:1012:    def test_escaped_quote_redaction_is_linear(self):
+tests/test_properties.py:1128:    def test_email_redaction_is_linear_not_quadratic(self):
+tests/test_properties.py:1149:    def test_email_redaction_still_catches_real_addresses(self):
+tests/test_properties.py:1524:    def test_no_secret_value_ever_survives_redaction(self):
+tests/test_properties.py:1552:    def test_redaction_never_makes_the_scan_blind(self):
+   145	_BARE_NAME_SKIP = frozenset({"root", "runner", "shared", "admin", "staff", "user", "users", "home", "guest", "public",
+   146	                             "ubuntu", "nobody", "daemon", "wheel", "everyone", "redacted", "true", "false", "null",
+   147	                             "none", "nan", "infinity"})
+   148	_LEARN_USER_RES = (re.compile(r"(?<![A-Za-z0-9_])/(?:Users|home)/([A-Za-z_][A-Za-z0-9_.-]*)"),
+   149	                   re.compile(r"(?<![A-Za-z0-9_])-(?:Users|home)-([A-Za-z_][A-Za-z0-9_.]*)"))
+   150	_NAME_SHAPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
+   151	_BARE_TOKEN_RE = re.compile(r"\[REDACTED:[a-z-]+\]|(?<![A-Za-z0-9_.-])[A-Za-z0-9_][A-Za-z0-9_.-]*")
+   152	
+   153	
+   154	def _local_logins():
+   155	    names = set()
+   156	    try:
+   157	        import getpass
+   158	        names.add(getpass.getuser())
+   159	    except Exception:
+   160	        pass
+   161	    try:
+   162	        import os, pwd
+   163	        names.add(pwd.getpwuid(os.getuid()).pw_name)
+   164	    except Exception:
+   165	        pass
+   166	    return {n for n in names if n}
+   167	
+   168	
+   169	def _is_number(n):
+   170	    try:
+   171	        float(n)
+   172	        return True
+   173	    except ValueError:
+   174	        return False
+   175	
+   176	
+   177	def _bare_candidates(text):
+   178	    # Coverage is ASCII usernames of the shape below (what the token matcher can see); a local login outside it
+   179	    # (non-ASCII, spaces) is still redacted inside paths but not as a bare word.
+   180	    names = {n for n in _local_logins() if _NAME_SHAPE_RE.fullmatch(n)}
+   181	    for rx in _LEARN_USER_RES:
+   182	        names.update(m.group(1) for m in rx.finditer(text))
+   183	    return {n for n in names
+   184	            if len(n) >= _BARE_NAME_MIN and n.lower() not in _BARE_NAME_SKIP and not _is_number(n)}
+   185	
+   186	
+   187	def _redact_bare_names(text, names):
+   188	    if not names:
+   189	        return text
+   190	    def sub(m):
+   191	        tok = m.group(0)
+   192	        if tok.startswith("[REDACTED:"):
+   193	            return tok
+   194	        if tok in names:
+   195	            return "[REDACTED:user]"
+   196	        core = tok.rstrip(".")                       # sentence punctuation after a name
+   197	        return "[REDACTED:user]" + tok[len(core):] if core in names else tok
+   198	    return _BARE_TOKEN_RE.sub(sub, text)
+   199	
+   200	# ---- scan()-side false-positive gate for ASSIGN_RE (2026-07-15i, operator-directed) ----
+   201	# ASSIGN_RE's name family (...TOKEN/...SECRET/...PASSWORD/...KEY) also matches everyday AUTH-CODE
+   202	# idioms: `autoRefreshToken: [REDACTED:secret-value] test fixtures like `access_token: '[REDACTED:secret-value]'`, code references like
+   203	# `storageKey: platformStorageKey(url)` -- which made scan() structurally unable to review
+   204	# supabase-client code. The gate below narrows ONLY scan() (the egress block); redact() is unchanged
+   205	# (over-redacting a transcript is safe; over-blocking an egress packet breaks legitimate reviews).
+
+exec
+/bin/zsh -lc "sed -n '1,40p' tests/test_properties.py; sed -n '145,215p' tests/test_properties.py; sed -n '515,580p' tests/test_properties.py; sed -n '890,925p' tests/test_properties.py" in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 772ms:
+#!/usr/bin/env python3
+"""Property-based / fuzz / concurrency tests (R3 hardening).
+
+The unit suite (test_gate.py) proves specific inputs; this proves INVARIANTS
+over many seeded-random inputs, plus filesystem-race behavior the unit tests
+can't reach. stdlib-only (random with a FIXED seed for determinism — no
+hypothesis dependency, and reproducible in CI).
+
+Run:  python3 tests/test_properties.py
+"""
+import json
+import os
+import random
+import re
+import string
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
+BIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "coverloop")
+import glm_secret_filter as F
+
+SEED = 20260711  # fixed -> deterministic, reproducible failures
+
+# ---------------------------------------------------------------------------
+# The suite drives the REAL reviewer CLIs (that is the point of the egress
+# tests: they assert on the exact bytes that would leave the machine). Their
+# do_request is stubbed, so nothing is ever sent — but log_egress still wrote
+# `attempt` markers to the PRODUCTION egress log, and the daily spend cap counts
+# exactly those markers — 6 per run, measured (13 log lines: 6 attempts, 6
+# results, 1 refusal). Small per run, and the reason every real review was
+# refused by late afternoon after a day of re-running the suite. That is how a
+# test suite silently consumed production quota.
+#
+# The whole module runs against a temporary log, and tearDownModule FAILS if the
+
+
+def _value_of(secret, label):
+    """The substring that must NOT survive redaction (for assignment, the value
+    after the separator; for bearer/dburl the credential portion)."""
+    if label == "secret-assignment":
+        for sep in ("=", ":"):
+            if sep in secret:
+                [REDACTED:secret-value] secret.split(sep, 1)[1].strip().strip("'\"")
+    if label == "bearer":
+        return secret.split(None, 1)[1]
+    if label == "db-url-cred":
+        return secret.split("://", 1)[1].split("@", 1)[0]  # user:pass
+    return secret
+
+
+def gen_noise(rng):
+    """Benign review-prose context that must never be corrupted."""
+    words = ["the", "gate", "review", "risk-based", "task-start", "commit", "diff",
+             "MONKEY=banana", "see file.py:42", "a normal sentence", "HOTKEY=ctrl"]
+    return " ".join(rng.choice(words) for _ in range(rng.randint(0, 8)))
+
+
+class SecretFilterProperties(unittest.TestCase):
+    N = 1500
+
+    def setUp(self):
+        self.rng = random.Random(SEED)
+
+    def test_redact_is_idempotent(self):
+        """redact(redact(x)) == redact(x) for arbitrary mixed input — a second
+        pass must be a fixed point (no placeholder re-triggers a pattern)."""
+        for _ in range(self.N):
+            s = gen_noise(self.rng) + " " + gen_secret(self.rng)[0] + " " + gen_noise(self.rng)
+            once = F.redact(s)
+            self.assertEqual(F.redact(once), once, "redact not idempotent on %r" % s)
+
+    def test_secret_value_never_survives_redaction(self):
+        """The actual secret VALUE must not appear in redact() output — the core
+        privacy guarantee, over many shapes and surrounding contexts."""
+        for _ in range(self.N):
+            secret, label = gen_secret(self.rng)
+            text = "%s %s %s" % (gen_noise(self.rng), secret, gen_noise(self.rng))
+            out = F.redact(text)
+            val = _value_of(secret, label)
+            if len(val) >= 8:  # short/degenerate values can coincide with prose; only assert on real ones
+                self.assertNotIn(val, out, "value leaked (label=%s): %r -> %r" % (label, secret, out))
+
+    def test_scan_flags_every_generated_secret(self):
+        """scan() (the egress tripwire) must return non-empty for every real
+        secret shape — a miss here means a secret leaves the machine."""
+        for _ in range(self.N):
+            secret, label = gen_secret(self.rng)
+            self.assertTrue(F.scan(secret), "scan missed %s: %r" % (label, secret))
+
+    def test_scan_redact_agree_on_values(self):
+        """If scan flags a VALUE-shaped secret, redact must change the text
+        (consistency: detect => remove). Name-only assignment excluded (redact
+        keeps the name by design)."""
+        for _ in range(self.N):
+            secret, label = gen_secret(self.rng)
+            if label == "secret-assignment":
+                continue
+            self.assertNotEqual(F.redact(secret), secret, "flagged but not redacted: %r" % secret)
+
+    def test_no_redos_on_random_adversarial(self):
+        """Randomized pathological inputs (long runs, boundary spam, unbalanced
+        quotes, many BEGIN markers) must each scan+redact in ~linear time."""
+        rng = self.rng
+        for _ in range(40):
+            shape = rng.choice(["run", "spam", "quote", "begins", "mixed"])
+        user_msg = payload["messages"][-1]["content"]
+        expected = F.redact(("TASK:\n\n\nPROVIDED INPUT:\n" + raw).strip())
+        self.assertEqual(user_msg, expected, "%s user packet is not redact(raw)" % cli_name)
+        # 4. a legitimate auth-code packet still EGRESSES (scan does not refuse it) — the FP fix.
+        #    NOTE (accepted trade): redact() is maximal, so secret-family ASSIGNMENT VALUES are
+        #    blanked in the egressed packet (`autoRefreshToken: [REDACTED:secret-value] -> `[REDACTED:...]`); the
+        #    reviewer still receives all non-assignment code (structure, control flow, prose). We
+        #    assert the packet is SENT and prose survives, NOT byte-identity.
+        clean = "please review this diff for correctness and reuse concerns"
+        p2 = self._run_cli(cli_name, clean, argv)
+        self.assertIsNotNone(p2, "%s refused a clean auth-code packet (FP fix regressed)" % cli_name)
+        self.assertIn("review this diff for correctness", p2["messages"][-1]["content"],
+                      "%s dropped non-assignment prose" % cli_name)
+
+    def test_glm_review_redacts_before_egress(self):
+        self._assert_invariant("glm-review", ["--mode", "redteam"])
+
+    def test_m3_review_redacts_before_egress(self):
+        self._assert_invariant("m3-review", ["--mode", "audit"])
+
+    def test_every_captured_request_is_redacted(self):
+        """EVERY do_request payload on a run (not just the last) carries no raw secret — a raw
+        request followed by a redacted one cannot pass."""
+        raw = "line one\nDB_PASSWORD = '[REDACTED:secret-value]'\nline two"
+        self._run_cli("glm-review", raw, ["--mode", "redteam"])
+        for p in _CAPTURED.get("all", []):
+            for m in p.get("messages", []):
+                if isinstance(m.get("content"), str):
+                    self.assertNotIn(self.SECRET, m["content"], "a captured request egressed a raw secret")
+
+    def test_choke_point_redacts_and_fails_closed(self):
+        """do_request's _enforce_egress_redaction is the SINGLE egress gate: it redacts every
+        message (covers ping/self-test/any caller) and RAISES if a redacted packet still scans."""
+        import importlib.util
+        for cli in ("glm-review", "m3-review"):
+            path = os.path.join(os.path.dirname(CLI), cli)
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(cli.replace("-", "_"), loader=None))
+            mod.__dict__["__file__"] = path
+            with open(path) as _fh:
+                exec(compile(_fh.read(), path, "exec"), mod.__dict__)
+            # a raw-secret payload handed straight to the choke point is redacted in place
+            payload = {"messages": [{"role": "user", "content": "x_password = '[REDACTED:secret-value]'"}]}
+            out = mod._enforce_egress_redaction(payload)
+            self.assertNotIn(self.SECRET, out["messages"][0]["content"])
+            self.assertIn("[REDACTED:", out["messages"][0]["content"])
+            # the ping self-test payload passes the gate unchanged (constant, clean)
+            ping = {"messages": [{"role": "user", "content": "ping"}]}
+            self.assertEqual(mod._enforce_egress_redaction(ping)["messages"][0]["content"], "ping")
+            # a LITERAL_PATTERNS name that redact() leaves (by design) makes the gate FAIL CLOSED
+            with self.assertRaises(RuntimeError):
+                mod._enforce_egress_redaction({"messages": [{"role": "user", "content": "note: VERCEL_TOKEN mentioned"}]})
+
+    def test_scan_runs_on_the_redacted_text(self):
+        """The tripwire fail-closes on what would actually LEAVE: a packet whose only secret is a
+        redactable assignment egresses REDACTED (not refused), while a LITERAL_PATTERNS name-mention
+        (never redacted by design) still refuses outright."""
+        payload = self._run_cli("glm-review", "x_password = '[REDACTED:secret-value]'", ["--mode", "redteam"])
+        self.assertIsNotNone(payload)  # redacted -> clean -> sent
+        refused = self._run_cli("glm-review", "context mentions VERCEL_TOKEN here", ["--mode", "redteam"])
+        self.assertIsNone(refused, "LITERAL_PATTERNS mention must still refuse egress")
+
+
+# ---- concurrency / filesystem-race tests against the real CLI ----
+def _run(args, cwd, timeout=60):
+    return subprocess.run([sys.executable, CLI] + args, cwd=cwd,
+                          capture_output=True, text=True, timeout=timeout)
+            kd = _os.path.join(d, ".config", "openrouter")
+            _os.makedirs(kd)
+            with open(_os.path.join(kd, "api_key"), "w") as fh:
+                fh.write("[REDACTED:sk-key]")
+            out = self._run(d, d)
+            self.assertNotIn("SECRETVALUE123456", out.stdout + out.stderr)
+
+class CommittedEvidenceHasNoPII(unittest.TestCase):
+    """A privacy tool must not leak the one identifier it advertises removing.
+
+    Regression: an adversarial audit of this repo found the maintainer's
+    username committed 16 times in a captured transcript. Claude Code
+    slugifies a project path into a directory name (/Users/[REDACTED:user]/x ->
+    -Users-[REDACTED:user]-x), and the PII pattern only matched the slash form — so the
+    dash-encoded username sailed straight into a PUBLIC repo. It was invisible
+    precisely because the shape looked nothing like a path."""
+
+    def test_dash_encoded_home_paths_are_redacted(self):
+        for raw, must_go in (("-Users-[REDACTED:user]-Downloads-proj", "[REDACTED:user]"),
+                             ("-home-[REDACTED:user]-src", "bob"),
+                             ("/Users/[REDACTED:user]/x", "[REDACTED:user]"),
+                             ("/home/[REDACTED:user]/y", "[REDACTED:user]")):
+            out = F.redact(raw)
+            self.assertNotIn(must_go, out, f"username survived redaction: {raw} -> {out}")
+            self.assertIn("[REDACTED:user]", out, out)
+
+    def test_pii_labels_are_not_position_coupled(self):
+        """redact() used to index PII_PATTERNS[0..2], so inserting a pattern
+        shifted every replacement onto the wrong label."""
+        self.assertIn("[REDACTED:user]", F.redact("-Users-[REDACTED:user]-x"))
+        self.assertEqual(F.redact("[REDACTED:email]"), "[REDACTED:email]")
+
+    def test_no_committed_evidence_contains_a_home_username(self):
+        """Scan the tracked evidence directory for un-redacted home paths."""
+        import subprocess, re as _re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+exec
+/bin/zsh -lc "PYTHONDONTWRITEBYTECODE=1 python3 -B -c 'import sys, json
+from unittest import mock
+sys.path[:0] = [\"bin\", \"tests\"]
+import glm_secret_filter as f
+import test_properties as p
+with mock.patch.object(f, \"_local_logins\", return_value={\"otherlogin\"}):
+    for name in (\"test_redact_is_idempotent\", \"test_secret_value_never_survives_redaction\", \"test_scan_redact_agree_on_values\"):
+        case = p.SecretFilterProperties(name)
+        case.setUp()
+        getattr(case, name)()
+        print(name, \"PASS\")
+    assert f.redact(\"-Users-[REDACTED:user]-proj owner [REDACTED:user] unrelated [REDACTED:user]\") == \"-Users-[REDACTED:user]-proj owner [REDACTED:user] unrelated [REDACTED:user]\"
+    for name in (\"[REDACTED:user]\", \"[REDACTED:user].\", \"[REDACTED:user]\", \"_alice\"):
+        out = f.redact(\"/home/[REDACTED:user] + name + \"/x owner \" + name)
+        assert out == \"/home/[REDACTED:user]/x owner [REDACTED:user]\", out
+for login in (\"1e10\", \"1E-10\", \"-1234\", \"1234\", \"12.5\", \"1e+10\", \"1.2e-34\"):
+    with mock.patch.object(f, \"_local_logins\", return_value={login}):
+        raw = \"{\\\"count\\\": \" + login + \"}\"
+        assert f.redact(raw) == raw
+        json.loads(f.redact(raw))
+print(\"Additional dotted, exact trailing-name, and JSON-numeric checks PASS\")'" in /Users/[REDACTED:user]/code/coverloop-redact
+ succeeded in 429ms:
+test_redact_is_idempotent PASS
+test_secret_value_never_survives_redaction PASS
+test_scan_redact_agree_on_values PASS
+Additional dotted, exact trailing-name, and JSON-numeric checks PASS
+
+codex
+All five round-2 findings CLOSED: dotted slugs; exact trailing `-`/`.`; ASCII-shaped local logins with documented limits; numeric logins including `1e10`; FILTER_VERSION bumped to `2026-10-29a`.
+
+No new P0/P1 found.
+
+VERDICT: PASS
+All five round-2 findings CLOSED: dotted slugs; exact trailing `-`/`.`; ASCII-shaped local logins with documented limits; numeric logins including `1e10`; FILTER_VERSION bumped to `2026-10-29a`.
+
+No new P0/P1 found.
+
+VERDICT: PASS
+tokens used
+43,137
