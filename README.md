@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
-[![Tests](https://img.shields.io/badge/tests-254%20passing-34E0B4?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-264%20passing-34E0B4?style=flat-square)](tests/)
 
 [**Install**](#-install) · [**Real bugs it caught**](#-real-bugs-it-caught) · [**What it costs you**](#-what-it-actually-costs-you) · [**What runs on your machine**](#-what-actually-runs-on-your-machine)
 
@@ -97,7 +97,7 @@ printf '%s' 'sk-or-...' > ~/.config/openrouter/api_key && chmod 600 ~/.config/op
 ~/bin/protocol-selftest
 ```
 
-Same tool, more steps — and you own the `PATH` and file modes yourself. `coverloop doctor` works either way and will tell you what's still missing.
+Same tool, more steps — and you own the `PATH` and file modes yourself. `coverloop doctor` works either way and will tell you what's still missing. `protocol-selftest` also warns if a project's `.claude/loop.conf` runs a **full test suite** on every stop (pytest, `go test`, `cargo test`, `npm test`…): keep that hook to a cheap check (typecheck / lint / a narrowed run) and leave the full suite to the gate.
 
 </details>
 
@@ -177,7 +177,7 @@ Three things make this trustworthy rather than decorative:
 
 <br/>
 
-Different training lineages catch different things — that's the whole point of a multi-model loop. Here is the *same code*, red-teamed by **GLM-5.2** (full zero-data-retention) and audited by **MiniMax M3** (a fourth-lineage divergence voice), captured verbatim:
+Different training lineages catch different things — that's the whole point of a multi-model loop. Here is the *same code*, red-teamed by **GLM-5.2** (full zero-data-retention) and audited by **MiniMax M3** (a fourth-lineage divergence voice), captured verbatim. *(These transcripts are from an earlier roster; today's defaults are in the FAQ below — the point, two lineages converging on one fix, is the same.)*
 
 <p align="center"><img src="assets/coverloop-glm-review.svg" width="880" alt="Real GLM-5.2 red-team transcript: REQUEST CHANGES, flags a path-traversal risk, and independently recommends the exact captured-execution-fields fix that GPT-5.6 Sol also reached — two different labs, same catch"></p>
 
@@ -313,7 +313,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 172 cases (unit + property/fuzz + concurrency), stdlib-only, CI green on Linux·macOS (Windows WIP)
+tests/                      the gate's own suite — 264 cases (unit + property/fuzz + concurrency) + 42 hook checks, stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
 
@@ -331,7 +331,7 @@ CHANGELOG.md                the story of how it got here
 
 <details><summary><b>Is my code / are my secrets safe?</b></summary><br/>Privacy is a core design goal, with honest limits. Known <b>secret</b> shapes (keys, tokens, DB credentials, <code>.env</code>-style assignments) are stripped from the payload before any model call; <b>personal identifiers</b> (usernames, emails, session ids) are redacted from committed transcripts but are not egress-blocked — it's a pattern-based tripwire, not a full DLP guarantee. The most sensitive reviews route only to a zero-data-retention endpoint. The gate itself never sends code anywhere — it only reads local files and git metadata.</details>
 
-<details><summary><b>Can I use different models?</b></summary><br/>Yes. The reviewer CLIs route through OpenRouter, so you can swap the models by editing the helper scripts. The <i>roles</i> (builder · diff-gate · red-team · auditor · human gate) matter more than the exact models.</details>
+<details><summary><b>Can I use different models?</b></summary><br/>Yes. Today's defaults: the <b>diff gate</b> is Codex CLI (on whatever model your ChatGPT plan provides — we run the strongest available at high reasoning effort); the <b>plan reviewer</b> behind the <code>glm-*</code> helpers is <b>Kimi K3</b> via OpenRouter on a zero-data-retention route (<code>glm-review --zdr-selftest</code> proves the route); at L3 the second signal beyond tests and Codex is <b>guard-break evidence</b>, not another model. To swap a reviewer, set <code>GLM_MODEL</code> (and <code>REVIEWER_NAME</code>) or edit the helper scripts. The <i>roles</i> (builder · diff-gate · plan red-team · human gate) matter more than the exact models — and a model choice is a claim to re-test, not a constant.</details>
 
 <details><summary><b>Windows?</b></summary><br/>Supported today on <b>Linux and macOS</b> — CI runs the full stdlib-only suite green on both across Python 3.9/3.11/3.13. <b>Native Windows is in progress</b>: the gate runs, but some tests still assume POSIX file semantics (a few leak file handles that Windows locks), so the Windows CI leg is not green yet — run under <a href="https://learn.microsoft.com/windows/wsl/install">WSL</a> for now. The <i>shell hooks</i> are bash (WSL or Git Bash) regardless.</details>
 
