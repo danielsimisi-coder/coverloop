@@ -12,7 +12,7 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
 - **A second pass in the same conversation:** after its first answer the helper asks once for anything not yet reported.
   On 6 runs through the real helper (K3, diff alone), it named the untested non-linear histories in 2 of 2 runs on one
   change, a gap no first pass in any of these runs named. It found no known P1, added some speculation ("possible missing
-  import"), and doubles the calls, so the daily review cap counts two. If it fails, the first answer stands.
+  import"), and doubles the calls, so the daily review cap counts two. If the request fails, the first answer stands, and the audit log records the second pass apart. A spend-cap refusal still exits non-zero.
 - **Not adopted:** a second run on K3.1 Pro. Published measurements found a different lineage adds more than repeating a
   model, and the protocol's rule against asking several models the same question stands. The rule against speculative
   findings gets one named exception, this helper, because of the triage rule.

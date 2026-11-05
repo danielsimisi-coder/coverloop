@@ -214,31 +214,42 @@ def zdr_selftest():
         log_egress(MODEL, "zdr-selftest", True, None, "n/a", 0, "", {"error": str(e)})
         return 1
 
-def second_pass(payload, first, mode, char_count, payload_sha):
-    """Optional by design: the first answer is already printed, so any failure here is
-    noted and leaves it standing. Same choke point, same privacy path, same spend cap."""
+def second_pass(payload, first, mode):
+    """Optional by design: the first answer is already printed, so a request failure is
+    audited and noted and leaves it standing. Same choke point, same privacy path, same
+    spend cap: a cap refusal or an audit-write failure still exits as it does anywhere."""
     follow_up = dict(payload)
     follow_up["messages"] = payload["messages"] + [
         {"role": "assistant", "content": first},
         {"role": "user", "content": SECOND_PASS},
     ]
+    sent = redact(f"{first}\n{SECOND_PASS}")
+    char_count, payload_sha = len(sent), sha(sent)
+    extra = {"pass": 2}
+    egress_cap.reserve_daily_slot(
+        lambda: log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count, payload_sha,
+                           {**extra, "phase": "attempt"}))
     try:
-        egress_cap.reserve_daily_slot(
-            lambda: log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count,
-                               payload_sha, {"phase": "attempt", "pass": 2}))
         data = do_request(follow_up, TIMEOUT)
-        log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha,
-                   {"served_by": data.get("provider"), "phase": "result", "pass": 2})
-        choice = data["choices"][0]
-        out = choice["message"].get("content")
-        if not out or choice.get("finish_reason") == "length":
-            raise RuntimeError("incomplete output")
-        print("\n--- second pass ---\n" + out)
-    except SystemExit:
-        raise
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        zdr_denied = (e.code == 404 and "zero data retention" in body.lower())
+        log_egress(MODEL, mode, USE_ZDR, e.code, "clean", char_count, payload_sha,
+                   {**extra, "zdr_denied": zdr_denied})
+        print(f"NOTE: second pass failed (HTTP {e.code}); the first pass above stands.", file=sys.stderr)
+        return
     except Exception as e:
-        print(f"NOTE: second pass did not complete ({e.__class__.__name__}); the first pass above stands.",
-              file=sys.stderr)
+        log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count, payload_sha, {**extra, "error": str(e)})
+        print(f"NOTE: second pass failed ({e.__class__.__name__}); the first pass above stands.", file=sys.stderr)
+        return
+    log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha,
+               {**extra, "served_by": data.get("provider"), "phase": "result"})
+    choice = data["choices"][0]
+    out = choice["message"].get("content")
+    if out and choice.get("finish_reason") != "length":
+        print("\n--- second pass ---\n" + out)
+    else:
+        print("NOTE: second pass was incomplete; the first pass above stands.", file=sys.stderr)
 
 
 def read_stdin_safely():
@@ -344,7 +355,7 @@ def main():
         if out and choice.get("finish_reason") != "length":
             print(out)
             if mode == "diff":
-                second_pass(payload, out, mode, char_count, payload_sha)
+                second_pass(payload, out, mode)
         else:
             # empty OR finish_reason:length => incomplete (budget burned on reasoning). NOT an all-clear.
             print("ERROR: incomplete reviewer output (empty or finish_reason:length). "

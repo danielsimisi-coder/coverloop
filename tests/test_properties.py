@@ -475,7 +475,7 @@ class EgressRedactionInvariant(unittest.TestCase):
             captured["timeout"] = timeout
             if len(captured["all"]) == getattr(self, "_fail_call", None):
                 raise RuntimeError("provider down")
-            return {"choices": [{"message": {"content": getattr(self, "_answer", "ok")}, "finish_reason": "stop"}],
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                     "provider": "test"}
 
         env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20, "M3_ENABLED": "1"}
@@ -571,16 +571,75 @@ class EgressRedactionInvariant(unittest.TestCase):
         self.assertEqual(self._last_exit, 0)
         self.assertEqual(self._last_stdout.strip(), "ok")
 
-    def test_a_secret_echoed_by_the_model_is_redacted_in_the_second_pass(self):
-        """The model's first answer goes back out, so it passes the same choke
-        point as everything else."""
-        self._answer = f"x_password = '{self.SECRET}'"
-        try:
-            self._run_cli("glm-review", "a diff", ["--mode", "diff", "t"])
-        finally:
-            del self._answer
-        self.assertEqual(len(self._last_requests), 2)
-        self.assertNotIn(self.SECRET, json.dumps(self._last_requests[1]))
+    def _run_http(self, responses, cap="0"):
+        """The real do_request, cap and audit log; only the network is fake."""
+        import importlib.util, io, contextlib, tempfile, urllib.error
+        path = os.path.join(os.path.dirname(CLI), "glm-review")
+        spec = importlib.util.spec_from_loader("glm_review", loader=None)
+        mod = importlib.util.module_from_spec(spec)
+        sent = []
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def fake_urlopen(req, timeout=None):
+            sent.append(json.loads(req.data.decode()))
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return Resp(json.dumps({"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
+                                    "provider": "test"}).encode())
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "egress.log")
+            env = {"OPENROUTER_API_KEY": "x" * 20, "COVERLOOP_EGRESS_LOG": log, "COVERLOOP_DAILY_REVIEW_CAP": cap}
+            old_env = {k: os.environ.get(k) for k in env}
+            os.environ.update(env)
+            old_argv, old_stdin = sys.argv, sys.stdin
+            sys.argv, sys.stdin = ["glm-review", "--mode", "diff", "t"], io.StringIO("a diff")
+            out, code = io.StringIO(), 0
+            try:
+                mod.__dict__["__file__"] = path
+                exec(compile(open(path).read(), path, "exec"), mod.__dict__)
+                real = mod.urllib.request.urlopen
+                mod.urllib.request.urlopen = fake_urlopen
+                try:
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                        try:
+                            mod.main()
+                        except SystemExit as e:
+                            code = e.code
+                finally:
+                    mod.urllib.request.urlopen = real
+            finally:
+                sys.argv, sys.stdin = old_argv, old_stdin
+                for k, v in old_env.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            lines = [json.loads(ln) for ln in open(log)] if os.path.exists(log) else []
+        return code, out.getvalue(), sent, lines
+
+    def test_second_pass_goes_through_the_real_choke_point_and_is_audited_apart(self):
+        code, out, sent, log = self._run_http([f"x_password = '{self.SECRET}'", "NONE"])
+        self.assertEqual((code, len(sent)), (0, 2))
+        self.assertNotIn(self.SECRET, json.dumps(sent[1]))
+        self.assertEqual(sent[1]["provider"], sent[0]["provider"])
+        second = [r for r in log if r.get("pass") == 2]
+        self.assertEqual([r["phase"] for r in second], ["attempt", "result"])
+        first_sha = [r for r in log if "pass" not in r][0]["sha256_of_payload"]
+        self.assertNotEqual(second[0]["sha256_of_payload"], first_sha)
+
+    def test_second_pass_takes_its_own_spend_slot(self):
+        code, out, sent, log = self._run_http(["first", "second"], cap="1")
+        self.assertEqual(len(sent), 1)
+        self.assertNotEqual(code, 0)
+        self.assertIn("first", out)  # the answer already paid for is not lost
+
+    def test_a_refused_second_pass_is_audited_and_the_first_stands(self):
+        import io, urllib.error
+        denied = urllib.error.HTTPError("u", 404, "m", {}, io.BytesIO(b"no zero data retention endpoint"))
+        code, out, sent, log = self._run_http(["first", denied])
+        self.assertEqual(code, 0)
+        self.assertIn("first", out)
+        last = [r for r in log if r.get("pass") == 2][-1]
+        self.assertEqual((last["http_status"], last["zdr_denied"]), (404, True))
 
     def test_timeout_default_stays_and_the_env_overrides_it(self):
         self._run_cli("glm-review", "x", ["--mode", "redteam", "t"])
