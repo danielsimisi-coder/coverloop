@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from glm_secret_filter import SECRET_PATTERNS, FILTER_VERSION, scan, redact
 import egress_cap  # daily reviewer-call spend cap (R6)
 
-CLI_VERSION = "2.1.0"
+CLI_VERSION = "2.2.0"
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Default reviewer since 2.1.0 (2026-09-23): Kimi K3 — a known-answer pilot on three historical
@@ -22,6 +22,7 @@ MODEL = os.getenv("GLM_MODEL", "moonshotai/kimi-k3")
 MAX_CHARS = int(os.getenv("GLM_MAX_CHARS", "120000"))
 MAX_COMPLETION_TOKENS = int(os.getenv("GLM_MAX_COMPLETION_TOKENS", "4096"))
 REASONING_EFFORT = os.getenv("GLM_REASONING_EFFORT", "high")
+TIMEOUT = int(os.getenv("GLM_TIMEOUT", "120"))
 USE_ZDR = True  # ZDR mandatory, NOT env-disableable (Codex P1; protocol Hard Boundaries)
 # The role prompts below name the reviewer ("You are GLM-5.2 as …"). The engine
 # itself — privacy gate, secret filter, egress log, spend cap — is model-agnostic,
@@ -59,6 +60,22 @@ Severity:
 - P1 = likely serious issue.
 - P2 = improvement, edge case, docs, naming, or ambiguous requirement.
 If ambiguous, do not mark P0.""",
+    # Measured on known misses (2026-11-05, CHANGELOG): the same two models found bugs every earlier
+    # run missed once they had these questions AND were told to report what they could not rule out.
+    # Neither change alone did. Advisory output: every finding is a claim for the builder to verify.
+    "diff": """You are GLM-5.2 as an adversarial read-only reviewer of a finished change. You are NOT the gate.
+Find defects in the change itself: logic errors, fail-open paths, claims the code does not support, missing or wrong tests.
+A limitation the change states about itself is a claim to challenge, not a reason to stop looking.
+Answer each question in a CHECKED line:
+(1) Existing data: what happens when reports, records or configs written by earlier versions meet this code?
+(2) Claims: for each statement this change adds to docs, comments or the changelog, does the code support it for all inputs?
+(3) Tests: which new behaviour has no test that would fail if the behaviour broke?
+(4) Failure paths: for each new branch, error, timeout, missing or corrupt input, does it fail closed?
+Output:
+- 3 to 8 lines, exactly `CHECKED <place> | <what you tried to break> | <what happened>`. Required whatever you find; a reply with only a conclusion is invalid.
+- Then one line per finding, exactly `FINDING [P0|P1|P2] <short title> | <file:place> | <concrete input or sequence> | <minimal fix> | confidence: high|medium|low`
+Rate severity by the impact if the finding is true. Report every suspect you could not rule out; do not withhold one because you are unsure, a human verifies every finding.
+Do not report style or naming. Give no overall verdict: no findings does not mean the change is safe.""",
     "code": """You are GLM-5.2 as an optional implementation specialist.
 You may propose code or a unified diff patch.
 You cannot edit files, execute commands, access shell, access repo, access files, or access secrets.
@@ -202,7 +219,7 @@ def main():
     # A real help branch BEFORE task parsing — without it, '--help' was treated
     # as review text and headed toward a model request (Codex v2.7.2 finding).
     if "--help" in args or "-h" in args:
-        print("usage: glm-review [--mode ask|scout|tests|audit|redteam|code] [--version] "
+        print("usage: glm-review [--mode ask|scout|tests|audit|redteam|diff|code] [--version] "
               "[--zdr-selftest] [--no-git] TASK... (optional: pipe text via stdin)\n"
               "Least-privilege advisory reviewer CLI (default model: " + MODEL + ", via a ZDR-only route): sends ONLY the explicit task + piped text "
               "(secret-scanned, fail-closed) to GLM via full-ZDR OpenRouter. No file/shell/repo "
@@ -227,7 +244,7 @@ def main():
     if "--mode" in args:
         i = args.index("--mode")
         if i + 1 >= len(args):
-            print("ERROR: --mode requires ask/scout/tests/audit/redteam/code", file=sys.stderr)
+            print("ERROR: --mode requires ask/scout/tests/audit/redteam/diff/code", file=sys.stderr)
             sys.exit(2)
         mode = args[i + 1]
         del args[i:i+2]
@@ -286,7 +303,7 @@ def main():
         egress_cap.reserve_daily_slot(
             lambda: log_egress(MODEL, mode, USE_ZDR, None, "clean", char_count,
                                payload_sha, {"phase": "attempt"}))
-        data = do_request(payload, 120)
+        data = do_request(payload, TIMEOUT)
         served = data.get("provider")
         log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha, {"served_by": served, "phase": "result"})
         choice = data["choices"][0]

@@ -472,6 +472,7 @@ class EgressRedactionInvariant(unittest.TestCase):
             enforced = mod._enforce_egress_redaction(payload)
             captured["all"].append(enforced)
             captured["payload"] = enforced
+            captured["timeout"] = timeout
             return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                     "provider": "test"}
 
@@ -497,6 +498,7 @@ class EgressRedactionInvariant(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+        self._last_timeout = captured.get("timeout")
         return captured.get("payload")
 
     def _assert_invariant(self, cli_name, argv):
@@ -525,6 +527,36 @@ class EgressRedactionInvariant(unittest.TestCase):
         self.assertIsNotNone(p2, "%s refused a clean auth-code packet (FP fix regressed)" % cli_name)
         self.assertIn("review this diff for correctness", p2["messages"][-1]["content"],
                       "%s dropped non-assignment prose" % cli_name)
+
+    def test_diff_mode_asks_the_questions_and_reports_what_it_cannot_rule_out(self):
+        """v2.12.5: the measured difference was the questions AND the wording
+        together. Losing either one silently reverts to the wording that
+        missed every known bug."""
+        payload = self._run_cli("glm-review", "a diff", ["--mode", "diff", "review this"])
+        system = payload["messages"][0]["content"]
+        for needed in ("Existing data", "Claims", "Tests:", "Failure paths",
+                       "Report every suspect", "not a reason to stop looking"):
+            self.assertIn(needed, system)
+        self.assertNotIn("GLM-5.2", system)
+        self.assertNotIn("VERDICT", system)  # advisory: no overall pass to lean on
+
+    def test_timeout_default_stays_and_the_env_overrides_it(self):
+        self._run_cli("glm-review", "x", ["--mode", "redteam", "t"])
+        self.assertEqual(self._last_timeout, 120)
+        os.environ["GLM_TIMEOUT"] = "600"
+        try:
+            self._run_cli("glm-review", "x", ["--mode", "diff", "t"])
+        finally:
+            del os.environ["GLM_TIMEOUT"]
+        self.assertEqual(self._last_timeout, 600)
+
+    def test_diff_wrapper_sets_the_limits_a_diff_packet_needs(self):
+        """A 130-155 KB packet takes 2-6 minutes: the helper's defaults refuse
+        it, or time out on it, before any review happens."""
+        src = open(os.path.join(os.path.dirname(CLI), "glm-diff-review"), encoding="utf-8").read()
+        self.assertTrue(os.access(os.path.join(os.path.dirname(CLI), "glm-diff-review"), os.X_OK))
+        for needed in ("GLM_TIMEOUT=600", "GLM_MAX_CHARS=200000", "--mode diff"):
+            self.assertIn(needed, src)
 
     def test_glm_review_redacts_before_egress(self):
         self._assert_invariant("glm-review", ["--mode", "redteam"])
@@ -2128,7 +2160,7 @@ class BaselineWalkHasNoCap(unittest.TestCase):
     def test_history_before_the_anchor_is_not_read(self):
         """A pinned decision (Codex v2.12.4 round 1). The anchor stands for
         everything before it, so the walk does not read that history — and a
-        pre-anchor object git cannot read no longer makes the floor unknowable.
+        pre-anchor tree or file git cannot read no longer makes the floor unknowable.
         The full replay does read it and refuses. v2.12.3 never read history
         beyond its 100-report window either: those reads were never an
         integrity check. What the floor depends on, anchor..HEAD, must still be
@@ -2146,6 +2178,37 @@ class BaselineWalkHasNoCap(unittest.TestCase):
             self.assertEqual(self.mod._validated_baseline(d, head), (mig, True))
             code, out = self._head_floor(d)
             self.assertEqual((code, out["tier"]), (0, "L0"), out)
+
+    def test_a_missing_commit_before_the_anchor_still_refuses(self):
+        """The limit of the decision above: rev-list walks every commit, so a
+        missing commit object is not skipped by the anchor. It refuses."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._repo(d)
+            mig = self._commit(d, "migrations/1.sql", "drop table x;\n", "migration")
+            self._report(d, mig, "L3", **self.L3_EVIDENCE)
+            self._commit(d, "NOTES.md", "evidence\n", "evidence")
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            os.remove(os.path.join(d, ".git", "objects", root[:2], root[2:]))
+            self.assertEqual(self.mod._validated_baseline(d, head), (None, False))
+
+    def test_the_walk_lists_history_without_a_commit_limit(self):
+        """v2.12.4 removed `rev-list --max-count=2000` too, but every history
+        here is far shorter than that, so only the call itself can pin it."""
+        with tempfile.TemporaryDirectory() as d:
+            self._repo(d)
+            head = self._commit(d, "docs/guide.md", "docs only\n", "docs-only change")
+            real, calls = self.mod.git, []
+            def spy(args, **kw):
+                calls.append(args)
+                return real(args, **kw)
+            self.mod.git = spy
+            try:
+                self.mod._validated_baseline(d, head)
+            finally:
+                self.mod.git = real
+            walks = [a for a in calls if a and a[0] == "rev-list"]
+            self.assertTrue(walks)
+            self.assertFalse([a for a in walks if any(str(x).startswith(("--max-count", "-n")) for x in a)], walks)
 
 class SuiteCollectsItself(unittest.TestCase):
     """The entry point is load-bearing, not decorative.

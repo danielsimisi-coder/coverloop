@@ -2,6 +2,30 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
+## 2026-11-05 — v2.12.5: a sharper advisory diff review, measured first (contract v2.11)
+
+- **`glm-diff-review` (new):** an advisory review of a finished change. It adds four fixed questions (existing data,
+  claims, untested behaviour, failure paths), asks for every suspect with a confidence, and gives no overall verdict.
+  It is not a gate and adds no gate requirement.
+- **At L3:** run it twice in parallel, on Kimi K3 and Kimi K3.1 Pro. A run that fails is noted and does not block.
+- **Why, measured:** known-answer runs on four real Coverloop changes. With the older wording, 6 of 6 runs missed the P1 in
+  each of two changes. With the new wording, K3 found one in 1 of 3 runs and K3.1 Pro found the other in 2 of 3.
+  Questions alone or the wording alone did not find them (K3.1 Pro, 2 runs each).
+- **Limits of that evidence:** few runs, and the questions were written knowing those bugs, so it is a good sign and not
+  proof. Most runs still missed. Gemini 4 Argon reported nothing in 6 of 6 valid runs and was not adopted.
+- **Those runs are not what the helper does on this repo.** They sent the diff plus all of `bin/coverloop` straight to
+  the provider. The secret filter refuses that file (it names many secret patterns), and it stays that way. Through the
+  real helper, on the diff alone, 4 runs found neither P1 as such: K3 flagged the untested already-laundered path as a
+  P2 in 1 of 2 runs, and K3.1 Pro flagged the whole-history listing and the untested 2000-commit limit. Packets from
+  repos whose code does not name secret patterns should keep their full context; that is not measured here.
+- **Cost, measured:** with full context about $0.40 and 4-6 min for K3, about $0.10 and 2 min for K3.1 Pro, per run.
+  On the diff alone, 1-2 min.
+- **Fixed, found by those runs:**
+  - The v2.12.4 note said an unreadable object before the anchor no longer matters. That holds for trees and files; a
+    missing commit object still refuses (fail closed). Wording corrected, and the refusal is now pinned by a test.
+  - Nothing tested the removal of the 2000-commit `rev-list` limit. A test now pins it.
+- **Also:** `GLM_TIMEOUT` sets the reviewer helper's request timeout (default unchanged, 120 s).
+
 ## 2026-10-29 — the transcript privacy filter also redacts bare usernames (filter 2026-10-29a; no protocol change)
 
 - **The leak:** a username outside a path — the owner column of `ls -l`, `whoami`, `id` — reached a release
@@ -68,8 +92,9 @@ is L2 by breadth, so the chain never validated.
   anywhere, the floor still covers everything from the root, the root's own
   files included.
 - **One deliberate difference from a full replay:** history *before* the
-  anchor is not read, so a git object there that cannot be read no longer
-  makes the floor unknowable. The full replay would refuse, and so did
+  anchor is not diffed, so a tree or file there that cannot be read no longer
+  makes the floor unknowable (a missing *commit* object still refuses, because
+  `rev-list` walks every commit). The full replay would refuse, and so did
   v2.12.3 when such an object fell within its 100-report window. It never
   read history beyond that window, so those reads were never a whole-history
   integrity check. What the floor depends on, `anchor..HEAD`, must still be
