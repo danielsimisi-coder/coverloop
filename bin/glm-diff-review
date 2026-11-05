@@ -1,6 +1,6 @@
 #!/bin/sh
-# A diff packet carries the change plus the files it touches, and thinking through it takes minutes:
-# measured 2-6 min on 130-155 KB packets, past the helper's default 120 s and 120000 chars.
+# Thinking through a diff packet takes minutes (measured 1-6 min), past the helper's default 120 s,
+# and the output budget must fit the CHECKED lines and findings. The 120000-char packet cap stays.
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-GLM_TIMEOUT=600 GLM_MAX_CHARS=200000 GLM_MAX_COMPLETION_TOKENS=24000 \
+GLM_TIMEOUT=600 GLM_MAX_COMPLETION_TOKENS=24000 \
 exec "$DIR/glm-review" --mode diff "$@"

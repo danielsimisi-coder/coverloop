@@ -7,7 +7,15 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
 - **`glm-diff-review` (new):** an advisory review of a finished change. It adds four fixed questions (existing data,
   claims, untested behaviour, failure paths), asks for every suspect with a confidence, and gives no overall verdict.
   It is not a gate and adds no gate requirement.
-- **At L3:** run it twice in parallel, on Kimi K3 and Kimi K3.1 Pro. A run that fails is noted and does not block.
+- **At L3:** run it once after tests and merge its findings with Codex's. Act only on a finding a test or running
+  example shows; list the rest and do not chase them. A run that fails is noted and does not block.
+- **A second pass in the same conversation:** after its first answer the helper asks once for anything not yet reported.
+  On 6 runs through the real helper (K3, diff alone), it named the untested non-linear histories in 2 of 2 runs on one
+  change, a gap no first pass in any of these runs named. It found no known P1, added some speculation ("possible missing
+  import"), and doubles the calls, so the daily review cap counts two. If it fails, the first answer stands.
+- **Not adopted:** a second run on K3.1 Pro. Published measurements found a different lineage adds more than repeating a
+  model, and the protocol's rule against asking several models the same question stands. The rule against speculative
+  findings gets one named exception, this helper, because of the triage rule.
 - **Why, measured:** known-answer runs on four real Coverloop changes. With the older wording, 6 of 6 runs missed the P1 in
   each of two changes. With the new wording, K3 found one in 1 of 3 runs and K3.1 Pro found the other in 2 of 3.
   Questions alone or the wording alone did not find them (K3.1 Pro, 2 runs each).
@@ -17,12 +25,12 @@ Operational history of the Coverloop Multi-Model Production Protocol. The live d
   the provider. The secret filter refuses that file (it names many secret patterns), and it stays that way. Through the
   real helper, on the diff alone, 4 runs found neither P1 as such: K3 flagged the untested already-laundered path as a
   P2 in 1 of 2 runs, and K3.1 Pro flagged the whole-history listing and the untested 2000-commit limit. Packets from
-  repos whose code does not name secret patterns should keep their full context; that is not measured here.
-- **Cost, measured:** with full context about $0.40 and 4-6 min for K3, about $0.10 and 2 min for K3.1 Pro, per run.
-  On the diff alone, 1-2 min.
+  repos whose code does not name secret patterns can keep their context up to the usual 120000-char cap, which this
+  helper does not raise (those full-context packets were 130-155 KB); that is not measured here.
+- **Cost, measured:** with both passes on the diff alone, K3 cost $0.08-0.36 and took 1-8 min per review.
 - **Fixed, found by those runs:**
-  - The v2.12.4 note said an unreadable object before the anchor no longer matters. That holds for trees and files; a
-    missing commit object still refuses (fail closed). Wording corrected, and the refusal is now pinned by a test.
+  - The v2.12.4 note said an unreadable object before the anchor no longer matters. That holds for trees; a missing
+    commit object still refuses (fail closed). Wording corrected, and the refusal is now pinned by a test.
   - Nothing tested the removal of the 2000-commit `rev-list` limit. A test now pins it.
 - **Also:** `GLM_TIMEOUT` sets the reviewer helper's request timeout (default unchanged, 120 s).
 
@@ -92,9 +100,10 @@ is L2 by breadth, so the chain never validated.
   anywhere, the floor still covers everything from the root, the root's own
   files included.
 - **One deliberate difference from a full replay:** history *before* the
-  anchor is not diffed, so a tree or file there that cannot be read no longer
-  makes the floor unknowable (a missing *commit* object still refuses, because
-  `rev-list` walks every commit). The full replay would refuse, and so did
+  anchor is not diffed, so a tree there that cannot be read no longer makes the
+  floor unknowable (a missing *commit* object still refuses, because `rev-list`
+  walks every commit; a missing old file does not matter to either walk,
+  since git compares file ids without reading them). The full replay would refuse, and so did
   v2.12.3 when such an object fell within its 100-report window. It never
   read history beyond that window, so those reads were never a whole-history
   integrity check. What the floor depends on, `anchor..HEAD`, must still be

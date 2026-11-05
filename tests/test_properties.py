@@ -473,7 +473,9 @@ class EgressRedactionInvariant(unittest.TestCase):
             captured["all"].append(enforced)
             captured["payload"] = enforced
             captured["timeout"] = timeout
-            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            if len(captured["all"]) == getattr(self, "_fail_call", None):
+                raise RuntimeError("provider down")
+            return {"choices": [{"message": {"content": getattr(self, "_answer", "ok")}, "finish_reason": "stop"}],
                     "provider": "test"}
 
         env = {"OPENROUTER_API_KEY": "x" * 20, "MINIMAX_API_KEY": "x" * 20, "M3_ENABLED": "1"}
@@ -486,11 +488,15 @@ class EgressRedactionInvariant(unittest.TestCase):
             mod.__dict__["__file__"] = path
             exec(compile(src, path, "exec"), mod.__dict__)
             mod.do_request = fake_do_request
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                 try:
                     mod.main()
-                except SystemExit:
-                    pass
+                    self._last_exit = 0
+                except SystemExit as e:
+                    self._last_exit = e.code
+            self._last_stdout = out.getvalue()
+            self._last_requests = captured["all"]
         finally:
             sys.argv, sys.stdin = old_argv, old_stdin
             for k, v in old_env.items():
@@ -533,12 +539,48 @@ class EgressRedactionInvariant(unittest.TestCase):
         together. Losing either one silently reverts to the wording that
         missed every known bug."""
         payload = self._run_cli("glm-review", "a diff", ["--mode", "diff", "review this"])
-        system = payload["messages"][0]["content"]
+        self.assertTrue(payload)
+        system = self._last_requests[0]["messages"][0]["content"]
         for needed in ("Existing data", "Claims", "Tests:", "Failure paths",
                        "Report every suspect", "not a reason to stop looking"):
             self.assertIn(needed, system)
         self.assertNotIn("GLM-5.2", system)
         self.assertNotIn("VERDICT", system)  # advisory: no overall pass to lean on
+
+    def test_diff_mode_asks_a_second_pass_in_the_same_conversation(self):
+        self._run_cli("glm-review", "a diff", ["--mode", "diff", "t"])
+        self.assertEqual(len(self._last_requests), 2)
+        second = self._last_requests[1]["messages"]
+        self.assertEqual([m["role"] for m in second], ["system", "user", "assistant", "user"])
+        self.assertEqual(second[2]["content"], "ok")
+        self.assertIn("did not report above", second[3]["content"])
+        self.assertEqual(self._last_requests[1]["provider"], self._last_requests[0]["provider"])
+        self.assertIn("--- second pass ---", self._last_stdout)
+
+    def test_other_modes_make_one_request(self):
+        for mode in ("redteam", "audit", "ask", "scout", "tests", "code"):
+            self._run_cli("glm-review", "x", ["--mode", mode, "t"])
+            self.assertEqual(len(self._last_requests), 1, mode)
+
+    def test_a_failed_second_pass_leaves_the_first_standing(self):
+        self._fail_call = 2
+        try:
+            self._run_cli("glm-review", "a diff", ["--mode", "diff", "t"])
+        finally:
+            del self._fail_call
+        self.assertEqual(self._last_exit, 0)
+        self.assertEqual(self._last_stdout.strip(), "ok")
+
+    def test_a_secret_echoed_by_the_model_is_redacted_in_the_second_pass(self):
+        """The model's first answer goes back out, so it passes the same choke
+        point as everything else."""
+        self._answer = f"x_password = '{self.SECRET}'"
+        try:
+            self._run_cli("glm-review", "a diff", ["--mode", "diff", "t"])
+        finally:
+            del self._answer
+        self.assertEqual(len(self._last_requests), 2)
+        self.assertNotIn(self.SECRET, json.dumps(self._last_requests[1]))
 
     def test_timeout_default_stays_and_the_env_overrides_it(self):
         self._run_cli("glm-review", "x", ["--mode", "redteam", "t"])
@@ -551,12 +593,20 @@ class EgressRedactionInvariant(unittest.TestCase):
         self.assertEqual(self._last_timeout, 600)
 
     def test_diff_wrapper_sets_the_limits_a_diff_packet_needs(self):
-        """A 130-155 KB packet takes 2-6 minutes: the helper's defaults refuse
-        it, or time out on it, before any review happens."""
-        src = open(os.path.join(os.path.dirname(CLI), "glm-diff-review"), encoding="utf-8").read()
-        self.assertTrue(os.access(os.path.join(os.path.dirname(CLI), "glm-diff-review"), os.X_OK))
-        for needed in ("GLM_TIMEOUT=600", "GLM_MAX_CHARS=200000", "--mode diff"):
-            self.assertIn(needed, src)
+        """Run the real wrapper against a stand-in helper. A diff review takes
+        minutes and a long answer; the defaults would time out or cut it off.
+        The packet cap is the protocol's and must stay."""
+        import shutil, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy(os.path.join(os.path.dirname(CLI), "glm-diff-review"), d)
+            fake = os.path.join(d, "glm-review")
+            with open(fake, "w") as fh:
+                fh.write('#!/bin/sh\necho "$GLM_TIMEOUT|$GLM_MAX_COMPLETION_TOKENS|${GLM_MAX_CHARS:-unset}|$*"\n')
+            os.chmod(fake, 0o755)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GLM_")}
+            r = subprocess.run([os.path.join(d, "glm-diff-review"), "the task"], env=env,
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stdout.strip(), "600|24000|unset|--mode diff the task", r.stderr)
 
     def test_glm_review_redacts_before_egress(self):
         self._assert_invariant("glm-review", ["--mode", "redteam"])
@@ -2160,7 +2210,7 @@ class BaselineWalkHasNoCap(unittest.TestCase):
     def test_history_before_the_anchor_is_not_read(self):
         """A pinned decision (Codex v2.12.4 round 1). The anchor stands for
         everything before it, so the walk does not read that history — and a
-        pre-anchor tree or file git cannot read no longer makes the floor unknowable.
+        pre-anchor tree git cannot read no longer makes the floor unknowable.
         The full replay does read it and refuses. v2.12.3 never read history
         beyond its 100-report window either: those reads were never an
         integrity check. What the floor depends on, anchor..HEAD, must still be

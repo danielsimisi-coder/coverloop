@@ -23,7 +23,7 @@ This project runs the **Coverloop Multi-Model Production Protocol** (current `PR
 | **L0** trivial (copy/CSS) | quick check | – | – | – | – | – |
 | **L1** normal (isolated fix/refactor) | relevant tests + typecheck | – | if behavior changed | – | – | – |
 | **L2** product flow (no money/auth/migration) | + acceptance | if it adds a guard | **mandatory** | – | – | if launch-critical |
-| **L3** money / auth·RLS / migration / deploy / secrets / worker | full suite | **mandatory** | **mandatory** | plan review, before code; advisory `glm-diff-review` on K3 + K3.1 after tests (not a gate) | optional (VPS) | **mandatory** |
+| **L3** money / auth·RLS / migration / deploy / secrets / worker | full suite | **mandatory** | **mandatory** | plan review, before code; advisory `glm-diff-review` after tests, merged with Codex's findings; act only on what a test or running example shows (not a gate) | optional (VPS) | **mandatory** |
 
 **Guard-break (mandatory at L3):** for every safety guard the change adds or relies on — a permission check, a fail-closed branch, an idempotency key, a lock, a validation — break it on purpose and show that a test fails; restore it. A guard no test notices is not protected. Record the transcript: `coverloop attest --mutation pass --mutation-guards N --mutation-log <file>` (N = guards broken, ≥ 1 — a pass that broke nothing proves nothing) (`--mutation-findings N` = breaks nothing caught).
 
