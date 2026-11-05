@@ -1,0 +1,24 @@
+{
+  "schema": "coverloop-report/v1",
+  "commit": "e683da2a4049fb76c2d1bcb4e4866d177ed1543d",
+  "risk_tier": "L2",
+  "created_at": "2026-11-05T18:59:45Z",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests",
+    "status": "pass",
+    "ran_at": "2026-11-05T19:03:28Z"
+  },
+  "codex": {
+    "status": "pass",
+    "findings_open": 0,
+    "recorded_at": "2026-11-05T19:03:29Z",
+    "source": "attached",
+    "output_file": ".coverloop/reports/e683da2a4049fb76c2d1bcb4e4866d177ed1543d.codex.log",
+    "output_sha256": "d818e8bfcb6a0decb9e66e7f193489241c2cf2b044390dc127db617b6168f96a",
+    "output_lines": 8410,
+    "attached_at": "2026-11-05T19:03:29Z"
+  },
+  "glm": null,
+  "mutation": null,
+  "human_gate": null
+}
