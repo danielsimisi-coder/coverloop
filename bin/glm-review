@@ -223,7 +223,7 @@ def second_pass(payload, first, mode):
         {"role": "assistant", "content": first},
         {"role": "user", "content": SECOND_PASS},
     ]
-    sent = redact(f"{first}\n{SECOND_PASS}")
+    sent = redact("\n".join(m["content"] for m in follow_up["messages"]))
     char_count, payload_sha = len(sent), sha(sent)
     extra = {"pass": 2}
     egress_cap.reserve_daily_slot(
@@ -231,6 +231,8 @@ def second_pass(payload, first, mode):
                            {**extra, "phase": "attempt"}))
     try:
         data = do_request(follow_up, TIMEOUT)
+        choice = data["choices"][0]
+        out = choice["message"].get("content")
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         zdr_denied = (e.code == 404 and "zero data retention" in body.lower())
@@ -244,8 +246,6 @@ def second_pass(payload, first, mode):
         return
     log_egress(MODEL, mode, USE_ZDR, 200, "clean", char_count, payload_sha,
                {**extra, "served_by": data.get("provider"), "phase": "result"})
-    choice = data["choices"][0]
-    out = choice["message"].get("content")
     if out and choice.get("finish_reason") != "length":
         print("\n--- second pass ---\n" + out)
     else:

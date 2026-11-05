@@ -586,6 +586,8 @@ class EgressRedactionInvariant(unittest.TestCase):
             r = responses.pop(0)
             if isinstance(r, Exception):
                 raise r
+            if isinstance(r, dict):
+                return Resp(json.dumps(r).encode())
             return Resp(json.dumps({"choices": [{"message": {"content": r}, "finish_reason": "stop"}],
                                     "provider": "test"}).encode())
         with tempfile.TemporaryDirectory() as d:
@@ -623,8 +625,10 @@ class EgressRedactionInvariant(unittest.TestCase):
         self.assertEqual(sent[1]["provider"], sent[0]["provider"])
         second = [r for r in log if r.get("pass") == 2]
         self.assertEqual([r["phase"] for r in second], ["attempt", "result"])
-        first_sha = [r for r in log if "pass" not in r][0]["sha256_of_payload"]
-        self.assertNotEqual(second[0]["sha256_of_payload"], first_sha)
+        import hashlib
+        text = "\n".join(m["content"] for m in sent[1]["messages"])
+        self.assertEqual(second[0]["sha256_of_payload"], hashlib.sha256(text.encode()).hexdigest())
+        self.assertEqual(second[0]["char_count"], len(text))
 
     def test_second_pass_takes_its_own_spend_slot(self):
         code, out, sent, log = self._run_http(["first", "second"], cap="1")
@@ -640,6 +644,14 @@ class EgressRedactionInvariant(unittest.TestCase):
         self.assertIn("first", out)
         last = [r for r in log if r.get("pass") == 2][-1]
         self.assertEqual((last["http_status"], last["zdr_denied"]), (404, True))
+
+    def test_a_malformed_second_answer_is_audited_and_the_first_stands(self):
+        code, out, sent, log = self._run_http(["first", {"error": {"message": "upstream unavailable"}}])
+        self.assertEqual(code, 0)
+        self.assertIn("first", out)
+        second = [r for r in log if r.get("pass") == 2]
+        self.assertTrue(second[-1].get("error"))
+        self.assertNotIn("result", [r.get("phase") for r in second])
 
     def test_timeout_default_stays_and_the_env_overrides_it(self):
         self._run_cli("glm-review", "x", ["--mode", "redteam", "t"])
