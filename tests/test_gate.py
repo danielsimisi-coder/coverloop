@@ -7,6 +7,8 @@ No third-party dependencies.
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1557,6 +1559,79 @@ class GateTestCase(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"{cli}: {r.stderr}")
             self.assertIn("usage:", r.stdout)
 
+
+    # ---- v2.12.6: a new user's first run ----
+    def test_init_detects_the_test_command_from_the_repos_files(self):
+        cases = [
+            ({"package.json": '{"scripts": {"test": "jest"}}'}, "npm test"),
+            ({"package.json": '{"scripts": {"test": "jest"}}', "pnpm-lock.yaml": ""}, "pnpm test"),
+            ({"package.json": '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}',
+              "tsconfig.json": "{}"}, "npx tsc --noEmit"),
+            ({"tsconfig.json": "{}"}, "npx tsc --noEmit"),
+            ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "python3 -m pytest -q"),
+            ({"tests/test_app.py": ""}, "python3 -m unittest discover -s tests"),
+            ({"go.mod": "module x\n"}, "go test ./..."),
+            ({"Cargo.toml": ""}, "cargo test"),
+            ({"package.json": "{not json"}, None),
+            ({"README.md": "hi"}, None),
+        ]
+        for files, want in cases:
+            with self.subTest(files=files), tempfile.TemporaryDirectory() as d:
+                sh(["git", "init", "-q", "-b", "main"], d)
+                for name, body in files.items():
+                    os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
+                    with open(os.path.join(d, name), "w") as fh:
+                        fh.write(body)
+                r = run(["init"], d)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                with open(os.path.join(d, ".coverloop", "config.json")) as fh:
+                    self.assertEqual(json.load(fh).get("test_command"), want)
+
+    def test_init_keeps_an_explicit_test_command(self):
+        with open(os.path.join(self.repo, "go.mod"), "w") as fh:
+            fh.write("module x\n")
+        self.assertEqual(run(["init", "--test-command", "make check"], self.repo).returncode, 0)
+        with open(os.path.join(self.repo, ".coverloop", "config.json")) as fh:
+            self.assertEqual(json.load(fh)["test_command"], "make check")
+
+    def test_plugin_version_follows_the_protocol_version(self):
+        here = os.path.dirname(os.path.dirname(CLI))
+        with open(os.path.join(here, ".claude-plugin", "plugin.json")) as fh:
+            plugin = json.load(fh)["version"]
+        with open(os.path.join(here, "CLAUDE.md"), encoding="utf-8") as fh:
+            proto = re.search(r"PROTOCOL_VERSION: v([0-9.]+)", fh.read()).group(1)
+        self.assertEqual(plugin, proto)
+
+    def _selftest_in(self, home, *subdirs):
+        bindir = os.path.join(home, *subdirs)
+        os.makedirs(bindir)
+        shutil.copy(os.path.join(os.path.dirname(CLI), "protocol-selftest"), bindir)
+        return subprocess.run(["bash", os.path.join(bindir, "protocol-selftest")], cwd=home, capture_output=True,
+                              text=True, timeout=60, env={"HOME": home, "PATH": os.environ["PATH"]}).stdout
+
+    def test_selftest_does_not_fail_a_plugin_install_for_its_missing_manual_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            out = self._selftest_in(home, ".claude", "plugins", "cache", "x", "bin")
+            self.assertNotIn("FAIL  glm CLIs", out)
+            self.assertNotIn("FAIL  hook", out)
+            self.assertIn("not checked here", out)
+        with tempfile.TemporaryDirectory() as d:  # the same files missing on a manual install still fail
+            out = self._selftest_in(os.path.realpath(d), "bin")
+            self.assertIn("FAIL  glm CLIs", out)
+            self.assertIn("FAIL  hook", out)
+
+    def test_doctor_on_a_plugin_install_points_to_the_plugin_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            bindir = os.path.join(home, ".claude", "plugins", "cache", "x", "bin")
+            shutil.copytree(os.path.dirname(CLI), bindir)
+            env = {k: v for k, v in os.environ.items() if "OPENROUTER" not in k}
+            env["HOME"] = home
+            r = subprocess.run([sys.executable, os.path.join(bindir, "coverloop"), "doctor"], cwd=home,
+                               capture_output=True, text=True, timeout=60, env=env)
+            self.assertIn("/plugin configure coverloop@coverloop", r.stdout)
+            self.assertNotIn("chmod 600", r.stdout)
 
     # ---- full audit 2026-07-11 (v2.7.3) regressions ----
     def test_laundered_failed_capture_rejected_source_agnostic(self):

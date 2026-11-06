@@ -677,6 +677,38 @@ def load_json(path):
 
 # ---------------------------------------------------------------- init
 
+def detect_test_command(root):
+    """Best guess from the repo's own files: (command, the file that told us), or (None, None).
+    A wrong guess fails a first run on healthy code, so an unknown stack gets no command
+    at all, and `attest --tests` then says to set one."""
+    def has(*parts):
+        return os.path.isfile(os.path.join(root, *parts))
+    pkg, _err = load_json(os.path.join(root, "package.json")) if has("package.json") else (None, None)
+    scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
+    test_script = scripts.get("test") if isinstance(scripts, dict) else None
+    if isinstance(test_script, str) and test_script.strip() and "no test specified" not in test_script:
+        runner = "pnpm" if has("pnpm-lock.yaml") else "yarn" if has("yarn.lock") else "npm"
+        return f"{runner} test", "package.json"
+    if has("tsconfig.json"):
+        return "npx tsc --noEmit", "tsconfig.json"
+    for name in ("pytest.ini", "conftest.py", "tests/conftest.py"):
+        if has(*name.split("/")):
+            return "python3 -m pytest -q", name
+    if has("pyproject.toml"):
+        with open(os.path.join(root, "pyproject.toml"), encoding="utf-8", errors="replace") as fh:
+            if "[tool.pytest" in fh.read():
+                return "python3 -m pytest -q", "pyproject.toml"
+    tests_dir = os.path.join(root, "tests")
+    if os.path.isdir(tests_dir) and any(f.startswith("test_") and f.endswith(".py")
+                                        for f in os.listdir(tests_dir)):
+        return "python3 -m unittest discover -s tests", "tests/"
+    if has("go.mod"):
+        return "go test ./...", "go.mod"
+    if has("Cargo.toml"):
+        return "cargo test", "Cargo.toml"
+    return None, None
+
+
 def cmd_init(args):
     root = repo_root()
     cfg_path = os.path.join(root, CONFIG_FILE)
@@ -687,14 +719,17 @@ def cmd_init(args):
         # No base is stored here on purpose: the diff base for the L1 waiver
         # must come from the trusted caller (CI's --base), never from a file
         # that ships inside the PR under review.
-        cfg = {
-            "schema": "coverloop-config/v1",
-            "test_command": args.test_command or "npx tsc --noEmit",
-        }
+        cmd, source = (args.test_command, "--test-command") if args.test_command else detect_test_command(root)
+        cfg = {"schema": "coverloop-config/v1"}
+        if cmd:
+            cfg["test_command"] = cmd
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
             f.write("\n")
-        print(f"+ {CONFIG_FILE}  (test_command: {cfg['test_command']!r} — edit for your stack)")
+        if cmd:
+            print(f"+ {CONFIG_FILE}  (test_command: {cmd!r}, from {source} — edit it if that is wrong)")
+        else:
+            print(f"+ {CONFIG_FILE}  (no test runner found — set test_command in that file before `attest --tests`)")
     gi_path = os.path.join(root, CONFIG_DIR, ".gitignore")
     gi_body = (
         "# Coverloop reports are evidence — commit them with the change.\n"
@@ -1926,11 +1961,18 @@ def cmd_doctor(args):
                            f"   [!] mode {mode} — run: chmod 600 {key_file}")
         line(ok if mode == "600" else warn, "openrouter key", note)
     else:
-        line(bad, "openrouter key", "MISSING")
-        problems.append(
-            "get a key at https://openrouter.ai/keys, then:\n"
-            "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
-            "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
+        # Claude Code hands the plugin's key only to what it runs, so a terminal never sees it.
+        if "/.claude/plugins/" in os.path.realpath(__file__):
+            line(bad, "openrouter key", "not visible here (a key set in the plugin shows only inside Claude Code)")
+            problems.append(
+                "in Claude Code run: /plugin configure coverloop@coverloop\n"
+                "      and paste a key from https://openrouter.ai/keys")
+        else:
+            line(bad, "openrouter key", "MISSING")
+            problems.append(
+                "get a key at https://openrouter.ai/keys, then:\n"
+                "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
+                "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
 
     # --- the reviewers ---------------------------------------------------
     here = os.path.dirname(os.path.abspath(__file__))
@@ -2272,7 +2314,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
-    pi.add_argument("--test-command", help="command that must pass (default: npx tsc --noEmit)")
+    pi.add_argument("--test-command", help="command that must pass (default: detected from the repo's files)")
     pi.set_defaults(fn=cmd_init)
 
     pd = sub.add_parser("doctor",

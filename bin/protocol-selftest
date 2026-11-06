@@ -8,6 +8,15 @@ FAILS=0
 ok()   { printf 'PASS  %s\n' "$1"; }
 warn() { printf 'WARN  %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
+# A plugin install keeps its helpers and hooks inside the plugin, so what this script reads below
+# is rightly absent there. That is "not checked", not a pass and not a failure.
+case "$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)/" in
+  */.claude/plugins/*) PLUGIN=1 ;;
+  *) PLUGIN=0 ;;
+esac
+manual_only() {
+  if [ "$PLUGIN" = 1 ]; then warn "$1 (plugin install: its own copies are not checked here)"; else fail "$1 (run install.sh)"; fi
+}
 
 # ---------- locate the protocol repo (for the reference version) ----------
 SRC=""
@@ -29,7 +38,7 @@ if [ -x "$HOME/bin/glm-review" ]; then
   FV=$("$HOME/bin/glm-review" --version 2>/dev/null | grep -o '"filter_version": *"[^"]*"' | cut -d'"' -f4)
   [ -n "$FV" ] && ok "glm CLIs installed (filter $FV)" || warn "glm-review present but --version unreadable"
 else
-  fail "glm CLIs missing from ~/bin (run install.sh)"
+  manual_only "glm CLIs missing from ~/bin"
 fi
 if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this user (data_collection:deny, L3-only)"; else ok "M3: parked for this user (fail-closed)"; fi
 if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.7 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
@@ -45,7 +54,7 @@ HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
 for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
   [ -f "$HOOKS_DIR/$h" ] || MISSING="$MISSING $h"
 done
-[ -z "$MISSING" ] && ok "all 4 hook scripts present" || fail "hook scripts missing:$MISSING"
+[ -z "$MISSING" ] && ok "all 4 hook scripts present" || manual_only "hook scripts missing:$MISSING"
 if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
   # The shortened hook deliberately prints no version banner — a version string
   # is exactly the kind of per-session noise the shrink removed. Compare the
@@ -87,7 +96,7 @@ PY
 )
 case "$WIRED" in
   OK) ok "all 4 hook events wired in ~/.claude/settings.json" ;;
-  MISSING:*) fail "hook events not wired: ${WIRED#MISSING:} (run install.sh)" ;;
+  MISSING:*) manual_only "hook events not wired: ${WIRED#MISSING:}" ;;
   *) warn "could not read ~/.claude/settings.json" ;;
 esac
 
