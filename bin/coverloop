@@ -680,8 +680,8 @@ def load_json(path):
 def detect_test_command(root):
     """Best guess from the repo's own files: (command, the file that told us), or (None, None).
     The guess must never pass by running nothing: `unittest discover` runs zero tests on
-    pytest-style files and can exit 0, so it is chosen only when every test file imports
-    unittest. pytest itself refuses an empty run. An unknown stack gets no command at all,
+    pytest-style files and can exit 0, so it is chosen only when every test file defines a
+    TestCase (importing `unittest.mock` proves nothing). pytest itself refuses an empty run. An unknown stack gets no command at all,
     and `attest --tests` then says to set one. Unreadable files count as absent."""
     def has(*parts):
         return os.path.isfile(os.path.join(root, *parts))
@@ -717,7 +717,7 @@ def detect_test_command(root):
         names = []
     test_files = [f for f in names if f.startswith("test_") and f.endswith(".py") and has("tests", f)]
     if test_files:
-        if all(re.search(r"^\s*(import|from)\s+unittest\b", read("tests", f), re.M) for f in test_files):
+        if all(re.search(r"^\s*class\s+\w+\(.*TestCase\b", read("tests", f), re.M) for f in test_files):
             return "python3 -m unittest discover -s tests", "tests/"
         return "python3 -m pytest -q", "tests/"
     return None, None
