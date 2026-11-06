@@ -677,75 +677,90 @@ def load_json(path):
 
 # ---------------------------------------------------------------- init
 
-def detect_test_command(root):
-    """A guess from the repo's own files: (command, source), or (None, why not).
-    It answers only when exactly one stack is present, because a command that covers one
-    stack would pass while another's tests fail. Python always means pytest: it runs both
-    styles, nested files included, and refuses an empty run, while `unittest discover`
-    can pass by skipping what it does not recognise. Unreadable files count as absent."""
+SET_TEST_COMMAND = "coverloop init --test-command '<the command that runs all your tests>'"
+
+
+def suggest_test_commands(root):
+    """What the repo's files hint at, as (command, file) pairs, for a person to confirm.
+    Never written to the config: a guess can pass by skipping tests (pytest's file patterns,
+    a typecheck standing in for tests, one stack of several), and only someone who knows the
+    repo can tell. So a wrong hint here costs nothing and the list does not need to be complete."""
     def has(*parts):
         return os.path.isfile(os.path.join(root, *parts))
-    def read(*parts):
-        try:
-            with open(os.path.join(root, *parts), encoding="utf-8") as fh:
-                return fh.read()
-        except (OSError, UnicodeError):
-            return ""
     found = []
     try:
-        pkg = json.loads(read("package.json") or "null")
-    except ValueError:
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as fh:
+            pkg = json.load(fh)
+    except (OSError, ValueError, RecursionError):
         pkg = None
     scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
-    test_script = scripts.get("test") if isinstance(scripts, dict) else None
-    if isinstance(test_script, str) and test_script.strip() and "no test specified" not in test_script:
+    script = scripts.get("test") if isinstance(scripts, dict) else None
+    if isinstance(script, str) and script.strip() and "no test specified" not in script:
         runner = "pnpm" if has("pnpm-lock.yaml") else "yarn" if has("yarn.lock") else "npm"
         found.append((f"{runner} test", "package.json"))
-    elif has("tsconfig.json"):
-        found.append(("npx tsc --noEmit", "tsconfig.json"))
     if has("go.mod"):
         found.append(("go test ./...", "go.mod"))
     if has("Cargo.toml"):
-        found.append(("cargo test", "Cargo.toml"))
+        found.append(("cargo test --workspace", "Cargo.toml"))
     try:
         names = os.listdir(os.path.join(root, "tests"))
     except OSError:
         names = []
-    py = [n for n in ("pytest.ini", "conftest.py", "tests/conftest.py") if has(*n.split("/"))]
-    if re.search(r"^\s*\[tool\.pytest", read("pyproject.toml"), re.M):
-        py.append("pyproject.toml")
-    if any(n.startswith("test_") and n.endswith(".py") and has("tests", n) for n in names):
-        py.append("tests/")
-    if py:
-        found.append(("python3 -m pytest -q", py[0]))
-    if len(found) == 1:
-        return found[0]
+    if has("pytest.ini") or has("conftest.py") or any(
+            n.startswith("test") and n.endswith(".py") and has("tests", n) for n in names):
+        found.append(("python3 -m pytest -q", "tests/"))
+    return found
+
+
+def print_test_command_hint(root):
+    found = suggest_test_commands(root)
+    print("test_command is not set. Coverloop does not guess it: a wrong guess can pass by skipping tests.")
     if found:
-        return None, "several stacks found (" + ", ".join(src for _cmd, src in found) + ")"
-    return None, "no test runner found"
+        print("Your files suggest: " + ", ".join(f"{cmd} ({src})" for cmd, src in found))
+    if len(found) == 1:
+        print(f"Set it with: coverloop init --test-command '{found[0][0]}'")
+    else:
+        print(f"Set it with: {SET_TEST_COMMAND}")
+
+
+def write_config(path, cfg):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
 
 
 def cmd_init(args):
     root = repo_root()
     cfg_path = os.path.join(root, CONFIG_FILE)
     os.makedirs(os.path.join(root, REPORTS_DIR), exist_ok=True)
+    wanted = (args.test_command or "").strip()
+    need_hint = False
     if os.path.exists(cfg_path):
-        print(f"skip {CONFIG_FILE} (exists)")
+        cfg, err = load_json(cfg_path)
+        if not err and not isinstance(cfg, dict):
+            err = f"{cfg_path}: not a JSON object"
+        have = str(cfg.get("test_command") or "").strip() if not err else ""
+        if err and wanted:
+            fail_usage(f"cannot set test_command: {err}")
+        elif wanted and not have:
+            cfg["test_command"] = wanted
+            write_config(cfg_path, cfg)
+            print(f"+ {CONFIG_FILE}  (test_command: {wanted!r})")
+        else:
+            print(f"skip {CONFIG_FILE} (exists)")
+            if wanted and wanted != have:
+                print(f"test_command stays {have!r}. To change it, edit {CONFIG_FILE}.")
+            need_hint = not err and not have
     else:
         # No base is stored here on purpose: the diff base for the L1 waiver
         # must come from the trusted caller (CI's --base), never from a file
         # that ships inside the PR under review.
-        cmd, source = (args.test_command, "--test-command") if args.test_command else detect_test_command(root)
         cfg = {"schema": "coverloop-config/v1"}
-        if cmd:
-            cfg["test_command"] = cmd
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
-            f.write("\n")
-        if cmd:
-            print(f"+ {CONFIG_FILE}  (test_command: {cmd!r}, from {source} — edit it if that is wrong)")
-        else:
-            print(f"+ {CONFIG_FILE}  ({source} — set test_command in that file before `attest --tests`)")
+        if wanted:
+            cfg["test_command"] = wanted
+        write_config(cfg_path, cfg)
+        print(f"+ {CONFIG_FILE}" + (f"  (test_command: {wanted!r})" if wanted else ""))
+        need_hint = not wanted
     gi_path = os.path.join(root, CONFIG_DIR, ".gitignore")
     gi_body = (
         "# Coverloop reports are evidence — commit them with the change.\n"
@@ -774,6 +789,8 @@ def cmd_init(args):
             print(f"+ {CONFIG_DIR}/.gitignore  (added: {', '.join(missing)})")
     print(f"+ {REPORTS_DIR}/")
     print("Done. Record evidence with `coverloop attest`, verify with `coverloop gate`.")
+    if need_hint:
+        print_test_command_hint(root)
     return 0
 
 
@@ -1422,7 +1439,7 @@ def _cmd_attest_locked(args, root):
             fail_usage(f"cannot run tests: {err} (run `coverloop init` first)")
         cmd = (cfg or {}).get("test_command")
         if not cmd or not str(cmd).strip():
-            fail_usage(f"no test_command configured in {CONFIG_FILE}")
+            fail_usage(f"no test_command configured in {CONFIG_FILE}. Set it with: {SET_TEST_COMMAND}")
         print(f"running tests: {cmd}")
         try:
             # shell=True is deliberate: test_command is the repo owner's own
@@ -1738,7 +1755,7 @@ def evaluate(report, tier, files, require_captured=False, root=None, test_comman
         checks.append(check("tests", True, "docs-only diff — test gate waived"))
     else:
         if not cfg_cmd:
-            detail = "tests: no test_command configured — cannot verify (set one in .coverloop/config.json)"
+            detail = f"tests: no test_command configured — cannot verify. Set it with: {SET_TEST_COMMAND}"
         elif tests and not cmd_matches:
             detail = (f"tests: recorded command {recorded_cmd!r} != config test_command "
                       f"{cfg_cmd!r} — re-run `coverloop attest --tests`")
@@ -2330,7 +2347,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("init", help="scaffold .coverloop/ in this repo")
-    pi.add_argument("--test-command", help="command that must pass (default: detected from the repo's files)")
+    pi.add_argument("--test-command", help="command that must pass; sets it if the config has none (never guessed)")
     pi.set_defaults(fn=cmd_init)
 
     pd = sub.add_parser("doctor",

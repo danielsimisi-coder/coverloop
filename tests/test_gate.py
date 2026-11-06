@@ -1561,33 +1561,29 @@ class GateTestCase(unittest.TestCase):
 
 
     # ---- v2.12.6: a new user's first run ----
-    def test_init_detects_the_test_command_from_the_repos_files(self):
+    def _config_test_command(self, d):
+        with open(os.path.join(d, ".coverloop", "config.json")) as fh:
+            return json.load(fh).get("test_command")
+
+    def test_init_suggests_a_test_command_and_never_writes_a_guess(self):
         go = {"go.mod": "module x\n"}
         cases = [
             ({"package.json": '{"scripts": {"test": "jest"}}'}, "npm test"),
             ({"package.json": '{"scripts": {"test": "jest"}}', "pnpm-lock.yaml": ""}, "pnpm test"),
-            ({"package.json": '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}',
-              "tsconfig.json": "{}"}, "npx tsc --noEmit"),
-            ({"tsconfig.json": "{}"}, "npx tsc --noEmit"),
             (go, "go test ./..."),
-            ({"Cargo.toml": ""}, "cargo test"),
-            ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "python3 -m pytest -q"),
-            ({"tests/test_app.py": "def test_x():\n    assert False\n"}, "python3 -m pytest -q"),
-            ({"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    pass\n"}, "python3 -m pytest -q"),
-            # one command cannot be trusted to cover two stacks
-            ({"tsconfig.json": "{}", "pyproject.toml": "[tool.pytest.ini_options]\n"}, None),
+            ({"Cargo.toml": ""}, "cargo test --workspace"),
+            ({"tests/testLegacy.py": ""}, "python3 -m pytest -q"),
+            # nothing to suggest, or more than one stack: the user is asked for the whole command
+            ({"package.json": '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}'}, None),
+            ({"tsconfig.json": "{}"}, None),
             ({"package.json": '{"scripts": {"test": "jest"}}', **go}, None),
-            ({"tests/test_app.py": "", **go}, None),
-            # things that look like evidence and are not
-            ({"tests/test_fake.py/keep": "", **go}, "go test ./..."),
-            ({"pyproject.toml": "# [tool.pytest.ini_options] later\n", **go}, "go test ./..."),
-            ({"package.json": b"\xff\xfe", **go}, "go test ./..."),
-            ({"pyproject.toml": b"\xff", **go}, "go test ./..."),
+            ({"package.json": b"\xff\xfe"}, None),
             ({"package.json": "{not json"}, None),
+            ({"package.json": '{"custom": ' + "[" * 100000 + "]" * 100000 + "}"}, None),
             ({"README.md": "hi"}, None),
         ]
         for files, want in cases:
-            with self.subTest(files=files), tempfile.TemporaryDirectory() as d:
+            with self.subTest(files=str(files)[:80]), tempfile.TemporaryDirectory() as d:
                 sh(["git", "init", "-q", "-b", "main"], d)
                 for name, body in files.items():
                     os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
@@ -1595,38 +1591,52 @@ class GateTestCase(unittest.TestCase):
                         fh.write(body if isinstance(body, bytes) else body.encode())
                 r = run(["init"], d)
                 self.assertEqual(r.returncode, 0, r.stderr)
-                with open(os.path.join(d, ".coverloop", "config.json")) as fh:
-                    self.assertEqual(json.load(fh).get("test_command"), want)
+                self.assertIsNone(self._config_test_command(d))
+                self.assertIn("test_command is not set", r.stdout)
+                self.assertIn(f"--test-command '{want or '<the command that runs all your tests>'}'", r.stdout)
 
-    def test_a_detected_command_never_passes_a_failing_python_test(self):
-        """Mixed styles and a nested file are where a narrower runner passes by skipping."""
-        layouts = [
-            {"tests/test_app.py": "def test_bad():\n    assert False\n"},
-            {"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.fail()\n"},
-            {"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n\n"
-                                  "def test_bad():\n    assert False\n"},
-            {"tests/test_app.py": "def test_ok():\n    pass\n", "tests/deep/test_more.py": "def test_bad():\n    assert False\n"},
-        ]
-        for files in layouts:
-            with self.subTest(files=files), tempfile.TemporaryDirectory() as d:
-                sh(["git", "init", "-q", "-b", "main"], d)
-                for name, body in files.items():
-                    os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
-                    with open(os.path.join(d, name), "w") as fh:
-                        fh.write(body)
-                sh(["git", "add", "-A"], d)
-                sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], d)
-                self.assertEqual(run(["init"], d).returncode, 0)
-                r = run(["attest", "--tier", "L1", "--tests"], d)
-                self.assertNotEqual(r.returncode, 0, r.stdout)
-                self.assertIn("tests=fail", r.stdout)
-
-    def test_init_keeps_an_explicit_test_command(self):
+    def test_attest_tests_refuses_until_a_test_command_is_set(self):
         with open(os.path.join(self.repo, "go.mod"), "w") as fh:
             fh.write("module x\n")
-        self.assertEqual(run(["init", "--test-command", "make check"], self.repo).returncode, 0)
-        with open(os.path.join(self.repo, ".coverloop", "config.json")) as fh:
-            self.assertEqual(json.load(fh)["test_command"], "make check")
+        self.assertEqual(run(["init"], self.repo).returncode, 0)
+        r = run(["attest", "--tier", "L1", "--tests"], self.repo)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("--test-command", r.stderr)
+        self.assertEqual(run(["init", "--test-command", "   "], self.repo).returncode, 0)
+        self.assertIsNone(self._config_test_command(self.repo))
+
+    def test_init_sets_the_test_command_once_and_keeps_the_rest(self):
+        self.assertEqual(run(["init"], self.repo).returncode, 0)
+        path = os.path.join(self.repo, ".coverloop", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["other"] = 1
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        r = run(["init", "--test-command", "make check"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("is not set", r.stdout)
+        self.assertEqual(self._config_test_command(self.repo), "make check")
+        r = run(["init", "--test-command", "other"], self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stays 'make check'", r.stdout)
+        with open(path) as fh:
+            cfg = json.load(fh)
+        self.assertEqual((cfg["test_command"], cfg["other"]), ("make check", 1))
+
+    def test_init_does_not_overwrite_an_unreadable_config(self):
+        self.assertEqual(run(["init"], self.repo).returncode, 0)
+        path = os.path.join(self.repo, ".coverloop", "config.json")
+        for body in ("{broken", "[1]"):
+            with self.subTest(body=body):
+                with open(path, "w") as fh:
+                    fh.write(body)
+                self.assertEqual(run(["init"], self.repo).returncode, 0)
+                r = run(["init", "--test-command", "make check"], self.repo)
+                self.assertEqual(r.returncode, 2, r.stdout)
+                self.assertNotIn("Traceback", r.stderr)
+                with open(path) as fh:
+                    self.assertEqual(fh.read(), body)
 
     def test_plugin_version_follows_the_protocol_version(self):
         here = os.path.dirname(os.path.dirname(CLI))
@@ -1654,11 +1664,23 @@ class GateTestCase(unittest.TestCase):
                 for item in ("glm CLIs missing", "hook scripts missing", "hook events not wired"):
                     self.assertEqual(f"FAIL  {item}" in out, not is_plugin, out)
                     self.assertEqual(f"WARN  {item}" in out, is_plugin, out)
-                self.assertEqual(code == 0, is_plugin, out)
+                if not is_plugin:  # other machine checks (a Linux host's unshare) can fail a plugin run
+                    self.assertNotEqual(code, 0, out)
         with tempfile.TemporaryDirectory() as d:
             code, out = self._selftest_in(os.path.realpath(d), "bin")
             self.assertNotEqual(code, 0)
             self.assertIn("FAIL  glm CLIs", out)
+
+    def test_selftest_finds_a_plugin_install_through_a_symlink(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            self._selftest_in(home, ".claude", "plugins", "cache", "x", "2.0", "bin")
+            os.makedirs(os.path.join(home, "bin"))
+            link = os.path.join(home, "bin", "protocol-selftest")
+            os.symlink(os.path.join("..", ".claude", "plugins", "cache", "x", "2.0", "bin", "protocol-selftest"), link)
+            r = subprocess.run(["bash", link], cwd=home, capture_output=True, text=True, timeout=60,
+                               env={"HOME": home, "PATH": os.environ["PATH"]})
+            self.assertIn("WARN  glm CLIs missing", r.stdout)
 
     def test_doctor_on_a_plugin_install_points_to_the_plugin_settings(self):
         with tempfile.TemporaryDirectory() as d:

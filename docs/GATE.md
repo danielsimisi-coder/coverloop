@@ -12,7 +12,7 @@ files and git metadata.
 ## The three commands
 
 ```bash
-coverloop init                      # once per repo: .coverloop/config.json + reports/
+coverloop init --test-command "npm test"  # once per repo: .coverloop/config.json + reports/
 coverloop attest [...]              # record evidence for the current HEAD commit
 coverloop gate  [--min-tier L0..L3]     # verify; exit 0 = pass, 1 = missing/failing evidence
 ```
