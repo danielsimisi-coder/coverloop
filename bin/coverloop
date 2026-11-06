@@ -678,11 +678,11 @@ def load_json(path):
 # ---------------------------------------------------------------- init
 
 def detect_test_command(root):
-    """Best guess from the repo's own files: (command, the file that told us), or (None, None).
-    The guess must never pass by running nothing: `unittest discover` runs zero tests on
-    pytest-style files and can exit 0, so it is chosen only when every test file defines a
-    TestCase (importing `unittest.mock` proves nothing). pytest itself refuses an empty run. An unknown stack gets no command at all,
-    and `attest --tests` then says to set one. Unreadable files count as absent."""
+    """A guess from the repo's own files: (command, source), or (None, why not).
+    It answers only when exactly one stack is present, because a command that covers one
+    stack would pass while another's tests fail. Python always means pytest: it runs both
+    styles, nested files included, and refuses an empty run, while `unittest discover`
+    can pass by skipping what it does not recognise. Unreadable files count as absent."""
     def has(*parts):
         return os.path.isfile(os.path.join(root, *parts))
     def read(*parts):
@@ -691,6 +691,7 @@ def detect_test_command(root):
                 return fh.read()
         except (OSError, UnicodeError):
             return ""
+    found = []
     try:
         pkg = json.loads(read("package.json") or "null")
     except ValueError:
@@ -699,28 +700,29 @@ def detect_test_command(root):
     test_script = scripts.get("test") if isinstance(scripts, dict) else None
     if isinstance(test_script, str) and test_script.strip() and "no test specified" not in test_script:
         runner = "pnpm" if has("pnpm-lock.yaml") else "yarn" if has("yarn.lock") else "npm"
-        return f"{runner} test", "package.json"
-    if has("tsconfig.json"):
-        return "npx tsc --noEmit", "tsconfig.json"
+        found.append((f"{runner} test", "package.json"))
+    elif has("tsconfig.json"):
+        found.append(("npx tsc --noEmit", "tsconfig.json"))
     if has("go.mod"):
-        return "go test ./...", "go.mod"
+        found.append(("go test ./...", "go.mod"))
     if has("Cargo.toml"):
-        return "cargo test", "Cargo.toml"
-    for name in ("pytest.ini", "conftest.py", "tests/conftest.py"):
-        if has(*name.split("/")):
-            return "python3 -m pytest -q", name
-    if re.search(r"^\s*\[tool\.pytest", read("pyproject.toml"), re.M):
-        return "python3 -m pytest -q", "pyproject.toml"
+        found.append(("cargo test", "Cargo.toml"))
     try:
-        names = sorted(os.listdir(os.path.join(root, "tests")))
+        names = os.listdir(os.path.join(root, "tests"))
     except OSError:
         names = []
-    test_files = [f for f in names if f.startswith("test_") and f.endswith(".py") and has("tests", f)]
-    if test_files:
-        if all(re.search(r"^\s*class\s+\w+\(.*TestCase\b", read("tests", f), re.M) for f in test_files):
-            return "python3 -m unittest discover -s tests", "tests/"
-        return "python3 -m pytest -q", "tests/"
-    return None, None
+    py = [n for n in ("pytest.ini", "conftest.py", "tests/conftest.py") if has(*n.split("/"))]
+    if re.search(r"^\s*\[tool\.pytest", read("pyproject.toml"), re.M):
+        py.append("pyproject.toml")
+    if any(n.startswith("test_") and n.endswith(".py") and has("tests", n) for n in names):
+        py.append("tests/")
+    if py:
+        found.append(("python3 -m pytest -q", py[0]))
+    if len(found) == 1:
+        return found[0]
+    if found:
+        return None, "several stacks found (" + ", ".join(src for _cmd, src in found) + ")"
+    return None, "no test runner found"
 
 
 def cmd_init(args):
@@ -743,7 +745,7 @@ def cmd_init(args):
         if cmd:
             print(f"+ {CONFIG_FILE}  (test_command: {cmd!r}, from {source} — edit it if that is wrong)")
         else:
-            print(f"+ {CONFIG_FILE}  (no test runner found — set test_command in that file before `attest --tests`)")
+            print(f"+ {CONFIG_FILE}  ({source} — set test_command in that file before `attest --tests`)")
     gi_path = os.path.join(root, CONFIG_DIR, ".gitignore")
     gi_body = (
         "# Coverloop reports are evidence — commit them with the change.\n"

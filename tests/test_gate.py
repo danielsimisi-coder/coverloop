@@ -1562,25 +1562,27 @@ class GateTestCase(unittest.TestCase):
 
     # ---- v2.12.6: a new user's first run ----
     def test_init_detects_the_test_command_from_the_repos_files(self):
+        go = {"go.mod": "module x\n"}
         cases = [
             ({"package.json": '{"scripts": {"test": "jest"}}'}, "npm test"),
             ({"package.json": '{"scripts": {"test": "jest"}}', "pnpm-lock.yaml": ""}, "pnpm test"),
             ({"package.json": '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}',
               "tsconfig.json": "{}"}, "npx tsc --noEmit"),
             ({"tsconfig.json": "{}"}, "npx tsc --noEmit"),
-            ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "python3 -m pytest -q"),
-            ({"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    pass\n"},
-             "python3 -m unittest discover -s tests"),
-            ({"tests/test_app.py": "from unittest import mock\ndef test_x():\n    assert False\n"}, "python3 -m pytest -q"),
-            ({"tests/test_app.py": "def test_x():\n    assert False\n"}, "python3 -m pytest -q"),
-            ({"tests/test_a.py": "class T(unittest.TestCase):\n    pass\n", "tests/test_b.py": "def test_x(): pass\n"},
-             "python3 -m pytest -q"),
-            ({"tests/test_fake.py/keep": "", "go.mod": "module x\n"}, "go test ./..."),
-            ({"pyproject.toml": "# [tool.pytest.ini_options] later\n", "go.mod": "module x\n"}, "go test ./..."),
-            ({"package.json": b"\xff\xfe", "go.mod": "module x\n"}, "go test ./..."),
-            ({"pyproject.toml": b"\xff", "go.mod": "module x\n"}, "go test ./..."),
-            ({"go.mod": "module x\n"}, "go test ./..."),
+            (go, "go test ./..."),
             ({"Cargo.toml": ""}, "cargo test"),
+            ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "python3 -m pytest -q"),
+            ({"tests/test_app.py": "def test_x():\n    assert False\n"}, "python3 -m pytest -q"),
+            ({"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    pass\n"}, "python3 -m pytest -q"),
+            # one command cannot be trusted to cover two stacks
+            ({"tsconfig.json": "{}", "pyproject.toml": "[tool.pytest.ini_options]\n"}, None),
+            ({"package.json": '{"scripts": {"test": "jest"}}', **go}, None),
+            ({"tests/test_app.py": "", **go}, None),
+            # things that look like evidence and are not
+            ({"tests/test_fake.py/keep": "", **go}, "go test ./..."),
+            ({"pyproject.toml": "# [tool.pytest.ini_options] later\n", **go}, "go test ./..."),
+            ({"package.json": b"\xff\xfe", **go}, "go test ./..."),
+            ({"pyproject.toml": b"\xff", **go}, "go test ./..."),
             ({"package.json": "{not json"}, None),
             ({"README.md": "hi"}, None),
         ]
@@ -1597,13 +1599,21 @@ class GateTestCase(unittest.TestCase):
                     self.assertEqual(json.load(fh).get("test_command"), want)
 
     def test_a_detected_command_never_passes_a_failing_python_test(self):
-        for body in ("def test_bad():\n    assert False\n",
-                     "import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.fail()\n"):
-            with self.subTest(body=body), tempfile.TemporaryDirectory() as d:
+        """Mixed styles and a nested file are where a narrower runner passes by skipping."""
+        layouts = [
+            {"tests/test_app.py": "def test_bad():\n    assert False\n"},
+            {"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.fail()\n"},
+            {"tests/test_app.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n\n"
+                                  "def test_bad():\n    assert False\n"},
+            {"tests/test_app.py": "def test_ok():\n    pass\n", "tests/deep/test_more.py": "def test_bad():\n    assert False\n"},
+        ]
+        for files in layouts:
+            with self.subTest(files=files), tempfile.TemporaryDirectory() as d:
                 sh(["git", "init", "-q", "-b", "main"], d)
-                os.makedirs(os.path.join(d, "tests"))
-                with open(os.path.join(d, "tests", "test_app.py"), "w") as fh:
-                    fh.write(body)
+                for name, body in files.items():
+                    os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
+                    with open(os.path.join(d, name), "w") as fh:
+                        fh.write(body)
                 sh(["git", "add", "-A"], d)
                 sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], d)
                 self.assertEqual(run(["init"], d).returncode, 0)
@@ -1644,8 +1654,7 @@ class GateTestCase(unittest.TestCase):
                 for item in ("glm CLIs missing", "hook scripts missing", "hook events not wired"):
                     self.assertEqual(f"FAIL  {item}" in out, not is_plugin, out)
                     self.assertEqual(f"WARN  {item}" in out, is_plugin, out)
-                if not is_plugin:
-                    self.assertNotEqual(code, 0)
+                self.assertEqual(code == 0, is_plugin, out)
         with tempfile.TemporaryDirectory() as d:
             code, out = self._selftest_in(os.path.realpath(d), "bin")
             self.assertNotEqual(code, 0)
