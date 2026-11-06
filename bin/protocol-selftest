@@ -15,10 +15,14 @@ while [ -L "$SELF" ]; do
   LINK=$(readlink "$SELF")
   case "$LINK" in /*) SELF=$LINK ;; *) SELF=$(dirname -- "$SELF")/$LINK ;; esac
 done
-case "$(cd -- "$(dirname -- "$SELF")" 2>/dev/null && pwd -P)/" in
-  */.claude/plugins/cache/*) PLUGIN=1 ;;
-  *) PLUGIN=0 ;;
-esac
+SELF_DIR="$(cd -- "$(dirname -- "$SELF")" 2>/dev/null && pwd -P)/"
+# ~/.claude itself may be a symlink (dotfile managers), so also compare with the cache's real path.
+CACHE_DIR="$(cd -- "$HOME/.claude/plugins/cache" 2>/dev/null && pwd -P)"
+PLUGIN=0
+case "$SELF_DIR" in */.claude/plugins/cache/*) PLUGIN=1 ;; esac
+if [ -n "$CACHE_DIR" ]; then
+  case "$SELF_DIR" in "$CACHE_DIR"/*) PLUGIN=1 ;; esac
+fi
 manual_only() {
   if [ "$PLUGIN" = 1 ]; then warn "$1 (plugin install: its own copies are not checked here)"; else fail "$1 (run install.sh)"; fi
 }

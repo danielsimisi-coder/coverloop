@@ -1995,7 +1995,10 @@ def cmd_doctor(args):
         line(ok if mode == "600" else warn, "openrouter key", note)
     else:
         # Claude Code hands the plugin's key only to what it runs, so a terminal never sees it.
-        if "/.claude/plugins/cache/" in os.path.realpath(__file__):
+        # ~/.claude itself may be a symlink, so also compare with the cache's real path.
+        here = os.path.realpath(__file__)
+        cache = os.path.realpath(os.path.expanduser("~/.claude/plugins/cache"))
+        if "/.claude/plugins/cache/" in here or here.startswith(cache + os.sep):
             line(bad, "openrouter key", "not visible here (a key set in the plugin shows only inside Claude Code)")
             problems.append(
                 "in Claude Code run: /plugin configure coverloop@coverloop\n"

@@ -1682,6 +1682,25 @@ class GateTestCase(unittest.TestCase):
                                env={"HOME": home, "PATH": os.environ["PATH"]})
             self.assertIn("WARN  glm CLIs missing", r.stdout)
 
+    def test_a_symlinked_claude_folder_is_still_a_plugin_install(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.realpath(d)
+            home, storage = os.path.join(root, "home"), os.path.join(root, "storage")
+            bindir = os.path.join(storage, "plugins", "cache", "x", "2.0", "bin")
+            os.makedirs(home)
+            os.makedirs(os.path.dirname(bindir))
+            shutil.copytree(os.path.dirname(CLI), bindir)
+            os.symlink(storage, os.path.join(home, ".claude"))
+            via_link = os.path.join(home, ".claude", "plugins", "cache", "x", "2.0", "bin")
+            env = {k: v for k, v in os.environ.items() if "OPENROUTER" not in k}
+            env["HOME"] = home
+            r = subprocess.run(["bash", os.path.join(via_link, "protocol-selftest")], cwd=home,
+                               capture_output=True, text=True, timeout=60, env=env)
+            self.assertIn("WARN  glm CLIs missing", r.stdout)
+            r = subprocess.run([sys.executable, os.path.join(via_link, "coverloop"), "doctor"], cwd=home,
+                               capture_output=True, text=True, timeout=60, env=env)
+            self.assertIn("/plugin configure coverloop@coverloop", r.stdout)
+
     def test_doctor_on_a_plugin_install_points_to_the_plugin_settings(self):
         with tempfile.TemporaryDirectory() as d:
             home = os.path.realpath(d)
