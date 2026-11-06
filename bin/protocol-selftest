@@ -11,7 +11,7 @@ fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
 # A plugin install keeps its helpers and hooks inside the plugin, so what this script reads below
 # is rightly absent there. That is "not checked", not a pass and not a failure.
 case "$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)/" in
-  */.claude/plugins/*) PLUGIN=1 ;;
+  */.claude/plugins/cache/*) PLUGIN=1 ;;
   *) PLUGIN=0 ;;
 esac
 manual_only() {

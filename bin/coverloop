@@ -679,11 +679,22 @@ def load_json(path):
 
 def detect_test_command(root):
     """Best guess from the repo's own files: (command, the file that told us), or (None, None).
-    A wrong guess fails a first run on healthy code, so an unknown stack gets no command
-    at all, and `attest --tests` then says to set one."""
+    The guess must never pass by running nothing: `unittest discover` runs zero tests on
+    pytest-style files and can exit 0, so it is chosen only when every test file imports
+    unittest. pytest itself refuses an empty run. An unknown stack gets no command at all,
+    and `attest --tests` then says to set one. Unreadable files count as absent."""
     def has(*parts):
         return os.path.isfile(os.path.join(root, *parts))
-    pkg, _err = load_json(os.path.join(root, "package.json")) if has("package.json") else (None, None)
+    def read(*parts):
+        try:
+            with open(os.path.join(root, *parts), encoding="utf-8") as fh:
+                return fh.read()
+        except (OSError, UnicodeError):
+            return ""
+    try:
+        pkg = json.loads(read("package.json") or "null")
+    except ValueError:
+        pkg = None
     scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
     test_script = scripts.get("test") if isinstance(scripts, dict) else None
     if isinstance(test_script, str) and test_script.strip() and "no test specified" not in test_script:
@@ -691,21 +702,24 @@ def detect_test_command(root):
         return f"{runner} test", "package.json"
     if has("tsconfig.json"):
         return "npx tsc --noEmit", "tsconfig.json"
-    for name in ("pytest.ini", "conftest.py", "tests/conftest.py"):
-        if has(*name.split("/")):
-            return "python3 -m pytest -q", name
-    if has("pyproject.toml"):
-        with open(os.path.join(root, "pyproject.toml"), encoding="utf-8", errors="replace") as fh:
-            if "[tool.pytest" in fh.read():
-                return "python3 -m pytest -q", "pyproject.toml"
-    tests_dir = os.path.join(root, "tests")
-    if os.path.isdir(tests_dir) and any(f.startswith("test_") and f.endswith(".py")
-                                        for f in os.listdir(tests_dir)):
-        return "python3 -m unittest discover -s tests", "tests/"
     if has("go.mod"):
         return "go test ./...", "go.mod"
     if has("Cargo.toml"):
         return "cargo test", "Cargo.toml"
+    for name in ("pytest.ini", "conftest.py", "tests/conftest.py"):
+        if has(*name.split("/")):
+            return "python3 -m pytest -q", name
+    if re.search(r"^\s*\[tool\.pytest", read("pyproject.toml"), re.M):
+        return "python3 -m pytest -q", "pyproject.toml"
+    try:
+        names = sorted(os.listdir(os.path.join(root, "tests")))
+    except OSError:
+        names = []
+    test_files = [f for f in names if f.startswith("test_") and f.endswith(".py") and has("tests", f)]
+    if test_files:
+        if all(re.search(r"^\s*(import|from)\s+unittest\b", read("tests", f), re.M) for f in test_files):
+            return "python3 -m unittest discover -s tests", "tests/"
+        return "python3 -m pytest -q", "tests/"
     return None, None
 
 
@@ -1962,7 +1976,7 @@ def cmd_doctor(args):
         line(ok if mode == "600" else warn, "openrouter key", note)
     else:
         # Claude Code hands the plugin's key only to what it runs, so a terminal never sees it.
-        if "/.claude/plugins/" in os.path.realpath(__file__):
+        if "/.claude/plugins/cache/" in os.path.realpath(__file__):
             line(bad, "openrouter key", "not visible here (a key set in the plugin shows only inside Claude Code)")
             problems.append(
                 "in Claude Code run: /plugin configure coverloop@coverloop\n"

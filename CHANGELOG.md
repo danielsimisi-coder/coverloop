@@ -2,11 +2,11 @@
 
 Operational history of the Coverloop Multi-Model Production Protocol. The live doc (`CLAUDE.md`) carries only the current version; the story lives here.
 
-## 2026-11-06 — v2.12.6: a first run works (no protocol or gate change)
+## 2026-11-06 — v2.12.6: fixes for a new user's first run (no gate change)
 
 Found by simulating a new user's plugin install in an empty home folder.
 
-- **`init` detects the test command** from the repo's files (`package.json`, `tsconfig.json`, pytest config, `tests/test_*.py`, `go.mod`, `Cargo.toml`). It used to write `npx tsc --noEmit` everywhere, so a healthy Python project failed its first `attest --tests`. An unknown stack now gets no command, and `attest --tests` says to set one. An existing config is untouched.
+- **`init` detects the test command** from the repo's files (`package.json`, `tsconfig.json`, pytest config, `tests/test_*.py`, `go.mod`, `Cargo.toml`). It used to write `npx tsc --noEmit` everywhere, so a healthy Python project failed its first `attest --tests`. It picks `unittest` only when every test file imports it, because `unittest discover` can pass by running nothing on pytest-style files. An unknown stack gets no command, and `attest --tests` says to set one. An existing config is untouched.
 - **The plugin version follows `PROTOCOL_VERSION`.** It had stayed at 2.11.0 through five releases, which may have kept existing installs from updating. A test now fails if the two differ.
 - **`doctor` on a plugin install** points to `/plugin configure`, and says a key set there is visible only inside Claude Code.
 - **`protocol-selftest` on a plugin install** reports the manual-install items it cannot check as warnings, not failures.

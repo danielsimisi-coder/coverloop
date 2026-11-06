@@ -1569,7 +1569,13 @@ class GateTestCase(unittest.TestCase):
               "tsconfig.json": "{}"}, "npx tsc --noEmit"),
             ({"tsconfig.json": "{}"}, "npx tsc --noEmit"),
             ({"pyproject.toml": "[tool.pytest.ini_options]\n"}, "python3 -m pytest -q"),
-            ({"tests/test_app.py": ""}, "python3 -m unittest discover -s tests"),
+            ({"tests/test_app.py": "import unittest\n"}, "python3 -m unittest discover -s tests"),
+            ({"tests/test_app.py": "def test_x():\n    assert False\n"}, "python3 -m pytest -q"),
+            ({"tests/test_a.py": "import unittest\n", "tests/test_b.py": "def test_x(): pass\n"}, "python3 -m pytest -q"),
+            ({"tests/test_fake.py/keep": "", "go.mod": "module x\n"}, "go test ./..."),
+            ({"pyproject.toml": "# [tool.pytest.ini_options] later\n", "go.mod": "module x\n"}, "go test ./..."),
+            ({"package.json": b"\xff\xfe", "go.mod": "module x\n"}, "go test ./..."),
+            ({"pyproject.toml": b"\xff", "go.mod": "module x\n"}, "go test ./..."),
             ({"go.mod": "module x\n"}, "go test ./..."),
             ({"Cargo.toml": ""}, "cargo test"),
             ({"package.json": "{not json"}, None),
@@ -1580,12 +1586,27 @@ class GateTestCase(unittest.TestCase):
                 sh(["git", "init", "-q", "-b", "main"], d)
                 for name, body in files.items():
                     os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
-                    with open(os.path.join(d, name), "w") as fh:
-                        fh.write(body)
+                    with open(os.path.join(d, name), "wb") as fh:
+                        fh.write(body if isinstance(body, bytes) else body.encode())
                 r = run(["init"], d)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 with open(os.path.join(d, ".coverloop", "config.json")) as fh:
                     self.assertEqual(json.load(fh).get("test_command"), want)
+
+    def test_a_detected_command_never_passes_a_failing_python_test(self):
+        for body in ("def test_bad():\n    assert False\n",
+                     "import unittest\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.fail()\n"):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as d:
+                sh(["git", "init", "-q", "-b", "main"], d)
+                os.makedirs(os.path.join(d, "tests"))
+                with open(os.path.join(d, "tests", "test_app.py"), "w") as fh:
+                    fh.write(body)
+                sh(["git", "add", "-A"], d)
+                sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], d)
+                self.assertEqual(run(["init"], d).returncode, 0)
+                r = run(["attest", "--tier", "L1", "--tests"], d)
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("tests=fail", r.stdout)
 
     def test_init_keeps_an_explicit_test_command(self):
         with open(os.path.join(self.repo, "go.mod"), "w") as fh:
@@ -1606,25 +1627,32 @@ class GateTestCase(unittest.TestCase):
         bindir = os.path.join(home, *subdirs)
         os.makedirs(bindir)
         shutil.copy(os.path.join(os.path.dirname(CLI), "protocol-selftest"), bindir)
-        return subprocess.run(["bash", os.path.join(bindir, "protocol-selftest")], cwd=home, capture_output=True,
-                              text=True, timeout=60, env={"HOME": home, "PATH": os.environ["PATH"]}).stdout
+        os.makedirs(os.path.join(home, ".claude"), exist_ok=True)
+        with open(os.path.join(home, ".claude", "settings.json"), "w") as fh:
+            fh.write("{}")  # readable, with every hook event missing
+        r = subprocess.run(["bash", os.path.join(bindir, "protocol-selftest")], cwd=home, capture_output=True,
+                           text=True, timeout=60, env={"HOME": home, "PATH": os.environ["PATH"]})
+        return r.returncode, r.stdout
 
     def test_selftest_does_not_fail_a_plugin_install_for_its_missing_manual_files(self):
+        for layout, is_plugin in ((("cache", "x", "2.0", "bin"), True), (("manual", "bin"), False)):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as d:
+                code, out = self._selftest_in(os.path.realpath(d), ".claude", "plugins", *layout)
+                for item in ("glm CLIs missing", "hook scripts missing", "hook events not wired"):
+                    self.assertEqual(f"FAIL  {item}" in out, not is_plugin, out)
+                    self.assertEqual(f"WARN  {item}" in out, is_plugin, out)
+                if not is_plugin:
+                    self.assertNotEqual(code, 0)
         with tempfile.TemporaryDirectory() as d:
-            home = os.path.realpath(d)
-            out = self._selftest_in(home, ".claude", "plugins", "cache", "x", "bin")
-            self.assertNotIn("FAIL  glm CLIs", out)
-            self.assertNotIn("FAIL  hook", out)
-            self.assertIn("not checked here", out)
-        with tempfile.TemporaryDirectory() as d:  # the same files missing on a manual install still fail
-            out = self._selftest_in(os.path.realpath(d), "bin")
+            code, out = self._selftest_in(os.path.realpath(d), "bin")
+            self.assertNotEqual(code, 0)
             self.assertIn("FAIL  glm CLIs", out)
-            self.assertIn("FAIL  hook", out)
 
     def test_doctor_on_a_plugin_install_points_to_the_plugin_settings(self):
         with tempfile.TemporaryDirectory() as d:
             home = os.path.realpath(d)
-            bindir = os.path.join(home, ".claude", "plugins", "cache", "x", "bin")
+            bindir = os.path.join(home, ".claude", "plugins", "cache", "x", "2.0", "bin")
+            os.makedirs(os.path.dirname(bindir))
             shutil.copytree(os.path.dirname(CLI), bindir)
             env = {k: v for k, v in os.environ.items() if "OPENROUTER" not in k}
             env["HOME"] = home

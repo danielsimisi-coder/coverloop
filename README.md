@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
-[![Tests](https://img.shields.io/badge/tests-288%20passing-34E0B4?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-289%20passing-34E0B4?style=flat-square)](tests/)
 
 [**Install**](#-install) · [**Real bugs it caught**](#-real-bugs-it-caught) · [**What it costs you**](#-what-it-actually-costs-you) · [**What runs on your machine**](#-what-actually-runs-on-your-machine)
 
@@ -329,7 +329,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
 skills/                     reusable recipes (multi-model review, reflect-and-save)
 examples/                   copy-paste GitHub Actions workflow
 install.sh · init-project.sh  machine + per-repo setup
-tests/                      the gate's own suite — 288 cases (unit + property/fuzz + concurrency) + 42 hook checks, stdlib-only, CI green on Linux·macOS (Windows WIP)
+tests/                      the gate's own suite — 289 cases (unit + property/fuzz + concurrency) + 42 hook checks, stdlib-only, CI green on Linux·macOS (Windows WIP)
 CHANGELOG.md                the story of how it got here
 ```
 
