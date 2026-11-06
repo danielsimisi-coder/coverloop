@@ -18,54 +18,10 @@
 
 ---
 
-You let Claude write a migration, a Stripe webhook, an RLS policy. It says *"done, all tests pass."* It is the only thing that checked.
+**The whole idea, in one real session.** Captured verbatim from Coverloop gating its own repo (only long paths elided; the reviewer model has been upgraded since). The gate blocks an unreviewed change, the loop earns the evidence (a real test run plus a review from another lab, hashed), and the same command opens:
 
-**That is the problem.** Not that AI writes bad code — it mostly doesn't — but that on the ~10% of changes that can delete data, leak a tenant's rows, or break checkout, **the only reviewer is the author**, and it is an author with no stake in being wrong.
+<p align="center"><img src="assets/coverloop-gate-demo.svg" width="880" alt="Real coverloop session: gate FAILs an unreviewed change (tests + codex NO RECORD, exit 1) → attest runs the tests and captures a gpt-5.6-sol review → the same gate PASSes with a hashed transcript (exit 0)"></p>
 
-Coverloop makes those changes earn their way out: it works out how dangerous the change is **from the files it touches**, sends it cold to a reviewer from a different lab, gives your tests the deciding vote, and **stops** on the ones that can hurt until you say go. On everything else it stays out of your way — a CSS tweak never calls a model.
-
----
-
-## ⏱️ What it actually costs you
-
-The question nobody answers on pages like this. Measured, on this repo:
-
-| | wall-clock | money |
-|---|---|---|
-| `coverloop classify` — how risky is this change? | **0.5 s** | free |
-| `coverloop gate` — is the evidence complete? | **0.5 s** | free |
-| **L1** — tests, typecheck, no model call | your test suite | free |
-| **L2** — adds an independent diff gate | **+ ~14 s** | on your ChatGPT plan, not per-token |
-| **L3** — adds guard-break evidence (each safety guard broken on purpose; a test must catch it) and hashed evidence | your test suite, once per guard | free |
-| **L3, the part that costs you** — reading the diff and approving it | **however long you take** | your attention |
-
-That last row is the real price, and no table can shrink it. Everything above it is machine time you can ignore; the human gate is the one thing Coverloop deliberately will not do for you.
-
-**You also need a ChatGPT account** for the independent gate (see [below](#-the-independent-gate-needs-its-own-account--and-thats-deliberate)) — realistically a paid one if you ship daily. That is a recurring cost this page would be dishonest to leave out of a section called "what it actually costs you".
-
-**And how often does that happen?** Here is `classify` run over the last 40 real commits of three production repos:
-
-| Repo | L0 | L1 | L2 | **L3 (the full stop)** |
-|---|---:|---:|---:|---:|
-| Call platform — billing, auth, worker, migrations | 5% | 33% | 15% | **47%** |
-| Music app — game logic, UI, no money path | 8% | 45% | 47% | **0%** |
-| Music app — second codebase | 18% | 40% | 40% | **2%** |
-
-Read that honestly, because it is the most important thing on this page: **if your product is billing plus auth plus migrations, roughly half your commits will stop and wait for you.**
-
-That is a real cost, and it cuts against the reason you're here — you want Claude to ship *more* unattended, not less. A stop that fires on half your work is a stop you learn to rubber-stamp by week two, which is the same failure this tool warns about for over-classification, one notch up.
-
-So the stop is adjustable, and the automated review is not:
-
-```bash
-coverloop gate --human-gate-scope irreversible
-```
-
-Every L3 change still gets the whole automated loop — tests, an independent diff gate, guard-break evidence, hashed commit-bound evidence. What narrows is **which ones wait for you personally**: only the ones you cannot take back — schema migrations, money paths, and authz/RLS policy. On the same repo, that moved human stops from **47% to 25%** of commits.
-
-It is opt-in, and stays opt-in. Quietly relaxing an existing user's gate on upgrade is precisely the kind of unannounced weakening this project exists to make impossible — so if you want it, you type it.
-
-**And if your app has no money path and no auth**, the picture inverts: L3 essentially never fires, most changes land in L1/L2, and the whole loop costs you a diff review that a model does in fourteen seconds.
 
 ---
 
@@ -104,23 +60,6 @@ Same tool, more steps — and you own the `PATH` and file modes yourself. `cover
 > **What you need:** [Claude Code](https://claude.com/claude-code) · Python 3 + git · an [OpenRouter](https://openrouter.ai) key. **Mac/Linux** (Windows → [WSL](https://learn.microsoft.com/windows/wsl/install)). **No server or VPS.**
 > Full walkthrough (machine → project → session): [`docs/SESSION_BOOTSTRAP.md`](docs/SESSION_BOOTSTRAP.md)
 
-### 🔍 What actually runs on your machine
-
-A safety tool that won't say what it executes is asking for the blind trust it exists to remove. So, precisely:
-
-| Runs on its own | What it does |
-|---|---|
-| at session start, and after every context compaction | **Prints text.** Re-states the standing rules so a long session doesn't quietly drop your standards. |
-| before a Bash call containing push / merge / migrate / deploy | **Prints a reminder** of what this tier still owes. It does not block and changes nothing. |
-| when Claude finishes a turn | Checks whether the repo has tests that should have run. |
-| after a failed tool call | Captures the error text so the loop can learn from it. |
-
-**None of them touch the network. None of them send your code anywhere.** The first two are elaborate `echo`s.
-
-Everything else — `classify`, `gate`, the reviewers — is a command **you or your agent runs**, and every run goes through Claude Code's normal Bash approval. The plugin puts them on your `PATH`; it does not get to fire them.
-
-Your code leaves your machine **only** when a reviewer is explicitly invoked, and only after the secret filter has stripped values from the packet. `coverloop gate` sends nothing at all — it reads local files and git metadata.
-
 ### 🕵️ The independent gate needs its own account — and that's deliberate
 
 The reviewer that gates your diff must come from a **different lineage than the builder**. That means the [Codex CLI](https://developers.openai.com/codex/cli), signed in with your ChatGPT account:
@@ -133,61 +72,71 @@ npm i -g @openai/codex && codex login
 
 `coverloop doctor` tells you if it's missing and gives you the line above. It's a one-time, two-minute cost.
 
-### 🔒 Make it unskippable — `coverloop gate`
+---
 
-Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any *committed* code change after attestation invalidates the evidence by construction** — for *uncommitted* edits you need `gate --require-clean-tree`, which is opt-in.
+## Why this exists
+
+You let Claude write a migration, a Stripe webhook, an RLS policy. It says *"done, all tests pass."* It is the only thing that checked.
+
+**That is the problem.** Not that AI writes bad code — it mostly doesn't — but that on the ~10% of changes that can delete data, leak a tenant's rows, or break checkout, **the only reviewer is the author**, and it is an author with no stake in being wrong.
+
+Coverloop makes those changes earn their way out: it works out how dangerous the change is **from the files it touches**, sends it cold to a reviewer from a different lab, gives your tests the deciding vote, and **stops** on the ones that can hurt until you say go. On everything else it stays out of your way — a CSS tweak never calls a model.
+
+<p align="center"><img src="assets/coverloop-how-it-works.svg" width="100%" alt="How Coverloop works: you request a change → an AI builder writes the diff → independent models (Codex for correctness, GLM·M3 for security/audit) and your tests attack it, findings verified against the real code → the fail-closed Coverloop gate opens only on complete, hashed, commit-bound evidence → you hold the final gate on dangerous changes → ship. Findings or red tests loop back to a fix. Review scales to risk from L0 (trivial) to L3 (money/auth/DB → full loop + your gate)."></p>
+
+**No model is an authority.** Every finding is a *claim* — verified against real code, tests, and runtime before it can block anything. Two models agreeing can just mean two models hallucinating the same thing, so **execution beats opinion**: when a test can settle it, you run the test.
+
+**Right-sized, never bloated.** A typo doesn't get a committee. Coverloop scales the review to the blast radius:
+
+| Risk | Example | What it gets |
+|:---:|---|---|
+| **L0** trivial | copy, CSS | quick check |
+| **L1** normal | isolated fix | tests + typecheck |
+| **L2** product flow | onboarding, admin UX | ➕ mandatory independent review |
+| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + guard-break + independent review + **your gate** |
+
+---
+
+## ⏱️ What it actually costs you
+
+The question nobody answers on pages like this. Measured, on this repo:
+
+| | wall-clock | money |
+|---|---|---|
+| `coverloop classify` — how risky is this change? | **0.5 s** | free |
+| `coverloop gate` — is the evidence complete? | **0.5 s** | free |
+| **L1** — tests, typecheck, no model call | your test suite | free |
+| **L2** — adds an independent diff gate | **+ 2-3 min** on a real diff | on your ChatGPT plan, not per-token |
+| **L3** — adds guard-break evidence (each safety guard broken on purpose; a test must catch it) and hashed evidence | your test suite, once per guard | free |
+| **L3, the part that costs you** — reading the diff and approving it | **however long you take** | your attention |
+
+That last row is the real price, and no table can shrink it. Everything above it is machine time you can ignore; the human gate is the one thing Coverloop deliberately will not do for you.
+
+**You also need a ChatGPT account** for the independent gate (see [Install](#-the-independent-gate-needs-its-own-account--and-thats-deliberate)) — realistically a paid one if you ship daily. That is a recurring cost this page would be dishonest to leave out of a section called "what it actually costs you".
+
+**And how often does that happen?** Here is `classify` run over the last 40 real commits of three production repos:
+
+| Repo | L0 | L1 | L2 | **L3 (the full stop)** |
+|---|---:|---:|---:|---:|
+| Call platform — billing, auth, worker, migrations | 5% | 33% | 15% | **47%** |
+| Music app — game logic, UI, no money path | 8% | 45% | 47% | **0%** |
+| Music app — second codebase | 18% | 40% | 40% | **2%** |
+
+Read that honestly, because it is the most important thing on this page: **if your product is billing plus auth plus migrations, roughly half your commits will stop and wait for you.**
+
+That is a real cost, and it cuts against the reason you're here — you want Claude to ship *more* unattended, not less. A stop that fires on half your work is a stop you learn to rubber-stamp by week two, which is the same failure this tool warns about for over-classification, one notch up.
+
+So the stop is adjustable, and the automated review is not:
 
 ```bash
-coverloop init                                  # once per repo
-coverloop classify                              # what risk is this change, really?
-coverloop attest --tier L2 --tests              # run + record tests
-coverloop attest --codex pass                   # record the independent review
-coverloop gate --min-tier "$(coverloop classify --quiet)"   # exit 0 only if the evidence is complete
+coverloop gate --human-gate-scope irreversible
 ```
 
-Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — or, for the review you **already ran interactively**, `--codex-log <file>` attaches its transcript (redacted, hashed, committed) with **no re-run**. The gate labels each verdict `[captured <hash>]` / `[attached <hash>]` vs `[self-attested]`, so a reviewer can tell a real transcript from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), SHA+checksum-pinned) — and once you also turn on branch protection, a change with missing evidence can't merge without either the evidence or a human explicitly overriding the check (the honest ceiling — see the limits note below and [`docs/GATE.md`](docs/GATE.md)).
+Every L3 change still gets the whole automated loop — tests, an independent diff gate, guard-break evidence, hashed commit-bound evidence. What narrows is **which ones wait for you personally**: only the ones you cannot take back — schema migrations, money paths, and authz/RLS policy. On the same repo, that moved human stops from **47% to 25%** of commits.
 
-### 🎚️ The tier isn't yours to declare — `coverloop classify`
+It is opt-in, and stays opt-in. Quietly relaxing an existing user's gate on upgrade is precisely the kind of unannounced weakening this project exists to make impossible — so if you want it, you type it.
 
-Every gate above keys off the **risk tier**. So if the tier is just *declared*, one mislabel — a typo, a hurry, an optimistic agent — silently skips the whole L3 chain. No alarm. No evidence that anything was skipped. **That is the one place this design could be defeated for free**, so the tier is now *derived*:
-
-```console
-$ coverloop classify
-coverloop classify: L3  (4 file(s), working tree vs HEAD (incl. untracked))
-  - L0: documentation (README.md)
-  - L3: authentication / authorisation / RLS (src/auth/session.ts)
-  - L1: source change (no specific rule matched) (src/ui/Toast.tsx)
-  - L3: database migration (supabase/migrations/20260803_add_col.sql)
-```
-
-Migrations · SQL · schema · auth/RLS · billing · secrets/`.env` · CI-deploy config · workers/cron → **L3**. API routes · shared state · dependency manifests → **L2**. Docs · styles → **L0**. **Anything unrecognised → L1, never L0** — silence is not evidence of safety. **10+ files → at least L2**, because breadth is its own risk.
-
-Three things make this trustworthy rather than decorative:
-
-- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier; `attest --tier` already refuses to downgrade. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
-- **It's path-based on purpose.** Paths are cheap, stable, and reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in the diff*. Content sniffing was rejected: easy to defeat with formatting, and its false negatives read like safety.
-- **Over-classification is treated as a real cost.** A floor that cries L3 at a stylesheet trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions. (That bug was ours: `hooks/` once matched this repo's own shell hooks. It's pinned by a regression test now.)
-
-**Here's the whole idea in one real session** — captured verbatim from Coverloop gating its own repo (only long paths elided). The gate blocks an unreviewed change, the loop earns the evidence (real test run + a GPT-5.6 cross-vendor review, hashed), and the same command opens:
-
-<p align="center"><img src="assets/coverloop-gate-demo.svg" width="880" alt="Real coverloop session: gate FAILs an unreviewed change (tests + codex NO RECORD, exit 1) → attest runs the tests and captures a gpt-5.6-sol review → the same gate PASSes with a hashed transcript (exit 0)"></p>
-
-<details>
-<summary><b>…and the same change, seen by the other two reviewers (also real transcripts)</b></summary>
-
-<br/>
-
-Different training lineages catch different things — that's the whole point of a multi-model loop. Here is the *same code*, red-teamed by **GLM-5.2** (full zero-data-retention) and audited by **MiniMax M3** (a fourth-lineage divergence voice), captured verbatim. *(These transcripts are from an earlier roster; today's defaults are in the FAQ below — the point, two lineages converging on one fix, is the same.)*
-
-<p align="center"><img src="assets/coverloop-glm-review.svg" width="880" alt="Real GLM-5.2 red-team transcript: REQUEST CHANGES, flags a path-traversal risk, and independently recommends the exact captured-execution-fields fix that GPT-5.6 Sol also reached — two different labs, same catch"></p>
-
-<p align="center"><img src="assets/coverloop-m3-review.svg" width="880" alt="Real MiniMax M3 audit transcript: its egress filter refuses a hunk containing secret names (fail-closed), then on a clean hunk it produces a severity-ranked audit table — divergence findings that are then verified against the full code"></p>
-
-**Two things these show that a single reviewer can't:** GLM independently reached the *exact* fix GPT-5.6 Sol did (cross-lineage convergence is a strong signal a finding is real), and M3's egress filter *refused to send* a hunk containing secret names — the privacy layer failing closed, not on prompt discipline. No model is an authority: every finding is then checked against the real code.
-
-</details>
-
-> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). `coverloop classify` derives a tier floor from the changed paths and the gate takes the MAX, so a tier can be raised but never lowered; what `classify` cannot see is intent — a genuinely dangerous change in an innocuous-looking file still needs you to raise it. Human approval is *named*, not GitHub-authenticated (that's on the roadmap) — but `gate --require-signed-commit` adds **cryptographic provenance**: it demands HEAD carry a git-verifiable signature from a *trusted* key (checked against your git trust, or a **repo-committed signer policy** read from the committed tree), so evidence can't be replayed onto a forged or unsigned commit. Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+**And if your app has no money path and no auth**, the picture inverts: L3 essentially never fires, most changes land in L1/L2, and the whole loop costs you a diff review that a model does in a few minutes.
 
 ---
 
@@ -229,22 +178,89 @@ Twelve false positives bought one real catch. Whether that trade is worth it on 
 
 *(Caught something in **your** codebase? [Open a PR](#contributing) and I'll feature it here.)*
 
+### What the reviewers still miss
+
+We tested this on four real Coverloop changes whose bugs were already known. With the old prompt, 6 of 6 runs missed the serious bug in each of two changes. With fixed questions and a request for every suspect, Kimi K3 found one in 1 of 3 runs and K3.1 Pro found the other in 2 of 3. Sent only the diff, as the secret filter forces on this repo, neither serious bug was found as such. Gemini 4 Argon reported nothing in 6 of 6 valid runs.
+
+**So a model saying nothing proves nothing.** Tests decide, and the [details and limits are in the CHANGELOG](CHANGELOG.md).
+
 ---
 
-## Why it works
+## 🔒 How the gate works
 
-<p align="center"><img src="assets/coverloop-how-it-works.svg" width="100%" alt="How Coverloop works: you request a change → an AI builder writes the diff → independent models (Codex for correctness, GLM·M3 for security/audit) and your tests attack it, findings verified against the real code → the fail-closed Coverloop gate opens only on complete, hashed, commit-bound evidence → you hold the final gate on dangerous changes → ship. Findings or red tests loop back to a fix. Review scales to risk from L0 (trivial) to L3 (money/auth/DB → full loop + your gate)."></p>
+### 🔒 Make it unskippable — `coverloop gate`
 
-**No model is an authority.** Every finding is a *claim* — verified against real code, tests, and runtime before it can block anything. Two models agreeing can just mean two models hallucinating the same thing, so **execution beats opinion**: when a test can settle it, you run the test.
+Reminders are for people who already behave. For everyone else there's an **enforceable, fail-closed gate**: every review records evidence into `.coverloop/reports/<commit>.json` (committed with the change, visible in the PR), and `coverloop gate` exits non-zero unless the evidence governing that commit is complete — tests green, reviews passed, and for dangerous changes a *named* human approval. Evidence-only commits ride along; **any *committed* code change after attestation invalidates the evidence by construction** — for *uncommitted* edits you need `gate --require-clean-tree`, which is opt-in.
 
-**Right-sized, never bloated.** A typo doesn't get a committee. Coverloop scales the review to the blast radius:
+```bash
+coverloop init                                  # once per repo
+coverloop classify                              # what risk is this change, really?
+coverloop attest --tier L2 --tests              # run + record tests
+coverloop attest --codex pass                   # record the independent review
+coverloop gate --min-tier "$(coverloop classify --quiet)"   # exit 0 only if the evidence is complete
+```
 
-| Risk | Example | What it gets |
-|:---:|---|---|
-| **L0** trivial | copy, CSS | quick check |
-| **L1** normal | isolated fix | tests + typecheck |
-| **L2** product flow | onboarding, admin UX | ➕ mandatory independent review |
-| **L3** dangerous | money, auth, migrations, deploy, secrets | full suite + guard-break + independent review + **your gate** |
+Add `--codex-run "<cmd>"` and the tool **runs the reviewer and commits its hashed output** as evidence — or, for the review you **already ran interactively**, `--codex-log <file>` attaches its transcript (redacted, hashed, committed) with **no re-run**. The gate labels each verdict `[captured <hash>]` / `[attached <hash>]` vs `[self-attested]`, so a reviewer can tell a real transcript from a bare claim. Wire it as a **required GitHub check** ([copy-paste workflow](examples/github-actions-coverloop.yml), SHA+checksum-pinned) — and once you also turn on branch protection, a change with missing evidence can't merge without either the evidence or a human explicitly overriding the check (the honest ceiling — see the limits note below and [`docs/GATE.md`](docs/GATE.md)).
+
+### 🎚️ The tier isn't yours to declare — `coverloop classify`
+
+Every gate above keys off the **risk tier**. So if the tier is just *declared*, one mislabel — a typo, a hurry, an optimistic agent — silently skips the whole L3 chain. No alarm. No evidence that anything was skipped. **That is the one place this design could be defeated for free**, so the tier is now *derived*:
+
+```console
+$ coverloop classify
+coverloop classify: L3  (4 file(s), working tree vs HEAD (incl. untracked))
+  - L0: documentation (README.md)
+  - L3: authentication / authorisation / RLS (src/auth/session.ts)
+  - L1: source change (no specific rule matched) (src/ui/Toast.tsx)
+  - L3: database migration (supabase/migrations/20260803_add_col.sql)
+```
+
+Migrations · SQL · schema · auth/RLS · billing · secrets/`.env` · CI-deploy config · workers/cron → **L3**. API routes · shared state · dependency manifests → **L2**. Docs · styles → **L0**. **Anything unrecognised → L1, never L0** — silence is not evidence of safety. **10+ files → at least L2**, because breadth is its own risk.
+
+Three things make this trustworthy rather than decorative:
+
+- **It's a floor, not a verdict.** `gate` takes the MAX of it, any other `--min-tier`, and the report's own tier; `attest --tier` already refuses to downgrade. You may **raise** a tier. **Nothing may lower a deterministic floor** — not you, not the agent.
+- **It's path-based on purpose.** Paths are cheap, stable, and reviewable, and dodging L3 by renaming a migration out of `migrations/` requires something *visible in the diff*. Content sniffing was rejected: easy to defeat with formatting, and its false negatives read like safety.
+- **Over-classification is treated as a real cost.** A floor that cries L3 at a stylesheet trains people to bypass the gate, and a bypassed gate protects nothing — so the app-code rules are scoped to source extensions. (That bug was ours: `hooks/` once matched this repo's own shell hooks. It's pinned by a regression test now.)
+
+<details>
+<summary><b>…and the same change, seen by the other two reviewers (also real transcripts)</b></summary>
+
+<br/>
+
+Different training lineages catch different things — that's the whole point of a multi-model loop. Here is the *same code*, red-teamed by **GLM-5.2** (full zero-data-retention) and audited by **MiniMax M3** (a fourth-lineage divergence voice), captured verbatim. *(These transcripts are from an earlier roster; today's defaults are in the FAQ below — the point, two lineages converging on one fix, is the same.)*
+
+<p align="center"><img src="assets/coverloop-glm-review.svg" width="880" alt="Real GLM-5.2 red-team transcript: REQUEST CHANGES, flags a path-traversal risk, and independently recommends the exact captured-execution-fields fix that GPT-5.6 Sol also reached — two different labs, same catch"></p>
+
+<p align="center"><img src="assets/coverloop-m3-review.svg" width="880" alt="Real MiniMax M3 audit transcript: its egress filter refuses a hunk containing secret names (fail-closed), then on a clean hunk it produces a severity-ranked audit table — divergence findings that are then verified against the full code"></p>
+
+**Two things these show that a single reviewer can't:** GLM independently reached the *exact* fix GPT-5.6 Sol did (cross-lineage convergence is a strong signal a finding is real), and M3's egress filter *refused to send* a hunk containing secret names — the privacy layer failing closed, not on prompt discipline. No model is an authority: every finding is then checked against the real code.
+
+</details>
+
+---
+
+## 🛡️ Limits and privacy
+
+> **Honest about the limits** (full detail in [`docs/GATE.md`](docs/GATE.md)): a bare `attest --codex pass` is a committed *claim* — back it with a transcript (`--codex-run` executes and captures; `--codex-log` attaches an existing one, honest label included), and `gate --require-transcript` makes CI **reject** anything less (`--require-executed` is stricter: coverloop must have run the reviewer itself; `--require-captured` remains as a deprecated alias). `coverloop classify` derives a tier floor from the changed paths and the gate takes the MAX, so a tier can be raised but never lowered; what `classify` cannot see is intent — a genuinely dangerous change in an innocuous-looking file still needs you to raise it. Human approval is *named*, not GitHub-authenticated (that's on the roadmap) — but `gate --require-signed-commit` adds **cryptographic provenance**: it demands HEAD carry a git-verifiable signature from a *trusted* key (checked against your git trust, or a **repo-committed signer policy** read from the committed tree), so evidence can't be replayed onto a forged or unsigned commit. Transcript redaction covers **known secret + PII patterns** (keys, tokens, DB creds, home-dir usernames, emails, session UUIDs) — a tripwire, not a full DLP guarantee. The gate raises the cost and visibility of lying; it doesn't make lying impossible. That's the honest ceiling for a tool that runs on your machine.
+
+
+### 🔍 What actually runs on your machine
+
+A safety tool that won't say what it executes is asking for the blind trust it exists to remove. So, precisely:
+
+| Runs on its own | What it does |
+|---|---|
+| at session start, and after every context compaction | **Prints text.** Re-states the standing rules so a long session doesn't quietly drop your standards. |
+| before a Bash call containing push / merge / migrate / deploy | **Prints a reminder** of what this tier still owes. It does not block and changes nothing. |
+| when Claude finishes a turn | Checks whether the repo has tests that should have run. |
+| after a failed tool call | Captures the error text so the loop can learn from it. |
+
+**None of them touch the network. None of them send your code anywhere.** The first two are elaborate `echo`s.
+
+Everything else — `classify`, `gate`, the reviewers — is a command **you or your agent runs**, and every run goes through Claude Code's normal Bash approval. The plugin puts them on your `PATH`; it does not get to fire them.
+
+Your code leaves your machine **only** when a reviewer is explicitly invoked, and only after the secret filter has stripped values from the packet. `coverloop gate` sends nothing at all — it reads local files and git metadata.
 
 ---
 
