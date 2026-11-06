@@ -47,6 +47,7 @@ The reviewer sees the change as a **cold artifact** — a diff/files packet in a
 
 - **Diff gate:** the Codex CLI in a fresh session (`codex exec -m gpt-5.6-sol --sandbox read-only`), with reasoning effort set explicitly — high for L2, xhigh for L3. It defaults to low on its own; a lazy judge is worse than none.
 - **Red-team / consistency audit:** `glm-redteam` / `glm-audit` (full ZDR).
+- **Advisory review of finished code:** `glm-diff-review "<task>" < packet`. Recommended at L3, after tests; merge its findings with the diff gate's. Act only on what a test or running example shows, and list the rest without chasing it. No findings proves nothing; it is not a gate.
 - Demand **file:line** evidence. A bare verdict is noise.
 
 **Privacy differs by reviewer, and it matters:** GLM is the only reviewer here on a strict zero-data-retention endpoint. M3 routes under `data_collection: deny` — a weaker promise — which is why it is optional and L3-only. Codex keeps the diff inside your own OpenAI account and never transits OpenRouter.
