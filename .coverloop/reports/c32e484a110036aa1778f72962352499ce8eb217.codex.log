@@ -1,0 +1,431 @@
+Reading additional input from stdin...
+OpenAI Codex v0.162.1
+--------
+workdir: ~/code/coverloop-firstrun
+model: gpt-6-astra
+provider: openai
+approval: on-request
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: [REDACTED:uuid]
+--------
+user
+Repo: ~/code/coverloop-firstrun. A previous review of git diff c8c08d9..020872d had one finding: plugin detection broke when ~/.claude is a symlink. Commit c32e484 fixes it. Review only git show c32e484: does it fix that finding, and does it add a defect (for example a manual install wrongly treated as a plugin install, including when ~/.claude/plugins/cache does not exist)? Do not widen the scope and do not re-review the rest. Report only defects with a concrete input and wrong result, ranked P1/P2. Read-only. End with VERDICT: PASS or VERDICT: FAIL.
+2026-11-06T13:54:41.686282Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer scope=\"create delete\", resource_metadata=\"https://mcp.windsor.ai/.well-known/oauth-protected-resource\"" })
+2026-11-06T13:54:43.952184Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_request\", error_description=\"No access token was provided in this request\", resource_metadata=\"https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/\"" })
+codex
+אבדוק רק את `git show c32e484`, עם מקרי קלט ממוקדים לקישור סימבולי ולהתקנה ידנית, בלי לשנות קבצים או להרחיב את הסקירה.
+
+exec
+/bin/zsh -lc 'git show --format=fuller --stat c32e484 && git show --format= --no-ext-diff c32e484' in ~/code/coverloop-firstrun
+ succeeded in 5655ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-8b7G26En' (errno=Operation not permitted)
+2026-11-06 19:24:51.830 xcodebuild[36860:1370022]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:24:52.119 xcodebuild[36860:1370021] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-ydi8CKet' (errno=Operation not permitted)
+2026-11-06 19:24:52.835 xcodebuild[36862:1370049]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:24:52.988 xcodebuild[36862:1370048] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+commit c32e484a110036aa1778f72962352499ce8eb217
+Author:     danielsimisi-coder <[REDACTED:email]>
+AuthorDate: Fri Nov 6 19:24:30 2026 +0530
+Commit:     danielsimisi-coder <[REDACTED:email]>
+CommitDate: Fri Nov 6 19:24:30 2026 +0530
+
+    v2.12.6: a symlinked ~/.claude is still a plugin install (Codex round 4)
+
+ README.md             |  4 ++--
+ bin/coverloop         |  5 ++++-
+ bin/protocol-selftest | 12 ++++++++----
+ tests/test_gate.py    | 19 +++++++++++++++++++
+ 4 files changed, 33 insertions(+), 7 deletions(-)
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-amueV8CR' (errno=Operation not permitted)
+2026-11-06 19:24:54.440 xcodebuild[36866:1370076]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:24:54.625 xcodebuild[36866:1370075] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-NmGX4RBO' (errno=Operation not permitted)
+2026-11-06 19:24:55.269 xcodebuild[36868:1370090]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:24:55.471 xcodebuild[36868:1370089] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+diff --git a/README.md b/README.md
+index 1f63458..68ed500 100644
+--- a/README.md
++++ b/README.md
+@@ -10,7 +10,7 @@
+ 
+ [![License: MIT](https://img.shields.io/badge/License-MIT-34E0B4?style=flat-square)](LICENSE)
+ [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757?style=flat-square)](https://claude.com/claude-code)
+-[![Tests](https://img.shields.io/badge/tests-291%20passing-34E0B4?style=flat-square)](tests/)
++[![Tests](https://img.shields.io/badge/tests-292%20passing-34E0B4?style=flat-square)](tests/)
+ 
+ [**Install**](#-install) · [**Real bugs it caught**](#-real-bugs-it-caught) · [**What it costs you**](#-what-it-actually-costs-you) · [**What runs on your machine**](#-what-actually-runs-on-your-machine)
+ 
+@@ -329,7 +329,7 @@ hooks/                      SessionStart re-injection, pre-push gate, test gate
+ skills/                     reusable recipes (multi-model review, reflect-and-save)
+ examples/                   copy-paste GitHub Actions workflow
+ install.sh · init-project.sh  machine + per-repo setup
+-tests/                      the gate's own suite — 291 cases (unit + property/fuzz + concurrency) + 42 hook checks, stdlib-only, CI green on Linux·macOS (Windows WIP)
++tests/                      the gate's own suite — 292 cases (unit + property/fuzz + concurrency) + 42 hook checks, stdlib-only, CI green on Linux·macOS (Windows WIP)
+ CHANGELOG.md                the story of how it got here
+ ```
+ 
+diff --git a/bin/coverloop b/bin/coverloop
+index c93ae72..be7c9f1 100755
+--- a/bin/coverloop
++++ b/bin/coverloop
+@@ -1995,7 +1995,10 @@ def cmd_doctor(args):
+         line(ok if mode == "600" else warn, "openrouter key", note)
+     else:
+         # Claude Code hands the plugin's key only to what it runs, so a terminal never sees it.
+-        if "/.claude/plugins/cache/" in os.path.realpath(__file__):
++        # ~/.claude itself may be a symlink, so also compare with the cache's real path.
++        here = os.path.realpath(__file__)
++        cache = os.path.realpath(os.path.expanduser("~/.claude/plugins/cache"))
++        if "/.claude/plugins/cache/" in here or here.startswith(cache + os.sep):
+             line(bad, "openrouter key", "not visible here (a key set in the plugin shows only inside Claude Code)")
+             problems.append(
+                 "in Claude Code run: /plugin configure coverloop@coverloop\n"
+diff --git a/bin/protocol-selftest b/bin/protocol-selftest
+index 8715aae..7eb76dc 100755
+--- a/bin/protocol-selftest
++++ b/bin/protocol-selftest
+@@ -15,10 +15,14 @@ while [ -L "$SELF" ]; do
+   LINK=$(readlink "$SELF")
+   case "$LINK" in /*) SELF=$LINK ;; *) SELF=$(dirname -- "$SELF")/$LINK ;; esac
+ done
+-case "$(cd -- "$(dirname -- "$SELF")" 2>/dev/null && pwd -P)/" in
+-  */.claude/plugins/cache/*) PLUGIN=1 ;;
+-  *) PLUGIN=0 ;;
+-esac
++SELF_DIR="$(cd -- "$(dirname -- "$SELF")" 2>/dev/null && pwd -P)/"
++# ~/.claude itself may be a symlink (dotfile managers), so also compare with the cache's real path.
++CACHE_DIR="$(cd -- "$HOME/.claude/plugins/cache" 2>/dev/null && pwd -P)"
++PLUGIN=0
++case "$SELF_DIR" in */.claude/plugins/cache/*) PLUGIN=1 ;; esac
++if [ -n "$CACHE_DIR" ]; then
++  case "$SELF_DIR" in "$CACHE_DIR"/*) PLUGIN=1 ;; esac
++fi
+ manual_only() {
+   if [ "$PLUGIN" = 1 ]; then warn "$1 (plugin install: its own copies are not checked here)"; else fail "$1 (run install.sh)"; fi
+ }
+diff --git a/tests/test_gate.py b/tests/test_gate.py
+index 3bc87dd..738ed84 100644
+--- a/tests/test_gate.py
++++ b/tests/test_gate.py
+@@ -1682,6 +1682,25 @@ class GateTestCase(unittest.TestCase):
+                                env={"HOME": home, "PATH": os.environ["PATH"]})
+             self.assertIn("WARN  glm CLIs missing", r.stdout)
+ 
++    def test_a_symlinked_claude_folder_is_still_a_plugin_install(self):
++        with tempfile.TemporaryDirectory() as d:
++            root = os.path.realpath(d)
++            home, storage = os.path.join(root, "home"), os.path.join(root, "storage")
++            bindir = os.path.join(storage, "plugins", "cache", "x", "2.0", "bin")
++            os.makedirs(home)
++            os.makedirs(os.path.dirname(bindir))
++            shutil.copytree(os.path.dirname(CLI), bindir)
++            os.symlink(storage, os.path.join(home, ".claude"))
++            via_link = os.path.join(home, ".claude", "plugins", "cache", "x", "2.0", "bin")
++            env = {k: v for k, v in os.environ.items() if "OPENROUTER" not in k}
++            env["HOME"] = home
++            r = subprocess.run(["bash", os.path.join(via_link, "protocol-selftest")], cwd=home,
++                               capture_output=True, text=True, timeout=60, env=env)
++            self.assertIn("WARN  glm CLIs missing", r.stdout)
++            r = subprocess.run([sys.executable, os.path.join(via_link, "coverloop"), "doctor"], cwd=home,
++                               capture_output=True, text=True, timeout=60, env=env)
++            self.assertIn("/plugin configure coverloop@coverloop", r.stdout)
++
+     def test_doctor_on_a_plugin_install_points_to_the_plugin_settings(self):
+         with tempfile.TemporaryDirectory() as d:
+             home = os.path.realpath(d)
+
+exec
+/bin/zsh -lc "rg -n 'coverloop-firstrun|symlink|c32e484' ~/.codex/memories/MEMORY.md" in ~/code/coverloop-firstrun
+ exited 1 in 0ms:
+exec
+/bin/zsh -lc "git show c32e484:bin/protocol-selftest | head -85
+ git show c32e484:bin/coverloop | sed -n '1930,2035p'" in ~/code/coverloop-firstrun
+ succeeded in 4739ms:
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-tbuGbQjb' (errno=Operation not permitted)
+2026-11-06 19:25:13.580 xcodebuild[36885:1370359]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:25:13.811 xcodebuild[36885:1370357] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-JOeaetAL' (errno=Operation not permitted)
+2026-11-06 19:25:14.436 xcodebuild[36889:1370415]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:25:14.608 xcodebuild[36889:1370414] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+#!/usr/bin/env bash
+# protocol-selftest — ONE command that verifies the whole wiring (machine + project).
+# Mechanizes the §12 install checklist and catches version drift. Read-only; never fixes.
+# Run anywhere for the machine checks; run from a project root to add the project checks.
+# Exit 0 = no FAIL lines (WARNs allowed). Exit 1 = at least one FAIL.
+set -u
+FAILS=0
+ok()   { printf 'PASS  %s\n' "$1"; }
+warn() { printf 'WARN  %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS+1)); }
+# A plugin install keeps its helpers and hooks inside the plugin, so what this script reads below
+# is rightly absent there. That is "not checked", not a pass and not a failure.
+SELF=$0
+while [ -L "$SELF" ]; do
+  LINK=$(readlink "$SELF")
+  case "$LINK" in /*) SELF=$LINK ;; *) SELF=$(dirname -- "$SELF")/$LINK ;; esac
+done
+SELF_DIR="$(cd -- "$(dirname -- "$SELF")" 2>/dev/null && pwd -P)/"
+# ~/.claude itself may be a symlink (dotfile managers), so also compare with the cache's real path.
+CACHE_DIR="$(cd -- "$HOME/.claude/plugins/cache" 2>/dev/null && pwd -P)"
+PLUGIN=0
+case "$SELF_DIR" in */.claude/plugins/cache/*) PLUGIN=1 ;; esac
+if [ -n "$CACHE_DIR" ]; then
+  case "$SELF_DIR" in "$CACHE_DIR"/*) PLUGIN=1 ;; esac
+fi
+manual_only() {
+  if [ "$PLUGIN" = 1 ]; then warn "$1 (plugin install: its own copies are not checked here)"; else fail "$1 (run install.sh)"; fi
+}
+
+# ---------- locate the protocol repo (for the reference version) ----------
+SRC=""
+for c in "$HOME/protocol-loop" "$HOME/coverloop" \
+         "$(cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)"; do
+  [ -f "$c/CLAUDE.md" ] && grep -q "PROTOCOL_VERSION" "$c/CLAUDE.md" 2>/dev/null && SRC="$c" && break
+done
+if [ -n "$SRC" ]; then
+  REPO_V=$(grep -om1 'PROTOCOL_VERSION: v[0-9.]*' "$SRC/CLAUDE.md" | grep -o 'v[0-9.]*')
+  CONTRACT_REF_V=$(grep -om1 'CONTRACT_VERSION: v[0-9.]*' "$SRC/CLAUDE.md" | grep -o 'v[0-9.]*' || true)
+  ok "protocol source: $SRC (PROTOCOL_VERSION $REPO_V, CONTRACT_VERSION ${CONTRACT_REF_V:-n/a})"
+else
+  warn "protocol repo clone not found (~/protocol-loop) — version cross-checks limited"
+  REPO_V=""; CONTRACT_REF_V=""
+fi
+
+# ---------- machine: helper CLIs ----------
+if [ -x "$HOME/bin/glm-review" ]; then
+  FV=$("$HOME/bin/glm-review" --version 2>/dev/null | grep -o '"filter_version": *"[^"]*"' | cut -d'"' -f4)
+  [ -n "$FV" ] && ok "glm CLIs installed (filter $FV)" || warn "glm-review present but --version unreadable"
+else
+  manual_only "glm CLIs missing from ~/bin"
+fi
+if [ -f "$HOME/.config/openrouter/m3_enabled" ]; then ok "M3: ENABLED for this user (data_collection:deny, L3-only)"; else ok "M3: parked for this user (fail-closed)"; fi
+if [ -x "$HOME/bin/coverloop" ]; then ok "coverloop gate installed (~/bin/coverloop — v2.7 enforcement)"; else warn "coverloop gate missing from ~/bin (run install.sh) — the enforceable gate is unavailable"; fi
+
+# ---------- machine: hooks installed + wired ----------
+# Manual-install layout. A marketplace plugin install runs its hooks from
+# ${CLAUDE_PLUGIN_ROOT}/hooks instead, which this script does not inspect — see
+# the known limitation in CHANGELOG.md. Reading CLAUDE_PLUGIN_ROOT here was
+# tried and removed: Claude Code exports it to plugin subprocesses rather than
+# to a shell, so it is unset in normal use, and when it IS set the reference
+# clone and the active hook can come from two different installations.
+HOOKS_DIR="$HOME/.claude/hooks"; MISSING=""
+for h in session-contract.sh pre-risky-git.sh loop-stop-check.sh capture-failure.sh; do
+  [ -f "$HOOKS_DIR/$h" ] || MISSING="$MISSING $h"
+done
+[ -z "$MISSING" ] && ok "all 4 hook scripts present" || manual_only "hook scripts missing:$MISSING"
+if [ -f "$HOOKS_DIR/session-contract.sh" ]; then
+  # The shortened hook deliberately prints no version banner — a version string
+  # is exactly the kind of per-session noise the shrink removed. Compare the
+  # installed FILE with the repo's instead:
+  # that is what "this machine needs a pull" actually means.
+  if [ -z "$SRC" ]; then
+    # NOT ok: a clone this script cannot find (anywhere but ~/protocol-loop,
+    # ~/coverloop, or the executable's own parent) means the comparison did not
+    # happen. Reporting PASS there let a stale hook through silently.
+    warn "no protocol repo clone found — cannot verify the installed session-contract.sh"
+  elif [ ! -f "$SRC/hooks/session-contract.sh" ]; then
+    # A clone WITHOUT the reference hook is a broken clone, not "nothing to
+    # compare" — reporting PASS there hid the one case where the comparison
+    # silently stopped happening.
+    warn "repo clone at $SRC has no hooks/session-contract.sh — cannot verify the installed hook"
+  elif cmp -s "$SRC/hooks/session-contract.sh" "$HOOKS_DIR/session-contract.sh"; then
+    ok "session-contract.sh matches the repo ($HOOKS_DIR)"
+  else
+    warn "installed session-contract.sh ($HOOKS_DIR) differs from the repo's — machine needs: cd protocol repo && git pull && ./install.sh"
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-Fw5yxU8V' (errno=Operation not permitted)
+2026-11-06 19:25:15.953 xcodebuild[36897:1370464]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:25:16.104 xcodebuild[36897:1370462] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+git: error: couldn't create cache file '/tmp/xcrun_db-u3NSJOeF' (errno=Operation not permitted)
+2026-11-06 19:25:16.669 xcodebuild[36899:1370484]  DVTFilePathFSEvents: Failed to start fs event stream.
+2026-11-06 19:25:16.812 xcodebuild[36899:1370482] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+
+def _which(name):
+    """Absolute path of an executable, or None. Uses a login-shell PATH lookup
+    as a fallback because a tool installed under ~/.npm-global/bin is invisible
+    to a non-login shell — a real trap this project hit repeatedly."""
+    p = shutil.which(name)
+    if p:
+        return p
+    home_bins = [os.path.expanduser(x) for x in
+                 ("~/.npm-global/bin", "~/.local/bin", "~/bin")]
+    for d in home_bins:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def cmd_doctor(args):
+    """Explain what is installed, what is missing, and what each choice costs.
+
+    A setup command's job is not to say "not configured" — it is to say exactly
+    which command fixes it. This project's own field audit found that when the
+    strong path is annoying enough, people quietly stop using it, and a gate
+    nobody runs protects nobody. So every ✗ below carries its fix.
+    """
+    ok = "✓"
+    bad = "✗"
+    warn = "!"
+    rows, problems = [], []
+
+    def line(sym, label, detail):
+        rows.append(f"  {sym} {label:<24} {detail}")
+
+    # --- the things nothing works without -------------------------------
+    py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    line(ok, "python3", py)
+    g = _which("git")
+    line(ok if g else bad, "git", g or "MISSING — install git")
+    if not g:
+        problems.append("install git")
+
+    claude = _which("claude")
+    line(ok if claude else warn, "claude code",
+         claude or "not on PATH (fine if you drive coverloop yourself)")
+
+    # --- the one credential the review loop actually needs ---------------
+    key_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    key_file = os.path.expanduser("~/.config/openrouter/api_key")
+    plugin_key = [REDACTED:secret-value]"CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY", "").strip()
+    have_file = False
+    if os.path.isfile(key_file):
+        try:
+            with open(key_file, encoding="utf-8") as _fh:
+                have_file = bool(_fh.read().strip())
+        except OSError:
+            have_file = False
+    if plugin_key:
+        [REDACTED:secret-value] "openrouter key", "provided by the plugin (stored in your keychain)")
+    elif key_env:
+        line(ok, "openrouter key", "from $OPENROUTER_API_KEY")
+    elif have_file:
+        mode = oct(os.stat(key_file).st_mode & 0o777)[2:]
+        # A world-readable key on a shared box is a real leak, not a nit.
+        note = key_file + ("" if mode == "600" else
+                           f"   [!] mode {mode} — run: chmod 600 {key_file}")
+        line(ok if mode == "600" else warn, "openrouter key", note)
+    else:
+        # Claude Code hands the plugin's key only to what it runs, so a terminal never sees it.
+        # ~/.claude itself may be a symlink, so also compare with the cache's real path.
+        here = os.path.realpath(__file__)
+        cache = os.path.realpath(os.path.expanduser("~/.claude/plugins/cache"))
+        if "/.claude/plugins/cache/" in here or here.startswith(cache + os.sep):
+            line(bad, "openrouter key", "not visible here (a key set in the plugin shows only inside Claude Code)")
+            problems.append(
+                "in Claude Code run: /plugin configure coverloop@coverloop\n"
+                "      and paste a key from https://openrouter.ai/keys")
+        else:
+            line(bad, "openrouter key", "MISSING")
+            problems.append(
+                "get a key at https://openrouter.ai/keys, then:\n"
+                "      mkdir -p ~/.config/openrouter && printf '%s' 'sk-or-...' "
+                "> ~/.config/openrouter/api_key && chmod 600 ~/.config/openrouter/api_key")
+
+    # --- the reviewers ---------------------------------------------------
+    here = os.path.dirname(os.path.abspath(__file__))
+    for tool, why in (("glm-review", "red-team + audit (full ZDR)"),):
+        p = os.path.join(here, tool)
+        line(ok if os.path.exists(p) else bad, tool,
+             why if os.path.exists(p) else "MISSING from this install")
+
+    # --- the gate: two routes, different privacy, user's call ------------
+    codex = _which("codex")
+    rows.append("")
+    rows.append("  Independent diff gate (a different lineage from the builder):")
+    if codex:
+        rows.append(f"    {ok} Codex CLI               {codex}")
+        rows.append("         Verify sign-in with a REAL call — `codex login status`")
+        rows.append("         reports success on a revoked token:"[REDACTED:secret-value]"           codex exec --skip-git-repo-check hi < /dev/null")
+    else:
+        rows.append(f"    {bad} Codex CLI               not installed")
+        rows.append("         npm i -g @openai/codex && codex login")
+        rows.append("         Needed for L2+ gates. It keeps the diff inside your own")
+        rows.append("         OpenAI account; no OpenAI model on OpenRouter offers")
+        rows.append("         strict zero-data-retention, so there is no shortcut here.")
+        problems.append("npm i -g @openai/codex && codex login   (the L2+ diff gate)")
+
+codex
+התנאי החדש מזהה את נתיב המטמון אחרי פתרון הקישור הסימבולי. אני משלים בדיקות ממוקדות לכך שהתקנה ידנית נשארת מזוהה כידנית, גם כשהמטמון חסר.
+
+exec
+/bin/zsh -lc "python3 -c 'import os, stat, subprocess, textwrap
+from types import SimpleNamespace
+from unittest.mock import patch
+repo = '\\''~/code/coverloop-firstrun'\\''
+def source(path):
+    return subprocess.run(['\\''git'\\'', '\\''show'\\'', '\\''c32e484:'\\'' + path], cwd=repo, capture_output=True, text=True, check=True).stdout
+py = source('\\''bin/coverloop'\\'')
+start = py.index('\\''        here = os.path.realpath(__file__)'\\'', py.index('\\''def cmd_doctor'\\''))
+end = py.index('\\''\\n'\\'', py.index('\\''        if \"/.claude/plugins/cache/\"'\\'', start))
+check = textwrap.dedent(py[start:end]) + '\\''\\n    detected = True\\nelse:\\n    detected = False\\n'\\''
+sh = source('\\''bin/protocol-selftest'\\'')
+sh = sh[sh.index('\\''SELF_DIR='\\''):sh.index('\\''manual_only()'\\'')]
+cases = [
+ ('\\''normal plugin'\\'', False, True, '\\''/fixture/h/.claude/plugins/cache/x/2/bin'\\'', True),
+ ('\\''symlinked claude plugin'\\'', True, True, '\\''/fixture/storage/plugins/cache/x/2/bin'\\'', True),
+ ('\\''manual with cache'\\'', False, True, '\\''/fixture/manual/bin'\\'', False),
+ ('\\''manual with symlinked claude cache'\\'', True, True, '\\''/fixture/manual/bin'\\'', False),
+ ('\\''manual without cache'\\'', False, False, '\\''/fixture/manual/bin'\\'', False),
+ ('\\''manual with symlinked claude and no cache'\\'', True, False, '\\''/fixture/manual/bin'\\'', False),
+ ('\\''manual sibling sharing cache prefix'\\'', True, True, '\\''/fixture/storage/plugins/cache-other/bin'\\'', False),
+]
+for name, symlinked, cache_exists, bindir, expected in cases:
+    cache_path = ('\\''/fixture/storage'\\'' if symlinked else '\\''/fixture/h/.claude'\\'') + '\\''/plugins/cache'\\''
+    def lstat(path, *args, **kwargs):
+        if symlinked and path == '\\''/fixture/h/.claude'\\'':
+            return SimpleNamespace(st_mode=stat.S_IFLNK)
+        if not cache_exists and (path == cache_path or path.startswith(cache_path + '\\''/'\\'')):
+            raise FileNotFoundError(path)
+        return SimpleNamespace(st_mode=stat.S_IFDIR)
+    ns = {'\\''os'\\'': os, '\\''__file__'\\'': bindir + '\\''/coverloop'\\''}
+    with patch.dict(os.environ, {'\\''HOME'\\'': '\\''/fixture/home'\\''}, clear=True), patch('\\''os.lstat'\\'', side_effect=lstat), patch('\\''os.readlink'\\'', return_value='\\''/fixture/storage'\\''):
+        exec(check, ns)
+    assert ns['\\''detected'\\''] == expected, (name, ns)
+    shell = '\\'''\\'''\\''set -u
+cd() {
+  case \""'$2" in
+    "$FIXTURE_BIN") FIXTURE_PWD="$FIXTURE_BIN" ;;
+    "$HOME/.claude/plugins/cache")
+      [ "$FIXTURE_CACHE_EXISTS" = 1 ] || return 1
+      FIXTURE_PWD="$FIXTURE_CACHE" ;;
+    *) return 1 ;;
+  esac
+}
+pwd() { printf '"'\\''%s\\\\n'\\'' \""'$FIXTURE_PWD"; }
+SELF="$FIXTURE_BIN/protocol-selftest"
+'"'\\'''\\'''\\'' + sh + '\\''\\nprintf \"%s\" \""'$PLUGIN"'"\\n'\\''
+    env = {'\\''PATH'\\'': '\\''/usr/bin:/bin'\\'', '\\''HOME'\\'': '\\''/fixture/home'\\'', '\\''FIXTURE_BIN'\\'': bindir, '\\''FIXTURE_CACHE'\\'': cache_path, '\\''FIXTURE_CACHE_EXISTS'\\'': str(int(cache_exists))}
+    result = subprocess.run(['\\''/bin/bash'\\'', '\\''-c'\\'', shell], env=env, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == str(int(expected)), (name, result)
+    print('\\''PASS:'\\'', name, '\\''(Python and Bash)'\\'')
+assert not os.path.exists('\\''/dev/null/.claude/plugins/cache'\\'')
+result = subprocess.run(['\\''/bin/bash'\\'', '\\''-c'\\'', '\\''set -u\\nSELF=\""'$1"'"\\n'\\'' + sh + '\\''\\nprintf \"%s\" \""'$PLUGIN"'"'\\'', '\\''fixture'\\'', repo + '\\''/bin/protocol-selftest'\\''], env={'\\''PATH'\\'': '\\''/usr/bin:/bin'\\'', '\\''HOME'\\'': '\\''/dev/null'\\''}, capture_output=True, text=True)
+assert result.returncode == 0 and result.stdout == '\\''0'\\'', result
+print('\\''PASS: real missing cache keeps manual classification'\\'')
+'" in ~/code/coverloop-firstrun
+ succeeded in 5255ms:
+PASS: normal plugin (Python and Bash)
+PASS: symlinked claude plugin (Python and Bash)
+PASS: manual with cache (Python and Bash)
+PASS: manual with symlinked claude cache (Python and Bash)
+PASS: manual without cache (Python and Bash)
+PASS: manual with symlinked claude and no cache (Python and Bash)
+PASS: manual sibling sharing cache prefix (Python and Bash)
+PASS: real missing cache keeps manual classification
+
+codex
+VERDICT: PASS
+VERDICT: PASS
+tokens used
+30,223
